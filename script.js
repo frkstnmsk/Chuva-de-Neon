@@ -30,3 +30,18 @@ onValue(vidaRef, (snapshot) => {
     document.getElementById("vida").value = data.valor;
   }
 });
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "SUA_CHAVE",
+  authDomain: "chuva-de-neon.firebaseapp.com",
+  databaseURL: "https://chuva-de-neon-default-rtdb.firebaseio.com",
+  projectId: "chuva-de-neon",
+  storageBucket: "chuva-de-neon.appspot.com",
+  messagingSenderId: "994935691317",
+  appId: "SEU_APP_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
