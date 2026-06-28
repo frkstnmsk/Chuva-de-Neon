@@ -1,237 +1,145 @@
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <title>SISTEMA DE FICHAS | Chuva de Neon</title>
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-    
-    <style>
-        /* DIRETAMENTE DO CdN.html */
-        :root {
-            --bg-dark: #000000;
-            --panel-bg: rgba(13, 13, 15, 0.95);
-            --neon-purple: #8b5cf6;
-            --neon-lime: #a3e635;
-            --neon-red: #ef4444;
-            --neon-blue: #0ea5e9;
-            --text-main: #f0ecd8;
-            --text-dim: #94a3b8;
-            --border-style: 1px solid rgba(139, 92, 246, 0.2);
-            --font-title: 'Space Grotesk', sans-serif;
-            --font-mono: 'JetBrains Mono', monospace;
-            --font-body: 'Inter', sans-serif;
-        }
+<!-- FICHA DE PERSONAGEM - CHUVA DE NEON -->
+<div class="ficha-container">
 
-        body {
-            background-color: var(--bg-dark);
-            color: var(--text-main);
-            font-family: var(--font-body);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
-
-        /* CARD DE LOGIN & CONTEÚDO DA FICHA */
-        .cyber-panel {
-            background: var(--panel-bg);
-            border: var(--border-style);
-            padding: 30px;
-            border-radius: 4px;
-            box-shadow: 0 0 30px rgba(139, 92, 246, 0.15);
-            width: 100%;
-            max-width: 500px;
-            box-sizing: border-box;
-            position: relative;
-        }
-
-        .cyber-panel::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 2px;
-            background: linear-gradient(90deg, var(--neon-purple), var(--neon-blue));
-        }
-
-        h1, h2, h3 {
-            font-family: var(--font-title);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 0;
-        }
-
-        h1 { font-size: 1.75rem; color: #fff; text-shadow: 0 0 10px rgba(139, 92, 246, 0.5); }
-        h2 { font-size: 1.3rem; }
-
-        /* ABAS */
-        .tabs {
-            display: flex;
-            margin-bottom: 25px;
-            border-bottom: 1px solid rgba(240, 236, 216, 0.1);
-        }
-        .tab-btn {
-            flex: 1;
-            padding: 12px;
-            background: none;
-            border: none;
-            color: var(--text-dim);
-            font-family: var(--font-title);
-            font-weight: 700;
-            cursor: pointer;
-            letter-spacing: 1px;
-            transition: all 0.3s;
-        }
-        .tab-btn.active {
-            color: var(--neon-purple);
-            border-bottom: 2px solid var(--neon-purple);
-            text-shadow: 0 0 8px rgba(139, 92, 246, 0.6);
-        }
-
-        /* INPUTS E FORMULÁRIOS */
-        label {
-            font-family: var(--font-title);
-            font-size: 0.85rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            display: block;
-            margin-bottom: 5px;
-        }
-        input, select {
-            width: 100%;
-            padding: 12px;
-            margin-bottom: 15px;
-            background: #09090b;
-            border: 1px solid rgba(240, 236, 216, 0.15);
-            color: #fff;
-            font-family: var(--font-mono);
-            box-sizing: border-box;
-            border-radius: 4px;
-            transition: all 0.3s;
-        }
-        input:focus, select:focus {
-            outline: none;
-            border-color: var(--neon-purple);
-            box-shadow: 0 0 10px rgba(139, 92, 246, 0.3);
-        }
-
-        /* BOTÕES MÁGICOS CRUNCHY */
-        .btn-cyber {
-            background: transparent;
-            color: #fff;
-            border: 1px solid var(--neon-purple);
-            padding: 12px 24px;
-            font-family: var(--font-title);
-            font-weight: 700;
-            text-transform: uppercase;
-            cursor: pointer;
-            width: 100%;
-            letter-spacing: 1px;
-            position: relative;
-            overflow: hidden;
-            transition: all 0.3s;
-        }
-        .btn-cyber:hover {
-            background: var(--neon-purple);
-            box-shadow: 0 0 15px rgba(139, 92, 246, 0.6);
-        }
-
-        /* STATUS BADGES */
-        .badge {
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            padding: 4px 8px;
-            border-radius: 2px;
-            font-weight: bold;
-        }
-        .mestre { background: rgba(163, 230, 53, 0.1); color: var(--neon-lime); border: 1px solid var(--neon-lime); }
-        .jogador { background: rgba(139, 92, 246, 0.1); color: var(--neon-purple); border: 1px solid var(--neon-purple); }
-
-        /* TELA DE LOGIN OVERLAY */
-        #tela-login {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: var(--bg-dark);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 10000;
-        }
-
-        /* ÁREA DA FICHA (Oculta até logar) */
-        #conteudo-ficha { display: none; }
-
-        .dado-firebase {
-            font-family: var(--font-mono);
-            color: var(--neon-blue);
-            text-shadow: 0 0 5px rgba(14, 165, 233, 0.4);
-        }
-    </style>
-</head>
-<body>
-
-    <div id="tela-login">
-        <div class="cyber-panel">
-            <h1 style="text-align: center; margin-bottom: 20px;">CHUVA DE NEON</h1>
-            
-            <div class="tabs">
-                <button id="tab-entrar" class="tab-btn active">NET-LOGIN</button>
-                <button id="tab-criar" class="tab-btn">REGISTRAR_FICHA</button>
+    <!-- CATEGORIA DADOS PESSOAIS -->
+    <fieldset class="categoria-dados">
+        <legend>Categoria Dados Pessoais</legend>
+        <div class="campo">
+            <label for="nome">Nome:</label>
+            <input type="text" id="nome" name="nome">
+        </div>
+        <div class="campo">
+            <label for="vulgo">Vulgo:</label>
+            <input type="text" id="vulgo" name="vulgo">
+        </div>
+        <div class="campo">
+            <label for="idade">Idade:</label>
+            <input type="number" id="idade" name="idade">
+        </div>
+        <div class="campo">
+            <label for="nacionalidade">Nacionalidade:</label>
+            <input type="text" id="nacionalidade" name="nacionalidade">
+        </div>
+        <div class="campo">
+            <label for="funcao">Função:</label>
+            <input type="text" id="funcao" name="funcao">
+        </div>
+        <div class="campo-grupo">
+            <div class="campo">
+                <label for="maldade">Maldade:</label>
+                <input type="number" id="maldade" name="maldade">
             </div>
-
-            <div id="form-inputs">
-                <label>Codinome / ID</label>
-                <input type="text" id="login-user" placeholder="Ex: niki_cyber ou mestre">
-                
-                <label>Chave de Acesso (Senha)</label>
-                <input type="password" id="login-pass" placeholder="••••••••">
-                
-                <button id="btn-acao" class="btn-cyber">Inicializar Link</button>
+            <div class="campo">
+                <label for="remorso">Remorso:</label>
+                <input type="number" id="remorso" name="remorso">
             </div>
-
-            <p id="login-status-msg" style="color: var(--neon-red); font-family: var(--font-mono); font-size: 0.8rem; margin-top: 15px; display: none; text-align: center;"></p>
+            <div class="campo">
+                <label for="status">Status:</label>
+                <input type="number" id="status" name="status">
+            </div>
         </div>
-    </div>
+    </fieldset>
 
-    <div id="conteudo-ficha" class="cyber-panel">
-        <header style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(240, 236, 216, 0.1); padding-bottom: 15px; margin-bottom: 25px;">
-            <h1>PAINEL SESSÃO</h1>
-            <span id="user-role" class="badge">...</span>
-        </header>
-
-        <div id="painel-mestre-seletor" style="display: none; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); padding: 15px; margin-bottom: 25px;">
-            <label style="color: var(--neon-lime);">Comandar Ficha da Rede:</label>
-            <select id="select-ficha"></select>
+    <!-- CATEGORIA DARK NET -->
+    <fieldset class="categoria-darknet">
+        <legend>Categoria Dark Net</legend>
+        <div class="campo">
+            <label for="dm">Dm:</label>
+            <input type="text" id="dm" name="dm" placeholder="www.dm.dn/...">
         </div>
-
-        <h2 style="margin-bottom: 20px;">Ficha Ativa: <span id="nome-ficha-ativa" style="color: var(--neon-purple);">...</span></h2>
-
-        <div style="margin-bottom: 20px;">
-            <label>Monitor de Vitalidade (Vida)</label>
-            <input id="vida" type="number" placeholder="0">
+        <div class="campo">
+            <label for="void">Void:</label>
+            <input type="text" id="void" name="void" placeholder="www.void.dn/...">
         </div>
-
-        <div style="margin-bottom: 25px; padding: 15px; background: rgba(239, 68, 68, 0.03); border: 1px solid rgba(239, 68, 68, 0.2);">
-            <label style="color: var(--neon-red);">Modificador de Perigo / Dificuldade da Sala (Mestre)</label>
-            <input id="mod-mestre" type="number" placeholder="0">
+        <div class="campo">
+            <label for="p2k">P2K:</label>
+            <input type="text" id="p2k" name="p2k">
         </div>
-
-        <button id="btn-salvar" class="btn-cyber" style="border-color: var(--neon-blue);">Sincronizar Protocolo</button>
-
-        <hr style="margin: 30px 0; border: 0; border-top: 1px solid rgba(240, 236, 216, 0.1);">
-        <h3 style="font-size: 1rem; color: var(--text-dim); margin-bottom: 15px;">📡 Logs do Firebase em Tempo Real:</h3>
-        <div style="font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.6;">
-            <p>Vida da Ficha Ativa: <span id="vidaAtual" class="dado-firebase">...</span></p>
-            <p>Modificador Ativo: <span id="modAtual" class="dado-firebase">...</span></p>
+        <div class="campo">
+            <label for="rabbithole">RabbitHole:</label>
+            <input type="text" id="rabbithole" name="rabbithole">
         </div>
-        
-        <button id="btn-logout" class="btn-cyber" style="border-color: var(--text-dim); color: var(--text-dim); margin-top: 20px; padding: 6px 12px; font-size: 0.8rem; width: auto; display: block; margin-left: auto;">Desconectar</button>
-    </div>
+        <div class="campo">
+            <label for="p2c">P2C:</label>
+            <input type="text" id="p2c" name="p2c">
+        </div>
+        <div class="campo">
+            <label for="creators">Creators:</label>
+            <input type="text" id="creators" name="creators">
+        </div>
+    </fieldset>
 
-    <script type="module" src="script.js"></script>
-</body>
-</html>
+    <!-- PROGRESSÃO E STATUS -->
+    <fieldset class="categoria-status">
+        <legend>Nível e Status</legend>
+        <div class="campo-grupo">
+            <div class="campo">
+                <label for="nivel">Nível:</label>
+                <input type="number" id="nivel" name="nivel" value="1">
+            </div>
+            <div class="campo">
+                <label for="xp">XP:</label>
+                <input type="number" id="xp" name="xp" value="0">
+            </div>
+            <div class="campo">
+                <label for="pvs">PVs:</label>
+                <input type="number" id="pvs" name="pvs">
+            </div>
+            <div class="campo">
+                <label for="energia">Energia:</label>
+                <input type="number" id="energia" name="energia">
+            </div>
+        </div>
+    </fieldset>
+
+    <!-- ATRIBUTOS -->
+    <fieldset class="categoria-atributos">
+        <legend>Atributos</legend>
+        <div class="grid-atributos">
+            <div class="campo"><label>Força:</label> <input type="number" name="forca"></div>
+            <div class="campo"><label>Constituição:</label> <input type="number" name="constituicao"></div>
+            <div class="campo"><label>Destreza:</label> <input type="number" name="destreza"></div>
+            <div class="campo"><label>Sabedoria:</label> <input type="number" name="sabedoria"></div>
+            <div class="campo"><label>Inteligência:</label> <input type="number" name="inteligencia"></div>
+            <div class="campo"><label>Raciocínio:</label> <input type="number" name="raciocinio"></div>
+            <div class="campo"><label>Carisma:</label> <input type="number" name="carisma"></div>
+            <div class="campo"><label>Manipulação:</label> <input type="number" name="manipulacao"></div>
+        </div>
+    </fieldset>
+
+    <!-- ATRIBUTOS SECUNDÁRIOS -->
+    <fieldset class="categoria-secundarios">
+        <legend>Atributos Secundários</legend>
+        <div class="grid-atributos">
+            <div class="campo"><label>Velocidade:</label> <input type="number" name="velocidade"></div>
+            <div class="campo"><label>Agilidade:</label> <input type="number" name="agilidade"></div>
+            <div class="campo"><label>Percepção:</label> <input type="number" name="percepcao"></div>
+            <div class="campo"><label>Massa Corpórea:</label> <input type="number" name="massa_corporea"></div>
+            <div class="campo"><label>Força de Vontade:</label> <input type="number" name="forca_vontade"></div>
+        </div>
+    </fieldset>
+
+    <!-- PERÍCIAS -->
+    <fieldset class="categoria-pericias">
+        <legend>Perícias</legend>
+        <p class="instrucao">Adicione as perícias do personagem:</p>
+        <div id="lista-pericias">
+            <!-- Área para adicionar inputs dinamicamente ou listar textareas -->
+            <textarea name="pericias" rows="4" placeholder="Ex: Dirigir Veículos (DES/RAC): 2&#10;Armas de Fogo (DES): 1"></textarea>
+        </div>
+    </fieldset>
+
+    <!-- DESVANTAGENS -->
+    <fieldset class="categoria-desvantagens">
+        <legend>Desvantagens</legend>
+        <p class="instrucao">Adicione as desvantagens do personagem:</p>
+        <textarea name="desvantagens" rows="3" placeholder="Ex: Viciado (Anfetaminas), Pavio Curto..."></textarea>
+    </fieldset>
+
+    <!-- DETERMINAÇÕES -->
+    <fieldset class="categoria-determinacoes">
+        <legend>Determinações</legend>
+        <textarea name="determinacoes" rows="4" placeholder="1. Digite sua primeira determinação aqui...&#10;2. Segunda determinação..."></textarea>
+    </fieldset>
+
+</div>
