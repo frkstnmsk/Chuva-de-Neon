@@ -1,10 +1,21 @@
-<h1>Ficha Chuva de Neon</h1>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Ficha Chuva de Neon</title>
+</head>
+<body>
 
-<p>Vida:</p>
-<input id="vida" type="number">
+    <h1>Ficha Chuva de Neon</h1>
 
-<button onclick="salvarVida()">Salvar</button>
+    <p>Vida Atual:</p>
+    <input id="vida" type="number" placeholder="Digite o valor da vida...">
 
-<h2 id="vidaAtual"></h2>
+    <button onclick="salvarVida()">Salvar</button>
 
-<script type="module" src="script.js"></script>
+    <h2>Vida Sincronizada no Banco: <span id="vidaAtual">...</span></h2>
+
+    <script type="module" src="script.js"></script>
+    
+</body>
+</html>
