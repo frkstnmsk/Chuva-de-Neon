@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Ficha Chuva de Neon - Multi-Personagens</title>
+    <title>Ficha Chuva de Neon - Sistema de Personagens</title>
     <style>
         :root {
             --bg-dark: #070709;
@@ -34,16 +34,35 @@
             border-radius: 4px;
             box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
             text-align: center;
-            width: 300px;
+            width: 320px;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px;
+            background: none;
+            border: none;
+            color: #777;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .tab-btn.active {
+            color: var(--neon-purple);
+            border-bottom: 2px solid var(--neon-purple);
         }
         .login-box input {
             width: 100%; padding: 10px; margin: 10px 0;
             background: #000; border: 1px solid rgba(240, 236, 216, 0.2); color: #fff;
             box-sizing: border-box;
         }
-        .login-box button {
+        .login-box button.action-btn {
             background: var(--neon-purple); color: #fff; border: none;
             padding: 10px 20px; cursor: pointer; width: 100%; font-weight: bold;
+            margin-top: 10px;
         }
         #conteudo-ficha {
             display: none;
@@ -61,11 +80,20 @@
 
     <div id="tela-login">
         <div class="login-box">
-            <h2 style="color: var(--neon-purple); margin-bottom: 20px;">CHUVA DE NEON</h2>
-            <input type="text" id="login-user" placeholder="Nome do seu Personagem">
-            <input type="password" id="login-pass" placeholder="Senha">
-            <button id="btn-entrar">Acessar Sistema</button>
-            <p id="login-erro" style="color: red; font-size: 0.8rem; margin-top: 10px; display: none;">Credenciais inválidas.</p>
+            <h2 style="color: var(--neon-purple); margin-top: 0;">CHUVA DE NEON</h2>
+            
+            <div class="tabs">
+                <button id="tab-entrar" class="tab-btn active">ENTRAR</button>
+                <button id="tab-criar" class="tab-btn">CRIAR FICHA</button>
+            </div>
+
+            <div id="form-inputs">
+                <input type="text" id="login-user" placeholder="Nome do Personagem (ou Mestre)">
+                <input type="password" id="login-pass" placeholder="Senha da Ficha">
+                <button id="btn-acao" class="action-btn">Acessar Sistema</button>
+            </div>
+
+            <p id="login-status-msg" style="color: red; font-size: 0.8rem; margin-top: 15px; display: none;"></p>
         </div>
     </div>
 
@@ -78,10 +106,8 @@
         <div id="painel-mestre-seletor" style="display: none; background: #1e1b4b; padding: 15px; margin-bottom: 20px; border: 1px solid var(--neon-purple);">
             <label for="select-ficha" style="font-weight: bold; color: var(--neon-lime);">Visualizar Ficha do Jogador:</label>
             <select id="select-ficha" style="width: 100%; padding: 8px; margin-top: 5px; background: #000; color: #fff;">
-                <option value="niki">Niki</option>
-                <option value="kael">Kael</option>
-                <option value="dante">Dante</option>
-                </select>
+                <option value="">-- Escolha um Personagem --</option>
+            </select>
         </div>
 
         <h2 style="color: var(--neon-purple);">Ficha Ativa: <span id="nome-ficha-ativa" style="color: #fff;">...</span></h2>
