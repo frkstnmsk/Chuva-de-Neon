@@ -14,22 +14,22 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// MESTRE LOGIN DO CANÔNICO
+// ACESSO DO MESTRE CANÔNICO
 const LOGIN_MESTRE = "frkstnmsk";
 const SENHA_MESTRE = "31outcaseri";
 
 let modoAtual = "entrar";
-let usuarioLogado = { role: "jogador", nome: "" };
+let usuarioLogado = { role: "jogador", nome: "", idLimpo: "" };
 let fichaMonitorada = "";
 let firebaseListener = null;
 
-// Elementos HTML
 const tabEntrar = document.getElementById("tab-entrar");
 const tabCriar = document.getElementById("tab-criar");
 const btnAcao = document.getElementById("btn-acao");
 const statusMsg = document.getElementById("login-status-msg");
+const formFicha = document.getElementById("form-ficha-dados");
 
-// Controle de Abas
+// Alternar Abas Login
 tabEntrar.addEventListener("click", () => {
     modoAtual = "entrar";
     tabEntrar.classList.add("active");
@@ -45,7 +45,7 @@ tabCriar.addEventListener("click", () => {
     statusMsg.style.display = "none";
 });
 
-// Executar Ação (Login/Criação)
+// Ação de Login / Criação
 btnAcao.addEventListener("click", async () => {
     const rawUser = document.getElementById("login-user").value.trim();
     const pass = document.getElementById("login-pass").value;
@@ -55,16 +55,15 @@ btnAcao.addEventListener("click", async () => {
         return;
     }
 
-    // Tratamento de segurança para IDs limpos (Espaços viram traços)
     const userClean = rawUser.toLowerCase().replace(/[^a-z0-9]/g, "-");
 
-    // Validação do Mestre
+    // Validação Mestre
     if (rawUser.toLowerCase() === LOGIN_MESTRE && pass === SENHA_MESTRE) {
         definirSessao("mestre", "Mestre", "");
         return;
     }
     if (rawUser.toLowerCase() === LOGIN_MESTRE && pass !== SENHA_MESTRE) {
-        mostrarErro("CORTA-FOGO: Chave de mestre inválida.");
+        mostrarErro("CORTA-FOGO: Senha de mestre inválida.");
         return;
     }
 
@@ -75,28 +74,37 @@ btnAcao.addEventListener("click", async () => {
         if (snapshot.exists()) {
             mostrarErro("ERRO: ID de ficha já ocupado na rede.");
         } else {
+            // Cria a ficha estruturada com valor padrão vazio para todos os campos pedidos
+            const camposIniciais = {
+                nome: rawUser, vulgo: "", idade: "", nacionalidade: "", funcao: "", maldade: "0", remorso: "0", status: "0",
+                dm: "", void: "", p2k: "", rabbithole: "", p2c: "", creators: "",
+                nivel: "1", xp: "0", pvs: "100", energia: "10",
+                forca: "0", constituicao: "0", destreza: "0", sabedoria: "0", inteligencia: "0", raciocinio: "0", carisma: "0", manipulacao: "0",
+                velocidade: "0", agilidade: "0", percepcao: "0", massa_corporea: "0", forca_vontade: "0",
+                pericias: "", desvantagens: "", determinacoes: ""
+            };
+
             await set(ref(db, `fichas/${userClean}`), {
                 config: { senha: pass, nomeExibicao: rawUser },
-                dados: { vida: "100", modificadorMestre: "0" }
+                dados: camposIniciais
             });
             definirSessao("jogador", rawUser, userClean);
         }
     } else {
         const snapshot = await get(configRef);
         if (!snapshot.exists()) {
-            mostrarErro("ERRO: Ficha inexistente na colônia.");
+            mostrarErro("ERRO: Ficha inexistente no sistema.");
         } else {
             const config = snapshot.val();
             if (config.senha === pass) {
                 definirSessao("jogador", config.nomeExibicao || rawUser, userClean);
             } else {
-                mostrarErro("CORTA-FOGO: Chave de acesso incorreta.");
+                mostrarErro("CORTA-FOGO: Senha incorreta.");
             }
         }
     }
 });
 
-// Sistema de persistência de Login (Sessão)
 function definirSessao(role, nome, idLimpo) {
     usuarioLogado = { role, nome, idLimpo };
     localStorage.setItem("cdn_session", JSON.stringify(usuarioLogado));
@@ -116,19 +124,17 @@ function liberarPainel() {
     document.getElementById("conteudo-ficha").style.display = "block";
 
     const badgeRole = document.getElementById("user-role");
-    const inputMod = document.getElementById("mod-mestre");
     const painelMestre = document.getElementById("painel-mestre-seletor");
 
     if (usuarioLogado.role === "mestre") {
         badgeRole.className = "badge mestre";
         badgeRole.innerText = "MESTRE";
-        inputMod.disabled = false;
         painelMestre.style.display = "block";
 
         onValue(ref(db, "fichas"), (snapshot) => {
             const seletor = document.getElementById("select-ficha");
             const valorAntigo = seletor.value;
-            seletor.innerHTML = '<option value="">-- Escolha um Personagem --</option>';
+            seletor.innerHTML = '<option value="">-- Escolha um Personagem da Rede --</option>';
             
             if (snapshot.exists()) {
                 Object.keys(snapshot.val()).forEach(idFicha => {
@@ -152,57 +158,53 @@ function liberarPainel() {
     } else {
         badgeRole.className = "badge jogador";
         badgeRole.innerText = usuarioLogado.nome.toUpperCase();
-        inputMod.disabled = true;
-        inputMod.style.background = "#141416";
-        inputMod.placeholder = "Bloqueado pelo Mestre";
         fichaMonitorada = usuarioLogado.idLimpo;
         ativarSincronizacao();
     }
 }
 
-function activarSincronizacao() {
+// SINCRONIZAÇÃO TOTAL DOS CAMPOS COM O FIREBASE (TEMPO REAL)
+function ativarSincronizacao() {
     if (firebaseListener) {
         off(ref(db, `fichas/${fichaMonitorada}/dados`));
     }
 
     document.getElementById("nome-ficha-ativa").innerText = fichaMonitorada.toUpperCase();
 
-    const txtVida = document.getElementById("vidaAtual");
-    const txtMod = document.getElementById("modAtual");
-    const inputVida = document.getElementById("vida");
-    const inputMod = document.getElementById("mod-mestre");
-
     firebaseListener = onValue(ref(db, `fichas/${fichaMonitorada}/dados`), (snapshot) => {
         const dados = snapshot.val();
         if (dados) {
-            txtVida.innerText = dados.vida !== undefined ? dados.vida : "0";
-            txtMod.innerText = dados.modificadorMestre !== undefined ? dados.modificadorMestre : "0";
-
-            if (document.activeElement !== inputVida) inputVida.value = dados.vida || "";
-            if (document.activeElement !== inputMod) inputMod.value = dados.modificadorMestre || "";
-        } else {
-            txtVida.innerText = "0"; txtMod.innerText = "0";
-            inputVida.value = ""; inputMod.value = "";
+            // Mapeia inteligentemente todos os inputs da ficha e joga o valor vindo do banco
+            Object.keys(dados).forEach(key => {
+                const input = formFicha.elements[key];
+                if (input && document.activeElement !== input) {
+                    input.value = dados[key];
+                }
+            });
         }
     });
 }
 
-// Enviar dados sincronizados
-document.getElementById("btn-cyber").parentElement.querySelector("#btn-salvar").addEventListener("click", () => {
-    if (!fichaMonitorada) return;
+// SALVAR TODOS OS DADOS NO BANCO
+document.getElementById("btn-salvar").addEventListener("click", () => {
+    if (!fichaMonitorada) {
+        alert("Nenhum link ativo com uma ficha.");
+        return;
+    }
 
-    const payload = usuarioLogado.role === "mestre" ? {
-        vida: document.getElementById("vida").value,
-        modificadorMestre: document.getElementById("mod-mestre").value
-    } : {
-        vida: document.getElementById("vida").value,
-        modificadorMestre: document.getElementById("modAtual").innerText
-    };
+    const formData = new FormData(formFicha);
+    const dadosParaEnviar = {};
 
-    set(ref(db, `fichas/${fichaMonitorada}/dados`), payload);
+    formData.forEach((value, key) => {
+        dadosParaEnviar[key] = value;
+    });
+
+    set(ref(db, `fichas/${fichaMonitorada}/dados`), dadosParaEnviar)
+    .then(() => alert("SINAL DE PROTOCOLO SUCEDIDO: Ficha salva no Firebase!"))
+    .catch((err) => console.error("Erro ao salvar:", err));
 });
 
-// Desconectar Sessão
+// LOGOUT
 document.getElementById("btn-logout").addEventListener("click", () => {
     localStorage.removeItem("cdn_session");
     window.location.reload();
@@ -213,5 +215,5 @@ function mostrarErro(txt) {
     statusMsg.style.display = "block";
 }
 
-// Inicializa a checagem ao carregar a página
+// Inicializa a escuta
 verificarSessaoAtiva();
