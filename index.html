@@ -1,145 +1,317 @@
-<!-- FICHA DE PERSONAGEM - CHUVA DE NEON -->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Ficha Chuva de Neon</title>
+    <style>
+        /* ESTÉTICA CYBERPUNK - CHUVA DE NEON */
+        :root {
+            --bg-principal: #050508;
+            --bg-card: #0d0e15;
+            --bg-input: #141622;
+            --neon-rosa: #ff0055;
+            --neon-ciano: #00ffcc;
+            --neon-roxo: #9d4edd;
+            --texto: #e2e8f0;
+            --texto-escuro: #64748b;
+            --sombra-rosa: 0 0 10px rgba(255, 0, 85, 0.35), inset 0 0 10px rgba(255, 0, 85, 0.1);
+            --sombra-ciano: 0 0 10px rgba(0, 255, 204, 0.25);
+        }
+
+        body {
+            background-color: var(--bg-principal);
+            color: var(--texto);
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .ficha-container {
+            width: 100%;
+            max-width: 900px;
+            background: var(--bg-card);
+            border: 2px solid var(--neon-rosa);
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: var(--sombra-rosa);
+            box-sizing: border-box;
+        }
+
+        h1.titulo-sistema {
+            text-align: center;
+            color: var(--neon-ciano);
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            margin-top: 0;
+            margin-bottom: 30px;
+            text-shadow: 0 0 8px rgba(0, 255, 204, 0.6);
+            font-size: 2rem;
+            border-bottom: 1px dashed var(--neon-rosa);
+            padding-bottom: 15px;
+        }
+
+        fieldset {
+            border: 1px solid var(--neon-roxo);
+            border-radius: 4px;
+            margin-bottom: 25px;
+            padding: 20px;
+            background: rgba(20, 22, 34, 0.5);
+        }
+
+        legend {
+            color: var(--neon-ciano);
+            font-weight: bold;
+            text-transform: uppercase;
+            padding: 0 12px;
+            letter-spacing: 1px;
+            font-size: 0.95rem;
+            text-shadow: 0 0 5px rgba(0, 255, 204, 0.4);
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .row:last-child {
+            margin-bottom: 0;
+        }
+
+        .campo {
+            flex: 1;
+            min-width: 140px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .campo.largo {
+            flex: 2;
+        }
+
+        label {
+            font-size: 0.8rem;
+            color: var(--neon-rosa);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        input[type="text"], 
+        input[type="number"], 
+        textarea {
+            background-color: var(--bg-input);
+            border: 1px solid var(--texto-escuro);
+            border-radius: 3px;
+            color: #fff;
+            padding: 10px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            box-sizing: border-box;
+            width: 100%;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--neon-ciano);
+            box-shadow: var(--sombra-ciano);
+        }
+
+        /* Grid específico para atributos */
+        .grid-atributos {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+        }
+
+        .grid-atributos .campo {
+            flex-direction: row;
+            align-items: center;
+            background: var(--bg-input);
+            padding: 5px 10px;
+            border-radius: 4px;
+            border-left: 3px solid var(--neon-rosa);
+        }
+
+        .grid-atributos label {
+            margin-bottom: 0;
+            width: 110px;
+        }
+
+        .grid-atributos input {
+            width: 60px;
+            text-align: center;
+            padding: 6px;
+        }
+
+        /* Textareas customizados */
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        textarea::placeholder {
+            color: #475569;
+        }
+    </style>
+</head>
+<body>
+
 <div class="ficha-container">
+    <h1 class="titulo-sistema">Chuva de Neon // Ficha de Personagem</h1>
 
     <!-- CATEGORIA DADOS PESSOAIS -->
-    <fieldset class="categoria-dados">
+    <fieldset>
         <legend>Categoria Dados Pessoais</legend>
-        <div class="campo">
-            <label for="nome">Nome:</label>
-            <input type="text" id="nome" name="nome">
-        </div>
-        <div class="campo">
-            <label for="vulgo">Vulgo:</label>
-            <input type="text" id="vulgo" name="vulgo">
-        </div>
-        <div class="campo">
-            <label for="idade">Idade:</label>
-            <input type="number" id="idade" name="idade">
-        </div>
-        <div class="campo">
-            <label for="nacionalidade">Nacionalidade:</label>
-            <input type="text" id="nacionalidade" name="nacionalidade">
-        </div>
-        <div class="campo">
-            <label for="funcao">Função:</label>
-            <input type="text" id="funcao" name="funcao">
-        </div>
-        <div class="campo-grupo">
-            <div class="campo">
-                <label for="maldade">Maldade:</label>
-                <input type="number" id="maldade" name="maldade">
+        <div class="row">
+            <div class="campo largo">
+                <label>Nome</label>
+                <input type="text" name="nome">
             </div>
             <div class="campo">
-                <label for="remorso">Remorso:</label>
-                <input type="number" id="remorso" name="remorso">
+                <label>Vulgo</label>
+                <input type="text" name="vulgo">
             </div>
             <div class="campo">
-                <label for="status">Status:</label>
-                <input type="number" id="status" name="status">
+                <label>Idade</label>
+                <input type="number" name="idade">
+            </div>
+        </div>
+        <div class="row">
+            <div class="campo largo">
+                <label>Nacionalidade</label>
+                <input type="text" name="nacionalidade">
+            </div>
+            <div class="campo largo">
+                <label>Função</label>
+                <input type="text" name="funcao">
+            </div>
+        </div>
+        <div class="row">
+            <div class="campo">
+                <label>Maldade</label>
+                <input type="number" name="maldade">
+            </div>
+            <div class="campo">
+                <label>Remorso</label>
+                <input type="number" name="remorso">
+            </div>
+            <div class="campo">
+                <label>Status</label>
+                <input type="number" name="status">
             </div>
         </div>
     </fieldset>
 
     <!-- CATEGORIA DARK NET -->
-    <fieldset class="categoria-darknet">
+    <fieldset>
         <legend>Categoria Dark Net</legend>
-        <div class="campo">
-            <label for="dm">Dm:</label>
-            <input type="text" id="dm" name="dm" placeholder="www.dm.dn/...">
+        <div class="row">
+            <div class="campo">
+                <label>Dm</label>
+                <input type="text" name="dm" placeholder="www.dm.dn/...">
+            </div>
+            <div class="campo">
+                <label>Void</label>
+                <input type="text" name="void" placeholder="www.void.dn/...">
+            </div>
         </div>
-        <div class="campo">
-            <label for="void">Void:</label>
-            <input type="text" id="void" name="void" placeholder="www.void.dn/...">
+        <div class="row">
+            <div class="campo">
+                <label>P2K</label>
+                <input type="text" name="p2k">
+            </div>
+            <div class="campo">
+                <label>RabbitHole</label>
+                <input type="text" name="rabbithole">
+            </div>
         </div>
-        <div class="campo">
-            <label for="p2k">P2K:</label>
-            <input type="text" id="p2k" name="p2k">
-        </div>
-        <div class="campo">
-            <label for="rabbithole">RabbitHole:</label>
-            <input type="text" id="rabbithole" name="rabbithole">
-        </div>
-        <div class="campo">
-            <label for="p2c">P2C:</label>
-            <input type="text" id="p2c" name="p2c">
-        </div>
-        <div class="campo">
-            <label for="creators">Creators:</label>
-            <input type="text" id="creators" name="creators">
+        <div class="row">
+            <div class="campo">
+                <label>P2C</label>
+                <input type="text" name="p2c">
+            </div>
+            <div class="campo">
+                <label>Creators</label>
+                <input type="text" name="creators">
+            </div>
         </div>
     </fieldset>
 
     <!-- PROGRESSÃO E STATUS -->
-    <fieldset class="categoria-status">
+    <fieldset>
         <legend>Nível e Status</legend>
-        <div class="campo-grupo">
+        <div class="row">
             <div class="campo">
-                <label for="nivel">Nível:</label>
-                <input type="number" id="nivel" name="nivel" value="1">
+                <label>Nível</label>
+                <input type="number" name="nivel" value="1">
             </div>
             <div class="campo">
-                <label for="xp">XP:</label>
-                <input type="number" id="xp" name="xp" value="0">
+                <label>XP</label>
+                <input type="number" name="xp" value="0">
             </div>
             <div class="campo">
-                <label for="pvs">PVs:</label>
-                <input type="number" id="pvs" name="pvs">
+                <label>PVs</label>
+                <input type="number" name="pvs">
             </div>
             <div class="campo">
-                <label for="energia">Energia:</label>
-                <input type="number" id="energia" name="energia">
+                <label>Energia</label>
+                <input type="number" name="energia">
             </div>
         </div>
     </fieldset>
 
     <!-- ATRIBUTOS -->
-    <fieldset class="categoria-atributos">
+    <fieldset>
         <legend>Atributos</legend>
         <div class="grid-atributos">
-            <div class="campo"><label>Força:</label> <input type="number" name="forca"></div>
-            <div class="campo"><label>Constituição:</label> <input type="number" name="constituicao"></div>
-            <div class="campo"><label>Destreza:</label> <input type="number" name="destreza"></div>
-            <div class="campo"><label>Sabedoria:</label> <input type="number" name="sabedoria"></div>
-            <div class="campo"><label>Inteligência:</label> <input type="number" name="inteligencia"></div>
-            <div class="campo"><label>Raciocínio:</label> <input type="number" name="raciocinio"></div>
-            <div class="campo"><label>Carisma:</label> <input type="number" name="carisma"></div>
-            <div class="campo"><label>Manipulação:</label> <input type="number" name="manipulacao"></div>
+            <div class="campo"><label>Força</label> <input type="number" name="forca"></div>
+            <div class="campo"><label>Constituição</label> <input type="number" name="constituicao"></div>
+            <div class="campo"><label>Destreza</label> <input type="number" name="destreza"></div>
+            <div class="campo"><label>Sabedoria</label> <input type="number" name="sabedoria"></div>
+            <div class="campo"><label>Inteligência</label> <input type="number" name="inteligencia"></div>
+            <div class="campo"><label>Raciocínio</label> <input type="number" name="raciocinio"></div>
+            <div class="campo"><label>Carisma</label> <input type="number" name="carisma"></div>
+            <div class="campo"><label>Manipulação</label> <input type="number" name="manipulacao"></div>
         </div>
     </fieldset>
 
     <!-- ATRIBUTOS SECUNDÁRIOS -->
-    <fieldset class="categoria-secundarios">
+    <fieldset>
         <legend>Atributos Secundários</legend>
         <div class="grid-atributos">
-            <div class="campo"><label>Velocidade:</label> <input type="number" name="velocidade"></div>
-            <div class="campo"><label>Agilidade:</label> <input type="number" name="agilidade"></div>
-            <div class="campo"><label>Percepção:</label> <input type="number" name="percepcao"></div>
-            <div class="campo"><label>Massa Corpórea:</label> <input type="number" name="massa_corporea"></div>
-            <div class="campo"><label>Força de Vontade:</label> <input type="number" name="forca_vontade"></div>
+            <div class="campo"><label>Velocidade</label> <input type="number" name="velocidade"></div>
+            <div class="campo"><label>Agilidade</label> <input type="number" name="agilidade"></div>
+            <div class="campo"><label>Percepção</label> <input type="number" name="percepcao"></div>
+            <div class="campo"><label>Massa Corp.</label> <input type="number" name="massa_corporea"></div>
+            <div class="campo"><label>Vontade</label> <input type="number" name="forca_vontade"></div>
         </div>
     </fieldset>
 
     <!-- PERÍCIAS -->
-    <fieldset class="categoria-pericias">
+    <fieldset>
         <legend>Perícias</legend>
-        <p class="instrucao">Adicione as perícias do personagem:</p>
-        <div id="lista-pericias">
-            <!-- Área para adicionar inputs dinamicamente ou listar textareas -->
-            <textarea name="pericias" rows="4" placeholder="Ex: Dirigir Veículos (DES/RAC): 2&#10;Armas de Fogo (DES): 1"></textarea>
-        </div>
+        <textarea name="pericias" rows="5" placeholder="Adicione suas perícias... Ex: Dirigir Veículos (DES/RAC): 2"></textarea>
     </fieldset>
 
     <!-- DESVANTAGENS -->
-    <fieldset class="categoria-desvantagens">
+    <fieldset>
         <legend>Desvantagens</legend>
-        <p class="instrucao">Adicione as desvantagens do personagem:</p>
-        <textarea name="desvantagens" rows="3" placeholder="Ex: Viciado (Anfetaminas), Pavio Curto..."></textarea>
+        <textarea name="desvantagens" rows="4" placeholder="Enumere as desvantagens e fobias adquiridas nas ruas..."></textarea>
     </fieldset>
 
     <!-- DETERMINAÇÕES -->
-    <fieldset class="categoria-determinacoes">
+    <fieldset>
         <legend>Determinações</legend>
-        <textarea name="determinacoes" rows="4" placeholder="1. Digite sua primeira determinação aqui...&#10;2. Segunda determinação..."></textarea>
+        <textarea name="determinacoes" rows="5" placeholder="1. Suas convicções e amarras psicológicas aqui..."></textarea>
     </fieldset>
 
 </div>
+
+</body>
+</html>
