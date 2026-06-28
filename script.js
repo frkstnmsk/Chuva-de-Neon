@@ -14,100 +14,101 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// CREDENCIAIS DO MESTRE
+// MESTRE LOGIN DO CANÔNICO
 const LOGIN_MESTRE = "frkstnmsk";
 const SENHA_MESTRE = "31outcaseri";
 
-let modoAtual = "entrar"; // "entrar" ou "criar"
+let modoAtual = "entrar";
 let usuarioLogado = { role: "jogador", nome: "" };
 let fichaMonitorada = "";
 let firebaseListener = null;
 
-// Chaves de controle de Abas da Interface
+// Elementos HTML
 const tabEntrar = document.getElementById("tab-entrar");
 const tabCriar = document.getElementById("tab-criar");
 const btnAcao = document.getElementById("btn-acao");
 const statusMsg = document.getElementById("login-status-msg");
 
+// Controle de Abas
 tabEntrar.addEventListener("click", () => {
     modoAtual = "entrar";
     tabEntrar.classList.add("active");
     tabCriar.classList.remove("active");
-    btnAcao.innerText = "Acessar Sistema";
+    btnAcao.innerText = "Inicializar Link";
     statusMsg.style.display = "none";
 });
-
 tabCriar.addEventListener("click", () => {
     modoAtual = "criar";
     tabCriar.classList.add("active");
     tabEntrar.classList.remove("active");
-    btnAcao.innerText = "Criar Nova Ficha";
+    btnAcao.innerText = "Registrar Nova Ficha";
     statusMsg.style.display = "none";
 });
 
-// Executar Ação (Entrar ou Criar)
+// Executar Ação (Login/Criação)
 btnAcao.addEventListener("click", async () => {
-    const user = document.getElementById("login-user").value.trim().toLowerCase();
+    const rawUser = document.getElementById("login-user").value.trim();
     const pass = document.getElementById("login-pass").value;
 
-    if (user === "" || pass === "") {
-        mostrarErro("Preencha todos os campos.");
+    if (rawUser === "" || pass === "") {
+        mostrarErro("SINAL INCOMPLETO: Preencha os campos.");
         return;
     }
 
-    // 1. CHECAGEM SE É O MESTRE
-    if (user === LOGIN_MESTRE && pass === SENHA_MESTRE) {
-        usuarioLogado.role = "mestre";
-        usuarioLogado.nome = "Mestre";
-        liberarPainel();
+    // Tratamento de segurança para IDs limpos (Espaços viram traços)
+    const userClean = rawUser.toLowerCase().replace(/[^a-z0-9]/g, "-");
+
+    // Validação do Mestre
+    if (rawUser.toLowerCase() === LOGIN_MESTRE && pass === SENHA_MESTRE) {
+        definirSessao("mestre", "Mestre", "");
+        return;
+    }
+    if (rawUser.toLowerCase() === LOGIN_MESTRE && pass !== SENHA_MESTRE) {
+        mostrarErro("CORTA-FOGO: Chave de mestre inválida.");
         return;
     }
 
-    if (user === LOGIN_MESTRE && pass !== SENHA_MESTRE) {
-        mostrarErro("Senha incorreta para o usuário de Mestre.");
-        return;
-    }
-
-    const fichaRef = ref(db, `fichas/${user}/config`);
+    const configRef = ref(db, `fichas/${userClean}/config`);
 
     if (modoAtual === "criar") {
-        // 2. LÓGICA DE CRIAR FICHA
-        const snapshot = await get(fichaRef);
+        const snapshot = await get(configRef);
         if (snapshot.exists()) {
-            mostrarErro("Uma ficha com esse nome já existe!");
+            mostrarErro("ERRO: ID de ficha já ocupado na rede.");
         } else {
-            // Cria os dados de acesso da ficha e inicializa os valores padrão
-            await set(ref(db, `fichas/${user}`), {
-                config: { senha: pass },
+            await set(ref(db, `fichas/${userClean}`), {
+                config: { senha: pass, nomeExibicao: rawUser },
                 dados: { vida: "100", modificadorMestre: "0" }
             });
-            usuarioLogado.role = "jogador";
-            usuarioLogado.nome = user;
-            fichaMonitorada = user;
-            liberarPainel();
+            definirSessao("jogador", rawUser, userClean);
         }
     } else {
-        // 3. LÓGICA DE ENTRAR EM FICHA EXISTENTE
-        const snapshot = await get(fichaRef);
+        const snapshot = await get(configRef);
         if (!snapshot.exists()) {
-            mostrarErro("Essa ficha não existe. Escolha 'CRIAR FICHA' se for nova.");
+            mostrarErro("ERRO: Ficha inexistente na colônia.");
         } else {
-            const dadosConfig = snapshot.val();
-            if (dadosConfig.senha === pass) {
-                usuarioLogado.role = "jogador";
-                usuarioLogado.nome = user;
-                fichaMonitorada = user;
-                liberarPainel();
+            const config = snapshot.val();
+            if (config.senha === pass) {
+                definirSessao("jogador", config.nomeExibicao || rawUser, userClean);
             } else {
-                mostrarErro("Senha incorreta para esta ficha.");
+                mostrarErro("CORTA-FOGO: Chave de acesso incorreta.");
             }
         }
     }
 });
 
-function mostrarErro(txt) {
-    statusMsg.innerText = txt;
-    statusMsg.style.display = "block";
+// Sistema de persistência de Login (Sessão)
+function definirSessao(role, nome, idLimpo) {
+    usuarioLogado = { role, nome, idLimpo };
+    localStorage.setItem("cdn_session", JSON.stringify(usuarioLogado));
+    liberarPainel();
+}
+
+function verificarSessaoAtiva() {
+    const saved = localStorage.getItem("cdn_session");
+    if (saved) {
+        usuarioLogado = JSON.parse(saved);
+        liberarPainel();
+    }
 }
 
 function liberarPainel() {
@@ -115,27 +116,30 @@ function liberarPainel() {
     document.getElementById("conteudo-ficha").style.display = "block";
 
     const badgeRole = document.getElementById("user-role");
-    const inputModMestre = document.getElementById("mod-mestre");
-    const painelSeletorMestre = document.getElementById("painel-mestre-seletor");
+    const inputMod = document.getElementById("mod-mestre");
+    const painelMestre = document.getElementById("painel-mestre-seletor");
 
     if (usuarioLogado.role === "mestre") {
-        badgeRole.innerHTML = `<span class="badge-mestre">MESTRE</span>`;
-        inputModMestre.disabled = false;
-        painelSeletorMestre.style.display = "block";
+        badgeRole.className = "badge mestre";
+        badgeRole.innerText = "MESTRE";
+        inputMod.disabled = false;
+        painelMestre.style.display = "block";
 
-        // Carrega todas as fichas criadas no banco para colocar no select do mestre
         onValue(ref(db, "fichas"), (snapshot) => {
             const seletor = document.getElementById("select-ficha");
+            const valorAntigo = seletor.value;
             seletor.innerHTML = '<option value="">-- Escolha um Personagem --</option>';
             
             if (snapshot.exists()) {
-                Object.keys(snapshot.val()).forEach(nomeFicha => {
+                Object.keys(snapshot.val()).forEach(idFicha => {
                     const opt = document.createElement("option");
-                    opt.value = nomeFicha;
-                    opt.innerText = nomeFicha.toUpperCase();
+                    opt.value = idFicha;
+                    opt.innerText = idFicha.toUpperCase();
                     seletor.appendChild(opt);
                 });
-                if (fichaMonitorada) seletor.value = fichaMonitorada;
+                if (valorAntigo && snapshot.child(valorAntigo).exists()) {
+                    seletor.value = valorAntigo;
+                }
             }
         });
 
@@ -146,10 +150,12 @@ function liberarPainel() {
             }
         });
     } else {
-        badgeRole.innerHTML = `<span class="badge-jogador">JOGADOR</span>`;
-        inputModMestre.disabled = true;
-        inputModMestre.style.background = "#222";
-        inputModMestre.placeholder = "Apenas o mestre edita o modificador";
+        badgeRole.className = "badge jogador";
+        badgeRole.innerText = usuarioLogado.nome.toUpperCase();
+        inputMod.disabled = true;
+        inputMod.style.background = "#141416";
+        inputMod.placeholder = "Bloqueado pelo Mestre";
+        fichaMonitorada = usuarioLogado.idLimpo;
         ativarSincronizacao();
     }
 }
@@ -161,60 +167,51 @@ function activarSincronizacao() {
 
     document.getElementById("nome-ficha-ativa").innerText = fichaMonitorada.toUpperCase();
 
-    const txtVidaAtual = document.getElementById("vidaAtual");
-    const txtModAtual = document.getElementById("modAtual");
+    const txtVida = document.getElementById("vidaAtual");
+    const txtMod = document.getElementById("modAtual");
     const inputVida = document.getElementById("vida");
-    const inputModMestre = document.getElementById("mod-mestre");
+    const inputMod = document.getElementById("mod-mestre");
 
-    const caminhoDadosRef = ref(db, `fichas/${fichaMonitorada}/dados`);
-
-    firebaseListener = onValue(caminhoDadosRef, (snapshot) => {
+    firebaseListener = onValue(ref(db, `fichas/${fichaMonitorada}/dados`), (snapshot) => {
         const dados = snapshot.val();
         if (dados) {
-            txtVidaAtual.innerText = dados.vida !== undefined ? dados.vida : "0";
-            txtModAtual.innerText = dados.modificadorMestre !== undefined ? dados.modificadorMestre : "0";
+            txtVida.innerText = dados.vida !== undefined ? dados.vida : "0";
+            txtMod.innerText = dados.modificadorMestre !== undefined ? dados.modificadorMestre : "0";
 
-            if (document.activeElement !== inputVida) {
-                inputVida.value = dados.vida || "";
-            }
-            if (document.activeElement !== inputModMestre) {
-                inputModMestre.value = dados.modificadorMestre || "";
-            }
+            if (document.activeElement !== inputVida) inputVida.value = dados.vida || "";
+            if (document.activeElement !== inputMod) inputMod.value = dados.modificadorMestre || "";
         } else {
-            txtVidaAtual.innerText = "Sem dados";
-            txtModAtual.innerText = "0";
-            inputVida.value = "";
-            inputModMestre.value = "";
+            txtVida.innerText = "0"; txtMod.innerText = "0";
+            inputVida.value = ""; inputMod.value = "";
         }
     });
 }
 
-// Salvar Dados Sincronizados
-document.getElementById("btn-salvar").addEventListener("click", () => {
-    if (!fichaMonitorada) {
-        alert("Nenhum personagem selecionado para salvar.");
-        return;
-    }
+// Enviar dados sincronizados
+document.getElementById("btn-cyber").parentElement.querySelector("#btn-salvar").addEventListener("click", () => {
+    if (!fichaMonitorada) return;
 
-    const inputVida = document.getElementById("vida");
-    const inputModMestre = document.getElementById("mod-mestre");
-    const caminhoDadosRef = ref(db, `fichas/${fichaMonitorada}/dados`);
+    const payload = usuarioLogado.role === "mestre" ? {
+        vida: document.getElementById("vida").value,
+        modificadorMestre: document.getElementById("mod-mestre").value
+    } : {
+        vida: document.getElementById("vida").value,
+        modificadorMestre: document.getElementById("modAtual").innerText
+    };
 
-    let dadosParaEnviar = {};
-
-    if (usuarioLogado.role === "mestre") {
-        dadosParaEnviar = {
-            vida: inputVida.value,
-            modificadorMestre: inputModMestre.value
-        };
-    } else {
-        dadosParaEnviar = {
-            vida: inputVida.value,
-            modificadorMestre: document.getElementById("modAtual").innerText
-        };
-    }
-
-    set(caminhoDadosRef, dadosParaEnviar)
-    .then(() => console.log(`Dados salvos em fichas/${fichaMonitorada}`))
-    .catch((err) => console.error(err));
+    set(ref(db, `fichas/${fichaMonitorada}/dados`), payload);
 });
+
+// Desconectar Sessão
+document.getElementById("btn-logout").addEventListener("click", () => {
+    localStorage.removeItem("cdn_session");
+    window.location.reload();
+});
+
+function mostrarErro(txt) {
+    statusMsg.innerText = txt;
+    statusMsg.style.display = "block";
+}
+
+// Inicializa a checagem ao carregar a página
+verificarSessaoAtiva();
