@@ -14,6 +14,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+// SALVAR VIDA
 window.salvarVida = function () {
   const vida = document.getElementById("vida").value;
 
@@ -21,6 +22,8 @@ window.salvarVida = function () {
     valor: vida
   });
 };
+
+// LER VIDA EM TEMPO REAL
 const vidaRef = ref(db, "jogador1/vida");
 
 onValue(vidaRef, (snapshot) => {
@@ -28,40 +31,6 @@ onValue(vidaRef, (snapshot) => {
 
   if (data) {
     document.getElementById("vida").value = data.valor;
-  }
-});
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
-import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
-
-const firebaseConfig = {
-  apiKey: "SUA_CHAVE",
-  authDomain: "chuva-de-neon.firebaseapp.com",
-  databaseURL: "https://chuva-de-neon-default-rtdb.firebaseio.com",
-  projectId: "chuva-de-neon",
-  storageBucket: "chuva-de-neon.appspot.com",
-  messagingSenderId: "994935691317",
-  appId: "SEU_APP_ID"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-
-window.salvarVida = function () {
-  const vida = document.getElementById("vida").value;
-
-  set(ref(db, "jogador1/vida"), {
-    valor: vida
-  });
-};
-
-const vidaRef = ref(db, "jogador1/vida");
-
-onValue(vidaRef, (snapshot) => {
-  const data = snapshot.val();
-
-  if (data) {
     document.getElementById("vidaAtual").innerText = data.valor;
   }
 });
-
-
