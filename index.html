@@ -2,9 +2,8 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Ficha Chuva de Neon - Login & Sincronização</title>
+    <title>Ficha Chuva de Neon - Multi-Personagens</title>
     <style>
-        /* ESTILO COMPATÍVEL COM O SEU ECOSSISTEMA NEON/CYBERPUNK */
         :root {
             --bg-dark: #070709;
             --panel-bg: rgba(13, 13, 16, 0.96);
@@ -19,7 +18,6 @@
             margin: 0;
             padding: 20px;
         }
-        /* TELA DE LOGIN OVERLAY */
         #tela-login {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -39,24 +37,14 @@
             width: 300px;
         }
         .login-box input {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            background: #000;
-            border: 1px solid rgba(240, 236, 216, 0.2);
-            color: #fff;
+            width: 100%; padding: 10px; margin: 10px 0;
+            background: #000; border: 1px solid rgba(240, 236, 216, 0.2); color: #fff;
             box-sizing: border-box;
         }
         .login-box button {
-            background: var(--neon-purple);
-            color: #fff;
-            border: none;
-            padding: 10px 20px;
-            cursor: pointer;
-            width: 100%;
-            font-weight: bold;
+            background: var(--neon-purple); color: #fff; border: none;
+            padding: 10px 20px; cursor: pointer; width: 100%; font-weight: bold;
         }
-        /* ÁREA DA FICHA (ESCONDIDA ATÉ LOGAR) */
         #conteudo-ficha {
             display: none;
             max-width: 600px;
@@ -67,50 +55,55 @@
         }
         .badge-mestre { color: var(--neon-lime); font-weight: bold; }
         .badge-jogador { color: var(--neon-purple); font-weight: bold; }
-        .restrito-mestre { transition: all 0.3s; }
     </style>
 </head>
 <body>
 
-    <!-- 1. TELA DE LOGIN OBRIGATÓRIA -->
     <div id="tela-login">
         <div class="login-box">
             <h2 style="color: var(--neon-purple); margin-bottom: 20px;">CHUVA DE NEON</h2>
-            <input type="text" id="login-user" placeholder="Usuário / Codinome">
+            <input type="text" id="login-user" placeholder="Nome do seu Personagem">
             <input type="password" id="login-pass" placeholder="Senha">
             <button id="btn-entrar">Acessar Sistema</button>
             <p id="login-erro" style="color: red; font-size: 0.8rem; margin-top: 10px; display: none;">Credenciais inválidas.</p>
         </div>
     </div>
 
-    <!-- 2. CONTEÚDO DA FICHA (SÓ APARECE APÓS LOGIN) -->
     <div id="conteudo-ficha">
         <header style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 20px;">
-            <h1>Ficha de RPG</h1>
-            <div>Status: <span id="user-role">Carregando...</span></div>
+            <h1>Painel de Controle</h1>
+            <div>Status: <span id="user-role">...</span></div>
         </header>
 
+        <div id="painel-mestre-seletor" style="display: none; background: #1e1b4b; padding: 15px; margin-bottom: 20px; border: 1px solid var(--neon-purple);">
+            <label for="select-ficha" style="font-weight: bold; color: var(--neon-lime);">Visualizar Ficha do Jogador:</label>
+            <select id="select-ficha" style="width: 100%; padding: 8px; margin-top: 5px; background: #000; color: #fff;">
+                <option value="niki">Niki</option>
+                <option value="kael">Kael</option>
+                <option value="dante">Dante</option>
+                </select>
+        </div>
+
+        <h2 style="color: var(--neon-purple);">Ficha Ativa: <span id="nome-ficha-ativa" style="color: #fff;">...</span></h2>
+
         <div style="margin-bottom: 15px;">
-            <p>Vida do Personagem (Editável por todos):</p>
+            <p>Vida do Personagem:</p>
             <input id="vida" type="number" placeholder="Valor da vida...">
         </div>
 
-        <!-- CAMPO EXCLUSIVO DE CONTROLE DO MESTRE (Jogadores normais não mudam) -->
-        <div class="restrito-mestre" style="margin-bottom: 15px; padding: 15px; background: rgba(255,0,0,0.05); border: 1px solid rgba(255,0,0,0.1);">
-            <p style="color: #ef4444; font-weight: bold;">[BLOQUEADO] Modificador de Dificuldade da Sala (Apenas Mestre):</p>
+        <div style="margin-bottom: 15px; padding: 15px; background: rgba(255,0,0,0.05); border: 1px solid rgba(255,0,0,0.1);">
+            <p style="color: #ef4444; font-weight: bold;">Modificador da Sala (Apenas Mestre):</p>
             <input id="mod-mestre" type="number" placeholder="Ex: +2, -3">
         </div>
 
-        <button id="btn-salvar" style="padding: 10px 20px; cursor:pointer;">Sincronizar Dados</button>
+        <button id="btn-salvar" style="padding: 10px 20px; cursor:pointer; background: var(--neon-purple); color: white; border: none; font-weight: bold;">Sincronizar Dados</button>
 
         <hr style="margin: 20px 0; border: 0; border-top: 1px solid #333;">
-        <h3>Dados em Tempo Real no Servidor:</h3>
-        <p>Vida Atual: <span id="vidaAtual" style="font-weight:bold;">...</span></p>
-        <p>Modificador Ativo: <span id="modAtual" style="font-weight:bold;">...</span></p>
+        <h3>Dados Atuais no Firebase:</h3>
+        <p>Vida da Ficha Ativa: <span id="vidaAtual" style="font-weight:bold;">...</span></p>
+        <p>Modificador da Ficha Ativa: <span id="modAtual" style="font-weight:bold;">...</span></p>
     </div>
 
-    <!-- Script configurado corretamente como módulo -->
     <script type="module" src="script.js"></script>
-    
 </body>
 </html>
