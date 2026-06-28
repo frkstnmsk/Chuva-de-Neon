@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
-import { getDatabase, ref, set, onValue, off } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+import { getDatabase, ref, set, get, onValue, off } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDU-e21zaoVuW-1Wjzj5b6CfcyOZDj2BsE",
@@ -14,35 +14,103 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-const LOGIN_MESTRE = "mestre";
-const SENHA_MESTRE = "neon123";
-const SENHA_JOGADORES = "cyberpunk";
+// CREDENCIAIS DO MESTRE
+const LOGIN_MESTRE = "frkstnmsk";
+const SENHA_MESTRE = "31outcaseri";
 
+let modoAtual = "entrar"; // "entrar" ou "criar"
 let usuarioLogado = { role: "jogador", nome: "" };
-let fichaMonitorada = ""; // Guarda qual ficha está sendo controlada na tela atual
-let firebaseListener = null; // Guarda o escutador ativo para podermos desligar ao trocar de ficha
+let fichaMonitorada = "";
+let firebaseListener = null;
 
-document.getElementById("btn-entrar").addEventListener("click", () => {
+// Chaves de controle de Abas da Interface
+const tabEntrar = document.getElementById("tab-entrar");
+const tabCriar = document.getElementById("tab-criar");
+const btnAcao = document.getElementById("btn-acao");
+const statusMsg = document.getElementById("login-status-msg");
+
+tabEntrar.addEventListener("click", () => {
+    modoAtual = "entrar";
+    tabEntrar.classList.add("active");
+    tabCriar.classList.remove("active");
+    btnAcao.innerText = "Acessar Sistema";
+    statusMsg.style.display = "none";
+});
+
+tabCriar.addEventListener("click", () => {
+    modoAtual = "criar";
+    tabCriar.classList.add("active");
+    tabEntrar.classList.remove("active");
+    btnAcao.innerText = "Criar Nova Ficha";
+    statusMsg.style.display = "none";
+});
+
+// Executar Ação (Entrar ou Criar)
+btnAcao.addEventListener("click", async () => {
     const user = document.getElementById("login-user").value.trim().toLowerCase();
     const pass = document.getElementById("login-pass").value;
-    const erroLogin = document.getElementById("login-erro");
 
+    if (user === "" || pass === "") {
+        mostrarErro("Preencha todos os campos.");
+        return;
+    }
+
+    // 1. CHECAGEM SE É O MESTRE
     if (user === LOGIN_MESTRE && pass === SENHA_MESTRE) {
         usuarioLogado.role = "mestre";
         usuarioLogado.nome = "Mestre";
-        fichaMonitorada = document.getElementById("select-ficha").value; // Começa na primeira do select
-        inicializarPainel();
-    } else if (user !== "" && pass === SENHA_JOGADORES) {
-        usuarioLogado.role = "jogador";
-        usuarioLogado.nome = user; // O nome da ficha será o próprio usuário digitado
-        fichaMonitorada = user;
-        inicializarPainel();
+        liberarPainel();
+        return;
+    }
+
+    if (user === LOGIN_MESTRE && pass !== SENHA_MESTRE) {
+        mostrarErro("Senha incorreta para o usuário de Mestre.");
+        return;
+    }
+
+    const fichaRef = ref(db, `fichas/${user}/config`);
+
+    if (modoAtual === "criar") {
+        // 2. LÓGICA DE CRIAR FICHA
+        const snapshot = await get(fichaRef);
+        if (snapshot.exists()) {
+            mostrarErro("Uma ficha com esse nome já existe!");
+        } else {
+            // Cria os dados de acesso da ficha e inicializa os valores padrão
+            await set(ref(db, `fichas/${user}`), {
+                config: { senha: pass },
+                dados: { vida: "100", modificadorMestre: "0" }
+            });
+            usuarioLogado.role = "jogador";
+            usuarioLogado.nome = user;
+            fichaMonitorada = user;
+            liberarPainel();
+        }
     } else {
-        erroLogin.style.display = "block";
+        // 3. LÓGICA DE ENTRAR EM FICHA EXISTENTE
+        const snapshot = await get(fichaRef);
+        if (!snapshot.exists()) {
+            mostrarErro("Essa ficha não existe. Escolha 'CRIAR FICHA' se for nova.");
+        } else {
+            const dadosConfig = snapshot.val();
+            if (dadosConfig.senha === pass) {
+                usuarioLogado.role = "jogador";
+                usuarioLogado.nome = user;
+                fichaMonitorada = user;
+                liberarPainel();
+            } else {
+                mostrarErro("Senha incorreta para esta ficha.");
+            }
+        }
     }
 });
 
-function inicializarPainel() {
+function mostrarErro(txt) {
+    statusMsg.innerText = txt;
+    statusMsg.style.display = "block";
+}
+
+function liberarPainel() {
     document.getElementById("tela-login").style.display = "none";
     document.getElementById("conteudo-ficha").style.display = "block";
 
@@ -53,27 +121,42 @@ function inicializarPainel() {
     if (usuarioLogado.role === "mestre") {
         badgeRole.innerHTML = `<span class="badge-mestre">MESTRE</span>`;
         inputModMestre.disabled = false;
-        painelSeletorMestre.style.display = "block"; // Mostra o seletor de fichas para o Mestre
+        painelSeletorMestre.style.display = "block";
 
-        // Sempre que o mestre mudar o jogador no select, troca a sincronização de destino
+        // Carrega todas as fichas criadas no banco para colocar no select do mestre
+        onValue(ref(db, "fichas"), (snapshot) => {
+            const seletor = document.getElementById("select-ficha");
+            seletor.innerHTML = '<option value="">-- Escolha um Personagem --</option>';
+            
+            if (snapshot.exists()) {
+                Object.keys(snapshot.val()).forEach(nomeFicha => {
+                    const opt = document.createElement("option");
+                    opt.value = nomeFicha;
+                    opt.innerText = nomeFicha.toUpperCase();
+                    seletor.appendChild(opt);
+                });
+                if (fichaMonitorada) seletor.value = fichaMonitorada;
+            }
+        });
+
         document.getElementById("select-ficha").addEventListener("change", (e) => {
-            fichaMonitorada = e.target.value;
-            ativarSincronizacao();
+            if (e.target.value !== "") {
+                fichaMonitorada = e.target.value;
+                ativarSincronizacao();
+            }
         });
     } else {
         badgeRole.innerHTML = `<span class="badge-jogador">JOGADOR</span>`;
         inputModMestre.disabled = true;
         inputModMestre.style.background = "#222";
         inputModMestre.placeholder = "Apenas o mestre edita o modificador";
+        ativarSincronizacao();
     }
-
-    ativarSincronizacao();
 }
 
 function activarSincronizacao() {
-    // Se já existia um escutador ligado em outra ficha, desliga ele primeiro
     if (firebaseListener) {
-        off(ref(db, `fichas/${fichaMonitorada}`));
+        off(ref(db, `fichas/${fichaMonitorada}/dados`));
     }
 
     document.getElementById("nome-ficha-ativa").innerText = fichaMonitorada.toUpperCase();
@@ -83,10 +166,9 @@ function activarSincronizacao() {
     const inputVida = document.getElementById("vida");
     const inputModMestre = document.getElementById("mod-mestre");
 
-    const caminhoFichaRef = ref(db, `fichas/${fichaMonitorada}`);
+    const caminhoDadosRef = ref(db, `fichas/${fichaMonitorada}/dados`);
 
-    // Cria a nova conexão em tempo real com o nó daquela ficha específica
-    firebaseListener = onValue(caminhoFichaRef, (snapshot) => {
+    firebaseListener = onValue(caminhoDadosRef, (snapshot) => {
         const dados = snapshot.val();
         if (dados) {
             txtVidaAtual.innerText = dados.vida !== undefined ? dados.vida : "0";
@@ -99,7 +181,6 @@ function activarSincronizacao() {
                 inputModMestre.value = dados.modificadorMestre || "";
             }
         } else {
-            // Se a ficha não existir ainda no banco
             txtVidaAtual.innerText = "Sem dados";
             txtModAtual.innerText = "0";
             inputVida.value = "";
@@ -108,11 +189,16 @@ function activarSincronizacao() {
     });
 }
 
-// Salvar dados respeitando quem está alterando e qual ficha está ativa
+// Salvar Dados Sincronizados
 document.getElementById("btn-salvar").addEventListener("click", () => {
+    if (!fichaMonitorada) {
+        alert("Nenhum personagem selecionado para salvar.");
+        return;
+    }
+
     const inputVida = document.getElementById("vida");
     const inputModMestre = document.getElementById("mod-mestre");
-    const caminhoFichaRef = ref(db, `fichas/${fichaMonitorada}`);
+    const caminhoDadosRef = ref(db, `fichas/${fichaMonitorada}/dados`);
 
     let dadosParaEnviar = {};
 
@@ -128,7 +214,7 @@ document.getElementById("btn-salvar").addEventListener("click", () => {
         };
     }
 
-    set(caminhoFichaRef, dadosParaEnviar)
-    .then(() => console.log(`Ficha de ${fichaMonitorada} atualizada!`))
-    .catch((err) => console.error("Erro ao salvar:", err));
+    set(caminhoDadosRef, dadosParaEnviar)
+    .then(() => console.log(`Dados salvos em fichas/${fichaMonitorada}`))
+    .catch((err) => console.error(err));
 });
