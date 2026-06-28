@@ -45,3 +45,23 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+
+window.salvarVida = function () {
+  const vida = document.getElementById("vida").value;
+
+  set(ref(db, "jogador1/vida"), {
+    valor: vida
+  });
+};
+
+const vidaRef = ref(db, "jogador1/vida");
+
+onValue(vidaRef, (snapshot) => {
+  const data = snapshot.val();
+
+  if (data) {
+    document.getElementById("vidaAtual").innerText = data.valor;
+  }
+});
+
+
