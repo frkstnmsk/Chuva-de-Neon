@@ -14,23 +14,25 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// SALVAR VIDA
 window.salvarVida = function () {
   const vida = document.getElementById("vida").value;
 
-  set(ref(db, "jogador1/vida"), {
-    valor: vida
+  console.log("SALVANDO:", vida);
+
+  set(ref(db, "jogador1"), {
+    vida: vida
   });
 };
 
-// LER VIDA EM TEMPO REAL
-const vidaRef = ref(db, "jogador1/vida");
+const vidaRef = ref(db, "jogador1");
 
 onValue(vidaRef, (snapshot) => {
   const data = snapshot.val();
 
+  console.log("RECEBIDO DO FIREBASE:", data);
+
   if (data) {
-    document.getElementById("vida").value = data.valor;
-    document.getElementById("vidaAtual").innerText = data.valor;
+    document.getElementById("vida").value = data.vida;
+    document.getElementById("vidaAtual").innerText = data.vida;
   }
 });
