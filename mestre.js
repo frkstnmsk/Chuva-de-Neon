@@ -402,7 +402,8 @@ export async function iniciarIniciativaCombate() {
         rodada: 1,
         ordemTurnos,
         turnoAtual: ordemTurnos[0],
-        participantes: participantesAtualizados
+        participantes: participantesAtualizados,
+        reacaoPendente: null // limpa qualquer reação travada de uma sessão anterior
     });
 
     return { ordemTurnos, participantes: participantesAtualizados };
@@ -470,6 +471,43 @@ export async function usarEsquivaBloqueio(participanteId) {
     if (!disponivel) return false;
     await set(caminho, false);
     return true;
+}
+
+// ---------------------------------------------------------------------
+// Reação de Esquiva/Bloqueio em tempo real.
+//
+// Antes, a escolha "Esquivar ou Bloquear" aparecia num prompt() local —
+// só na tela de quem ESTAVA ATACANDO, porque é o código dele que roda
+// esse prompt. Quem realmente deveria decidir (o dono da ficha alvo, ou
+// o Mestre, se o alvo for um NPC) nunca via nada.
+//
+// Agora o pedido fica gravado aqui em combateAtivo/reacaoPendente. O
+// cliente de quem TEM que decidir mostra um modal (ver
+// montarModalReacaoPendente em ficha.js) e grava a resposta; quem
+// atacou fica esperando essa resposta pra continuar resolvendo o golpe
+// (ver aguardarReacaoPendente em ficha.js).
+// ---------------------------------------------------------------------
+export async function criarReacaoPendente(dados) {
+    await set(ref(db, "combateAtivo/reacaoPendente"), {
+        ...dados,
+        resposta: null,
+        criadoEm: Date.now()
+    });
+}
+
+export function ouvirReacaoPendente(callback) {
+    return onValue(ref(db, "combateAtivo/reacaoPendente"), (snap) => {
+        callback(snap.exists() ? snap.val() : null);
+    });
+}
+
+// escolha: "esquivar" | "bloquear" | "nenhum"
+export async function responderReacaoPendente(escolha) {
+    await update(ref(db, "combateAtivo/reacaoPendente"), { resposta: escolha });
+}
+
+export async function limparReacaoPendente() {
+    await remove(ref(db, "combateAtivo/reacaoPendente"));
 }
 
 // ---------------------------------------------------------------------

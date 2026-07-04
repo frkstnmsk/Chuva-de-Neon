@@ -60,7 +60,8 @@ import {
     pagarCustoSemanal,
     ouvirCombateAtivo, adicionarParticipanteCombate, removerParticipanteCombate, encerrarCombate,
     ouvirAcoesPendentes, criarAcaoPendente, rejeitarAcaoPendente, confirmarAcaoPendente,
-    iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, usarEsquivaBloqueio
+    iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, usarEsquivaBloqueio,
+    criarReacaoPendente, ouvirReacaoPendente, responderReacaoPendente, limparReacaoPendente
 } from "./mestre.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -373,6 +374,7 @@ async function init() {
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
     tentarOuAvisar("godmode", configurarGodmode);
     tentarOuAvisar("gerenciador de combate", configurarCombateAtivo);
+    tentarOuAvisar("reação de esquiva/bloqueio", configurarReacaoPendente);
     tentarOuAvisar("modal de alvo", configurarModalSelecionarAlvo);
     tentarOuAvisar("finanças", configurarFinancas);
     tentarOuAvisar("ações pendentes", configurarAcoesPendentes);
@@ -1335,23 +1337,38 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
     }
     const criticoTexto = foiCritico ? " CRÍTICO! Dano dobrado." : "";
 
-    // Antes de aplicar, checa se o alvo tem a ação guardada de
-    // Esquiva/Bloqueio (manual: só disponível depois que o alvo já teve
-    // seu próprio turno na rodada). É UMA ação só, mas o alvo escolhe na
-    // hora qual manobra fazer com ela — são efeitos diferentes:
+    // Antes, checa se o alvo tem a ação guardada de Esquiva/Bloqueio
+    // (manual: só disponível depois que o alvo já teve seu próprio turno
+    // na rodada). A escolha acontece no cliente de quem REALMENTE recebe
+    // o golpe (dono da ficha alvo, ou o Mestre se o alvo for NPC) — ver
+    // criarReacaoPendente/montarModalReacaoPendente — em vez de um
+    // prompt() local, que só aparecia na tela de quem atacou. É UMA ação
+    // só, mas o alvo escolhe na hora qual manobra fazer com ela — são
+    // efeitos diferentes:
     // - Esquivar: anula o golpe inteiro (dano vira 0).
     // - Bloquear: reduz o dano pela metade; se o dano for perfurante,
     //   não reduz nada (mas ainda consome a ação guardada).
     if (combateComIniciativaAtivo() && participante.esquivaDisponivel) {
-        const escolha = (prompt(
-            `${nomeAlvo} tem a ação de Esquiva/Bloqueio guardada. Digite E para Esquivar (anula o golpe) ou B para Bloquear (reduz o dano pela metade; não reduz se for dano perfurante). Deixe em branco pra não usar agora.`,
-            ""
-        ) || "").trim().toUpperCase();
+        await criarReacaoPendente({
+            participanteId: participante._pid,
+            alvoNome: nomeAlvo,
+            alvoTipo: participante.tipo,
+            atacanteNome,
+            itemNome: it.nome,
+            nomePericia,
+            resultadoAtaque,
+            dificuldade,
+            tipoDanoKey
+        });
+        toast(`Aguardando ${nomeAlvo} decidir Esquiva/Bloqueio...`);
 
-        if (escolha === "E" || escolha === "B") {
+        const escolha = await aguardarRespostaReacao(); // "esquivar" | "bloquear" | "nenhum"
+        await limparReacaoPendente();
+
+        if (escolha === "esquivar" || escolha === "bloquear") {
             const usou = await usarEsquivaBloqueio(participante._pid);
             if (usou !== false) {
-                if (escolha === "E") {
+                if (escolha === "esquivar") {
                     const detalheAnulado = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ACERTO!${criticoTexto} (${resultadoAtaque} vs. dificuldade ${dificuldade}${recuoTexto}${precisaoTexto}) — mas ${nomeAlvo} usou a ação guardada pra ESQUIVAR e ANULOU o golpe.`;
                     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: 0, detalhe: detalheAnulado });
                     toast(detalheAnulado);
@@ -1383,6 +1400,101 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano });
     toast(detalheDano);
+}
+
+// ---------------------------------------------------------------------
+// Reação de Esquiva/Bloqueio em tempo real (ver criarReacaoPendente em
+// mestre.js pra contexto). Duas metades:
+//
+// 1) Quem ataca (aguardarRespostaReacao): espera a resposta aparecer em
+//    combateAtivo/reacaoPendente/resposta, com um tempo limite pra não
+//    travar o ataque pra sempre se o alvo estiver ausente.
+// 2) Quem recebe o golpe (configurarReacaoPendente + a lógica de "sou eu
+//    que decido" em souResponsavelPelaReacao): escuta o mesmo caminho e
+//    mostra um modal só pro dono da ficha alvo (ou pro Mestre, se o alvo
+//    for NPC), com os botões Esquivar/Bloquear/Não usar.
+// ---------------------------------------------------------------------
+
+function aguardarRespostaReacao(timeoutMs = 45000) {
+    return new Promise((resolve) => {
+        let resolvido = false;
+        const pararDeEscutar = ouvirReacaoPendente((pendente) => {
+            if (resolvido) return;
+            if (pendente && pendente.resposta) {
+                resolvido = true;
+                pararDeEscutar();
+                resolve(pendente.resposta);
+            }
+        });
+        setTimeout(() => {
+            if (resolvido) return;
+            resolvido = true;
+            pararDeEscutar();
+            resolve("nenhum"); // alvo não respondeu a tempo — segue sem usar a ação guardada
+        }, timeoutMs);
+    });
+}
+
+function souResponsavelPelaReacao(pendente) {
+    if (!pendente || pendente.resposta) return false;
+    if (isMestre) {
+        // O Mestre decide pelos NPCs (eles não têm um jogador humano
+        // com o próprio navegador aberto pra responder).
+        return pendente.alvoTipo !== "ficha";
+    }
+    // Um jogador só decide quando o alvo é a própria ficha dele.
+    const meuId = meuParticipanteIdCombate();
+    return !!meuId && meuId === pendente.participanteId;
+}
+
+function configurarReacaoPendente() {
+    ouvirReacaoPendente((pendente) => {
+        montarModalReacaoPendente(pendente);
+    });
+}
+
+function montarModalReacaoPendente(pendente) {
+    let modal = document.getElementById("modal-reacao-pendente");
+    const devoDecidir = souResponsavelPelaReacao(pendente);
+
+    if (!devoDecidir) {
+        if (modal) modal.remove();
+        return;
+    }
+
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-reacao-pendente";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Reação — Esquiva/Bloqueio</span>
+        </div>
+        <h2>${escapeHtml(pendente.atacanteNome)} atirou/atacou ${escapeHtml(pendente.alvoNome)}!</h2>
+        <p>${escapeHtml(pendente.itemNome)} (${escapeHtml(pendente.nomePericia)}) — resultado ${pendente.resultadoAtaque} vs. dificuldade ${pendente.dificuldade}. <strong>ACERTOU.</strong></p>
+        <p>Você tem a ação de Esquiva/Bloqueio guardada. O que deseja fazer?</p>
+        <div class="combate-reacao-botoes" style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn-blue" data-reacao="esquivar">Esquivar (anula o golpe)</button>
+            <button type="button" class="btn-blue" data-reacao="bloquear">Bloquear (reduz o dano pela metade)</button>
+            <button type="button" class="btn-red" data-reacao="nenhum">Não usar agora</button>
+        </div>
+    `;
+
+    modal.querySelectorAll("[data-reacao]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            modal.querySelectorAll("[data-reacao]").forEach(b => { b.disabled = true; });
+            try {
+                await responderReacaoPendente(btn.dataset.reacao);
+            } catch (err) {
+                console.error(err);
+                toast("Falha ao registrar sua reação. Tente de novo.", "erro");
+                modal.querySelectorAll("[data-reacao]").forEach(b => { b.disabled = false; });
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------
