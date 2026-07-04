@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chuva de Neon // Ficha</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="ficha.css">
+<link rel="stylesheet" href="combate.css">
+</head>
+<body>
+
+<div id="tela-carregando" class="loading-screen">
+    <span class="eyebrow">Sincronizando</span>
+    <p>Conectando ao sinal da rede...</p>
+</div>
+
+<div id="app" class="app-shell" style="display:none;">
+
+    <!-- ===================== TOPO ===================== -->
+    <header class="topbar panel">
+        <div class="topbar-id">
+            <span class="eyebrow">Caminhante ativo</span>
+            <h1 id="nome-ficha-ativa">—</h1>
+        </div>
+
+        <div class="topbar-actions">
+            <span class="badge" id="user-role">—</span>
+            <span class="badge mestre" id="godmode-indicador" style="display:none;">Godmode ativo</span>
+
+            <div id="painel-mestre-seletor" style="display:none;">
+                <select id="select-ficha">
+                    <option value="">-- Escolha uma ficha da rede --</option>
+                </select>
+            </div>
+
+            <span id="sync-indicator" class="sync-indicator" title="Status de sincronização">●</span>
+
+            <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
+            <button id="btn-logout" class="btn-ghost" type="button">Sair</button>
+        </div>
+    </header>
+
+    <!-- ===================== CORPO: calendário + conteúdo ===================== -->
+    <div class="app-body">
+
+        <!-- ===== CALENDÁRIO (lateral esquerda) ===== -->
+        <aside class="calendario-lateral panel" id="calendario-lateral">
+            <div class="section-header">Calendário</div>
+            <div class="calendario-campo">
+                <span class="calendario-label">Data</span>
+                <span class="calendario-valor" id="cal-data">—</span>
+            </div>
+            <div class="calendario-campo">
+                <span class="calendario-label">Dia da semana</span>
+                <span class="calendario-valor" id="cal-dia-semana">—</span>
+            </div>
+            <div class="calendario-campo">
+                <span class="calendario-label">Hora</span>
+                <span class="calendario-valor" id="cal-hora">—</span>
+            </div>
+            <div class="calendario-campo">
+                <span class="calendario-label">Temperatura</span>
+                <span class="calendario-valor" id="cal-temperatura">—</span>
+            </div>
+            <div class="calendario-campo">
+                <span class="calendario-label">Clima</span>
+                <span class="calendario-valor" id="cal-clima">—</span>
+            </div>
+            <div id="calendario-edicao-mestre" style="display:none;">
+                <div class="section-header">Editar (Mestre)</div>
+                <div class="modal-field">
+                    <label for="cal-edit-data">Data</label>
+                    <input type="text" id="cal-edit-data" placeholder="01/01/2077">
+                </div>
+                <div class="modal-field">
+                    <label for="cal-edit-hora">Hora</label>
+                    <input type="text" id="cal-edit-hora" placeholder="08:00">
+                </div>
+                <div class="modal-field">
+                    <label for="cal-edit-temp">Temperatura (°C)</label>
+                    <input type="number" id="cal-edit-temp">
+                </div>
+                <div class="modal-field">
+                    <label for="cal-edit-clima">Clima</label>
+                    <select id="cal-edit-clima"></select>
+                </div>
+                <button id="btn-salvar-calendario" class="btn-blue" type="button">Salvar calendário</button>
+                <button id="btn-passar-dia" class="btn-lime" type="button">Passar o dia</button>
+            </div>
+        </aside>
+
+        <!-- ===== CONTEÚDO PRINCIPAL ===== -->
+        <div class="conteudo-principal">
+
+            <!-- ===================== AVISO DE CRIAÇÃO PENDENTE ===================== -->
+            <div class="panel aviso-criacao" id="aviso-criacao-pendente" style="display:none;">
+                <span class="eyebrow">Criação de personagem incompleta</span>
+                <p>Termine de criar seu Caminhante antes de seguir pra mesa.</p>
+                <button id="btn-continuar-criacao" class="btn-lime" type="button">Continuar criação</button>
+            </div>
+
+            <!-- ===================== ABAS ===================== -->
+            <nav class="tabs-nav panel" id="tabs-nav">
+                <button class="tab-btn active" data-tab="perfil" type="button">Perfil</button>
+                <button class="tab-btn" data-tab="financas" type="button">Finanças</button>
+                <button class="tab-btn" data-tab="atributos" type="button">Atributos</button>
+                <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
+                <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
+                <button class="tab-btn" data-tab="combate" type="button">Combate</button>
+                <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
+                <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
+                <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
+                <button class="tab-btn" data-tab="darknet" type="button">Dark Net</button>
+                <button class="tab-btn" data-tab="notas" type="button">Determinações / Notas</button>
+            </nav>
+
+            <main class="tab-panels">
+
+                <!-- ===================== PERFIL ===================== -->
+                <section class="tab-panel active panel" data-tab="perfil">
+                    <div class="section-header">Dados pessoais</div>
+                    <div class="grid-form">
+                        <div class="campo largo">
+                            <label for="f-nome">Nome</label>
+                            <input type="text" id="f-nome" data-field="nome">
+                        </div>
+                        <div class="campo">
+                            <label for="f-vulgo">Vulgo</label>
+                            <input type="text" id="f-vulgo" data-field="vulgo">
+                        </div>
+                        <div class="campo curto">
+                            <label for="f-idade">Idade</label>
+                            <input type="number" id="f-idade" data-field="idade">
+                        </div>
+                        <div class="campo">
+                            <label for="f-nacionalidade">Nacionalidade</label>
+                            <input type="text" id="f-nacionalidade" data-field="nacionalidade">
+                        </div>
+                        <div class="campo">
+                            <label for="f-funcao">Função</label>
+                            <input type="text" id="f-funcao" data-field="funcao" disabled>
+                        </div>
+                    </div>
+
+                    <div class="section-header">Caráter</div>
+                    <div class="grid-form grid-3">
+                        <div class="campo">
+                            <label for="f-maldade">Maldade <span class="hint-inline">(0–10)</span></label>
+                            <input type="number" id="f-maldade" data-field="maldade" min="0" max="10">
+                        </div>
+                        <div class="campo">
+                            <label for="f-remorso">Remorso <span class="hint-inline">(0–10)</span></label>
+                            <input type="number" id="f-remorso" data-field="remorso" min="0" max="10">
+                        </div>
+                        <div class="campo">
+                            <label for="f-status">Status</label>
+                            <input type="number" id="f-status" data-field="status" min="0">
+                        </div>
+                    </div>
+
+                    <div class="section-header">Progressão</div>
+                    <div class="grid-form grid-4">
+                        <div class="campo">
+                            <label for="f-nivel">Nível</label>
+                            <input type="number" id="f-nivel" data-field="nivel" min="1" max="10">
+                        </div>
+                        <div class="campo">
+                            <label for="f-xp">XP</label>
+                            <input type="number" id="f-xp" data-field="xp" min="0">
+                        </div>
+                    </div>
+                    <div class="hint" id="hint-nivel-xp" style="display:none;">Nível e XP são ajustados pelo Mestre.</div>
+                </section>
+
+                <!-- ===================== FINANÇAS ===================== -->
+                <section class="tab-panel panel" data-tab="financas">
+                    <div class="section-header">Saldos <span class="hint-inline" id="financas-saldo-hint">apenas o Mestre pode editar os saldos</span></div>
+                    <div class="grid-form grid-4" id="financas-saldos-grid"></div>
+                    <button id="btn-add-saldo" class="btn-ghost" type="button">+ Criar novo saldo</button>
+
+                    <div id="financas-gastar-bloco" style="display:none;">
+                        <div class="section-header">Gastar dinheiro <span class="hint-inline">pedido precisa de aprovação do Mestre</span></div>
+                        <div class="grid-form grid-4">
+                            <div class="campo">
+                                <label for="financas-gastar-origem">De onde sai</label>
+                                <select id="financas-gastar-origem"></select>
+                            </div>
+                            <div class="campo">
+                                <label for="financas-gastar-valor">Valor</label>
+                                <input type="number" id="financas-gastar-valor" min="0" value="0">
+                            </div>
+                        </div>
+                        <button id="financas-gastar-btn" class="btn-red" type="button">Solicitar gasto ao Mestre</button>
+                    </div>
+
+                    <div class="section-header">Padrão de vida <span class="hint-inline">custo semanal cobrado todo Domingo</span></div>
+                    <div class="grid-form grid-4">
+                        <div class="campo largo">
+                            <label for="f-padrao-vida">Padrão de vida</label>
+                            <select id="f-padrao-vida" data-field="padraoDeVida"></select>
+                        </div>
+                    </div>
+                    <div class="hint">Custo semanal atual: <strong id="resumo-custo-semanal">—</strong></div>
+
+                    <div class="section-header">Gastos extras semanais <span class="hint-inline">além do padrão de vida</span></div>
+                    <ul class="entity-list" id="lista-gastos-extras"></ul>
+                    <button id="btn-add-gasto" class="btn-lime" type="button">+ Adicionar gasto</button>
+
+                    <div class="section-header">Ganho fixo semanal <span class="hint-inline">creditado automaticamente todo Domingo</span></div>
+                    <p class="hint">Declare aqui uma renda fixa (salário, aluguel recebido, etc). Ela é somada em "Dinheiro limpo na conta" toda vez que o Mestre avança o calendário pra um Domingo — sem precisar de aprovação.</p>
+                    <div class="grid-form grid-4">
+                        <div class="campo">
+                            <label for="financas-ganho-fixo">Valor do ganho fixo</label>
+                            <input type="number" id="financas-ganho-fixo" min="0" value="0">
+                        </div>
+                    </div>
+                    <button id="financas-ganho-fixo-salvar" class="btn-lime" type="button">Salvar ganho fixo</button>
+                </section>
+
+                <!-- ===================== ATRIBUTOS ===================== -->
+                <section class="tab-panel panel" data-tab="atributos">
+                    <div class="section-header">Atributos primários <span class="hint-inline">editáveis só na Criação, Level Up ou Treinamento · limite humano 7</span></div>
+                    <div class="grid-atributos" id="grid-atributos-primarios"></div>
+
+                    <div class="section-header">Recursos vitais</div>
+                    <div class="grid-recursos" id="grid-recursos"></div>
+
+                    <div class="section-header">Atributos secundários (calculados) <span class="hint-inline">base do manual + modificadores de itens/vantagens/desvantagens/especializações</span></div>
+                    <div class="grid-atributos" id="grid-atributos-secundarios"></div>
+
+                    <div class="hint">
+                        Os valores secundários são calculados automaticamente: fórmula do manual + soma de todos
+                        os modificadores ativos vindos de inventário, vantagens, desvantagens e especializações.
+                        Clique em um valor calculado pra ver o detalhamento da conta.
+                    </div>
+                </section>
+
+                <!-- ===================== PERÍCIAS ===================== -->
+                <section class="tab-panel panel" data-tab="pericias">
+                    <div class="section-header">Perícias <span class="hint-inline">nível de 0 a 5 · lista fechada do manual</span></div>
+                    <div class="hint">
+                        Perícias são travadas pra edição fora da Criação, Level Up ou Treinamento.
+                        O total de rolagem mostrado é só o nível da perícia (+ modificadores), sem somar o atributo.
+                    </div>
+                    <ul class="entity-list" id="lista-pericias"></ul>
+                    <button id="btn-add-pericia" class="btn-lime" type="button">+ Adicionar perícia</button>
+                </section>
+
+                <!-- ===================== INVENTÁRIO ===================== -->
+                <section class="tab-panel panel" data-tab="inventario">
+                    <div class="section-header">Capacidade de carga</div>
+                    <div class="hint" id="resumo-carga">—</div>
+
+                    <div class="inventario-categorias" id="inventario-categorias-nav"></div>
+                    <button id="btn-add-categoria" class="btn-ghost" type="button">+ Nova categoria</button>
+
+                    <div id="inventario-listas"></div>
+
+                    <button id="btn-add-item" class="btn-lime" type="button">+ Adicionar item</button>
+                </section>
+
+                <!-- ===================== COMBATE ===================== -->
+                <section class="tab-panel panel" data-tab="combate">
+                    <div class="section-header">Armas equipadas <span class="hint-inline">itens do inventário com a tag "Arma"</span></div>
+                    <ul class="entity-list" id="lista-armas-combate"></ul>
+
+                    <div class="section-header">Manobras de combate <span class="hint-inline">lista fixa do manual</span></div>
+                    <ul class="entity-list manobras-list" id="lista-manobras-combate"></ul>
+                </section>
+
+                <!-- ===================== VANTAGENS / DESVANTAGENS ===================== -->
+                <section class="tab-panel panel" data-tab="vant-desv">
+                    <div class="hint">Vantagens, Desvantagens e Fatos Universais só podem ser adicionados/removidos livremente durante a Criação de Personagem. Depois disso, só o Mestre pode alterá-los.</div>
+                    <div class="section-header">Vantagens</div>
+                    <ul class="entity-list" id="lista-vantagens"></ul>
+                    <button id="btn-add-vantagem" class="btn-lime" type="button">+ Adicionar vantagem</button>
+
+                    <div class="section-header">Desvantagens <span class="hint-inline">3 pontos extras cada · máx. 3 pontos extras no total</span></div>
+                    <ul class="entity-list" id="lista-desvantagens"></ul>
+                    <button id="btn-add-desvantagem" class="btn-red" type="button">+ Adicionar desvantagem</button>
+
+                    <div id="bonus-desvantagens-area"></div>
+
+                    <div class="section-header">Fatos universais</div>
+                    <ul class="entity-list" id="lista-fatos"></ul>
+                    <button id="btn-add-fato" class="btn-blue" type="button">+ Adicionar fato universal</button>
+                </section>
+
+                <!-- ===================== ESPECIALIZAÇÕES ===================== -->
+                <section class="tab-panel panel" data-tab="especializacoes">
+                    <div class="section-header">Especializações <span class="hint-inline">de perícia (a cada 3) ou de atributo (níveis 3, 6 e 9)</span></div>
+                    <ul class="entity-list" id="lista-especializacoes"></ul>
+                    <button id="btn-add-especializacao" class="btn-lime" type="button">+ Adicionar especialização</button>
+                </section>
+
+                <!-- ===================== TREINAMENTO / ESTUDO ===================== -->
+                <section class="tab-panel panel" data-tab="treinamento">
+                    <div class="section-header">Treinamento simultâneo <span class="hint-inline">1 perícia física + 1 perícia mental + 1 atributo físico + 1 atributo mental</span></div>
+                    <div class="hint">O Mestre confirma o avanço de +1 dia sempre que clicar em "Passar o Dia" no calendário.</div>
+                    <div class="treino-grid" id="treino-grid"></div>
+                </section>
+
+                <!-- ===================== DARK NET ===================== -->
+                <section class="tab-panel panel" data-tab="darknet">
+                    <div class="section-header">Dark Net</div>
+                    <div class="grid-form">
+                        <div class="campo">
+                            <label for="f-dm">Dm</label>
+                            <input type="text" id="f-dm" data-field="dm" placeholder="www.dm.dn/...">
+                        </div>
+                        <div class="campo">
+                            <label for="f-void">Void</label>
+                            <input type="text" id="f-void" data-field="void" placeholder="www.void.dn/...">
+                        </div>
+                        <div class="campo">
+                            <label for="f-p2k">P2K</label>
+                            <input type="text" id="f-p2k" data-field="p2k">
+                        </div>
+                        <div class="campo">
+                            <label for="f-rabbithole">RabbitHole</label>
+                            <input type="text" id="f-rabbithole" data-field="rabbithole">
+                        </div>
+                        <div class="campo">
+                            <label for="f-p2c">P2C</label>
+                            <input type="text" id="f-p2c" data-field="p2c">
+                        </div>
+                        <div class="campo">
+                            <label for="f-creators">Creators</label>
+                            <input type="text" id="f-creators" data-field="creators">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ===================== NOTAS ===================== -->
+                <section class="tab-panel panel" data-tab="notas">
+                    <div class="section-header">Determinações <span class="hint-inline">princípios, vínculos e objetivos que seu personagem não abandona</span></div>
+                    <textarea id="f-determinacoes" data-field="determinacoes" placeholder="1. ..."></textarea>
+
+                    <div class="section-header">Notas livres / Background</div>
+                    <textarea id="f-notas" data-field="notas" placeholder="Histórico, contatos, anotações de mesa..." style="min-height:160px;"></textarea>
+                </section>
+
+            </main>
+
+            <div class="save-bar">
+                <span id="save-status" class="save-status">sincronizado em tempo real</span>
+                <button id="btn-salvar" class="btn-lime" type="button">Salvar agora</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== LOG DE DADOS (fixo, canto inferior direito) ===================== -->
+<div class="log-dados panel" id="log-dados">
+    <div class="log-dados-header">
+        <div class="log-dados-titulo">
+            <span class="eyebrow">Log de Dados</span>
+            <span class="log-dados-online" id="log-online-count"></span>
+        </div>
+        <button id="btn-toggle-log" class="btn-ghost" type="button" title="Minimizar">—</button>
+    </div>
+    <div class="log-dados-lista-wrap">
+        <ul id="log-dados-lista"></ul>
+    </div>
+    <div class="log-dados-rolador">
+        <input type="number" id="log-rolar-mod" placeholder="Mod." value="0" title="Modificador">
+        <button id="log-rolar-btn" class="btn-lime" type="button">🎲 Rolar d20</button>
+    </div>
+</div>
+
+<!-- ===================== MODAL: WIZARD DE CRIAÇÃO ===================== -->
+<div class="modal-overlay" id="modal-criacao">
+    <div class="modal-content modal-largo">
+        <h4>Criação de Personagem</h4>
+        <div id="criacao-corpo"></div>
+        <div class="modal-btns" id="criacao-botoes"></div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: LEVEL UP (inadiável) ===================== -->
+<div class="modal-overlay" id="modal-levelup">
+    <div class="modal-content">
+        <h4>Subiu de Nível!</h4>
+        <div id="levelup-corpo"></div>
+        <div class="modal-btns" id="levelup-botoes"></div>
+    </div>
+</div>
+
+<!-- ===================== MODAL GENÉRICO DE ENTIDADE ===================== -->
+<div class="modal-overlay" id="modal-entidade">
+    <div class="modal-content">
+        <h4 id="modal-titulo">Item</h4>
+
+        <div class="modal-field">
+            <label for="modal-nome">Nome</label>
+            <input type="text" id="modal-nome">
+            <!-- Só aparece pra itens novos de inventário: autocompletar
+                 puxando do Banco Global de Itens (itens-globais.js). -->
+            <div class="searchable-options" id="modal-item-banco-opcoes" style="display:none;"></div>
+        </div>
+
+        <!-- Inventário: opção de salvar este item no Banco Global -->
+        <div class="modal-field" id="modal-campo-salvar-banco" style="display:none;">
+            <label class="checkbox-inline">
+                <input type="checkbox" id="modal-salvar-banco">
+                Salvar este item no Banco Global (reaproveitar em outras fichas/NPCs)
+            </label>
+        </div>
+
+        <!-- Perícia: dropdown de categoria + dropdown buscável de perícia -->
+        <div class="modal-field" id="modal-campo-categoria-pericia" style="display:none;">
+            <label for="modal-categoria-pericia">Categoria</label>
+            <select id="modal-categoria-pericia"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-pericia-busca" style="display:none;">
+            <label for="modal-pericia-busca">Perícia</label>
+            <input type="text" id="modal-pericia-busca" placeholder="Digite pra buscar...">
+            <div class="searchable-options" id="modal-pericia-opcoes"></div>
+            <input type="hidden" id="modal-pericia-valor">
+        </div>
+
+        <div class="modal-field" id="modal-campo-nivel" style="display:none;">
+            <label for="modal-nivel">Nível (0–5)</label>
+            <input type="number" id="modal-nivel" min="0" max="5" value="0">
+        </div>
+
+        <!-- Inventário: tag + nível de tag + peso + categoria -->
+        <div class="modal-field" id="modal-campo-tag" style="display:none;">
+            <label for="modal-tag">Tag (obrigatória)</label>
+            <select id="modal-tag"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-nivel-tag" style="display:none;">
+            <label for="modal-nivel-tag">Nível da tag</label>
+            <select id="modal-nivel-tag"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-pericia-uso" style="display:none;">
+            <label for="modal-pericia-uso">Perícia vinculada (obrigatória)</label>
+            <select id="modal-pericia-uso"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-classe-protecao" style="display:none;">
+            <label for="modal-classe-protecao">Classe de Proteção (obrigatória)</label>
+            <select id="modal-classe-protecao"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-peso" style="display:none;">
+            <label for="modal-peso">Peso (kg)</label>
+            <input type="number" id="modal-peso" min="0" step="0.1" value="0">
+        </div>
+        <div class="modal-field" id="modal-campo-categoria-item" style="display:none;">
+            <label for="modal-categoria-item">Categoria do inventário</label>
+            <select id="modal-categoria-item"></select>
+        </div>
+
+        <!-- Configuração de arma -->
+        <div id="modal-config-arma" style="display:none;">
+            <div class="section-header">Configuração da arma</div>
+            <div class="modal-field">
+                <label for="modal-arma-dano-base">Dano base (número — usado no cálculo automático)</label>
+                <input type="number" id="modal-arma-dano-base" min="0" step="1" value="0">
+            </div>
+            <div class="modal-field">
+                <label for="modal-arma-tipo-dano">Tipo de dano</label>
+                <select id="modal-arma-tipo-dano"></select>
+            </div>
+            <div class="modal-field" id="modal-campo-escala" style="display:none;">
+                <label for="modal-arma-escala">Escala (corpo a corpo)</label>
+                <select id="modal-arma-escala"></select>
+            </div>
+
+            <!-- Só aparece quando a tag é Arma E a perícia vinculada é uma
+                 perícia de Arma de Fogo (pequeno/médio/grande porte). -->
+            <div id="modal-config-arma-fogo" style="display:none;">
+                <div class="section-header">Características de Arma de Fogo <span class="hint-inline">manual pg. 95-97</span></div>
+                <div class="modal-field">
+                    <label for="modal-arma-capacidade">Capacidade (carregador)</label>
+                    <input type="number" id="modal-arma-capacidade" min="0" step="1" value="0">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-disparos-turno">Disparos por turno</label>
+                    <input type="number" id="modal-arma-disparos-turno" min="1" step="1" value="1">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-precisao">Precisão (modificador no teste de ataque)</label>
+                    <input type="number" id="modal-arma-precisao" step="1" value="0">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-dificuldade-acerto">Dificuldade de acerto (base, ex: 14)</label>
+                    <input type="number" id="modal-arma-dificuldade-acerto" min="0" step="1" value="14">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-alcance">Alcance</label>
+                    <select id="modal-arma-alcance"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-recuo">Recuo</label>
+                    <select id="modal-arma-recuo"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="modal-arma-efeito-extra">Efeito extra</label>
+                    <input type="text" id="modal-arma-efeito-extra" placeholder="ex: Pode derrubar! Teste Massa Corpórea, dif 24.">
+                </div>
+            </div>
+
+            <div class="section-header">Modificações da arma</div>
+            <div id="modal-arma-modificacoes-lista"></div>
+            <button id="modal-arma-add-modificacao" class="btn-blue" type="button">+ Adicionar modificação</button>
+        </div>
+
+        <!-- Redução de dano (coletes/placas) -->
+        <div id="modal-config-reducao-dano" style="display:none;">
+            <div class="section-header">Tipos de dano reduzidos</div>
+            <p class="hint">Marque cada tipo de dano que este item reduz, e informe o valor da redução pra cada um.</p>
+            <div id="modal-reducao-dano-lista" class="reducao-dano-grid"></div>
+        </div>
+
+        <div class="modal-field">
+            <label for="modal-descricao">Descrição / efeito narrativo</label>
+            <textarea id="modal-descricao" placeholder="Texto livre, regra especial, anotação de mesa..."></textarea>
+        </div>
+
+        <div class="section-header">Modificadores automáticos</div>
+        <div class="hint">Cada modificador soma (ou subtrai, com valor negativo) direto no cálculo do alvo escolhido.</div>
+        <div id="modal-lista-modificadores"></div>
+        <button id="modal-add-modificador" class="btn-blue" type="button">+ Adicionar modificador</button>
+
+        <div class="modal-btns">
+            <button id="modal-cancelar" class="btn-ghost" type="button">Cancelar</button>
+            <button id="modal-excluir" class="btn-red" type="button">Excluir</button>
+            <button id="modal-salvar" class="btn-lime" type="button">Salvar</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: PAINEL DO MESTRE ===================== -->
+<div class="modal-overlay" id="modal-mestre">
+    <div class="modal-content modal-largo">
+        <h4>Painel do Mestre</h4>
+        <div class="mestre-grid">
+            <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
+            <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
+            <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
+            <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
+            <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
+            <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
+            <button class="btn-red mestre-acao" data-acao="combate" type="button">Gerenciador de Combate</button>
+            <button class="btn-red mestre-acao" data-acao="pendentes" type="button">Ações Pendentes</button>
+            <label class="godmode-toggle">
+                <input type="checkbox" id="chk-godmode">
+                Godmode (ignora trava de edição)
+            </label>
+        </div>
+        <div id="mestre-corpo"></div>
+        <div class="modal-btns">
+            <button id="mestre-fechar" class="btn-ghost" type="button">Fechar</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: AVISO CUSTO DE VIDA ===================== -->
+<div class="modal-overlay" id="modal-custo-vida">
+    <div class="modal-content">
+        <h4>Pagar gasto semanal</h4>
+        <p id="custo-vida-resumo" class="hint"></p>
+        <div class="modal-field">
+            <label for="custo-vida-origem">Pagar com</label>
+            <select id="custo-vida-origem"></select>
+        </div>
+        <div class="modal-btns">
+            <button id="custo-vida-confirmar" class="btn-lime" type="button">Confirmar pagamento</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: POPUP DE TREINAMENTO (Mestre) ===================== -->
+<div class="modal-overlay" id="modal-popup-treino">
+    <div class="modal-content">
+        <h4>Avançar treinamento</h4>
+        <p id="popup-treino-texto" class="hint"></p>
+        <div class="modal-btns">
+            <button id="popup-treino-nao" class="btn-ghost" type="button">Agora não</button>
+            <button id="popup-treino-sim" class="btn-lime" type="button">Pode subir</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: DAR ITEM (transferência entre jogadores) ===================== -->
+<div class="modal-overlay" id="modal-dar-item">
+    <div class="modal-content">
+        <h4 id="dar-item-titulo">Dar item</h4>
+        <p class="hint">O item só passa pra outra ficha depois que o Mestre aprovar o pedido.</p>
+        <div class="modal-field">
+            <label for="dar-item-select">Dar para</label>
+            <select id="dar-item-select"></select>
+        </div>
+        <div class="modal-btns">
+            <button id="dar-item-cancelar" class="btn-ghost" type="button">Cancelar</button>
+            <button id="dar-item-confirmar" class="btn-lime" type="button">Solicitar transferência</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: SELECIONAR ALVO (ataque em combate ativo) ===================== -->
+<div class="modal-overlay" id="modal-selecionar-alvo">
+    <div class="modal-content">
+        <h4 id="alvo-titulo">Atacar com item</h4>
+        <p class="hint">Combate ativo no Gerenciador do Mestre — escolha o alvo pra resolver o ataque automaticamente.</p>
+        <div class="modal-field">
+            <label for="alvo-select">Alvo</label>
+            <select id="alvo-select"></select>
+        </div>
+        <div class="modal-btns">
+            <button id="alvo-cancelar" class="btn-ghost" type="button">Cancelar</button>
+            <button id="alvo-confirmar" class="btn-red" type="button">Atacar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Reação a um golpe recebido (Esquiva/Bloqueio) — só aparece pra quem
+     recebeu o golpe (ou pro Mestre, se o alvo for NPC). Inadiável, sem
+     botão de fechar por fora: precisa escolher uma opção. -->
+<div class="modal-overlay" id="modal-reacao-defesa">
+    <div class="modal-content">
+        <h4>Você foi atingido!</h4>
+        <div id="reacao-defesa-corpo"></div>
+        <div class="modal-btns" id="reacao-defesa-botoes"></div>
+    </div>
+</div>
+
+<!-- Template de uma linha de modificador (clonado via JS) -->
+<template id="template-modificador">
+    <div class="modificador-row">
+        <select class="mod-alvo"></select>
+        <input type="number" class="mod-valor" placeholder="+/-" value="0">
+        <button class="mod-remover btn-red" type="button" title="Remover">×</button>
+    </div>
+</template>
+
+<!-- Template de uma linha de modificação de arma (texto livre, sugestões) -->
+<template id="template-modificacao-arma">
+    <div class="modificacao-arma-row">
+        <input type="text" class="modarma-texto" placeholder="ex: Aumento de dano">
+        <button class="modarma-remover btn-red" type="button" title="Remover">×</button>
+    </div>
+</template>
+
+<div id="toast"></div>
+
+<script type="module" src="ficha.js"></script>
+</body>
+</html>
