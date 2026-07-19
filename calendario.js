@@ -7,6 +7,7 @@
 
 import { db } from "./firebase-config.js";
 import { ref, set, get, push, onValue, query, limitToLast } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+import { caminhoMesa } from "./mesa.js";
 
 const DIAS_SEMANA = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const CLIMAS = ["Limpo", "Nublado", "Chuva ácida", "Garoa de neon", "Smog", "Tempestade elétrica", "Calor sufocante"];
@@ -16,10 +17,10 @@ export function climas() { return CLIMAS; }
 
 export async function garantirCalendarioInicial(isMestre) {
     try {
-        const snap = await get(ref(db, "calendario"));
+        const snap = await get(ref(db, caminhoMesa("calendario")));
         if (!snap.exists() && isMestre) {
             // Data de partida fixa da campanha: Sexta-feira, 29/10/2077.
-            await set(ref(db, "calendario"), {
+            await set(ref(db, caminhoMesa("calendario")), {
                 dataLabel: "29/10/2077",
                 diaSemana: "Sexta",
                 hora: "08:00",
@@ -36,13 +37,13 @@ export async function garantirCalendarioInicial(isMestre) {
 }
 
 export function ouvirCalendario(callback) {
-    return onValue(ref(db, "calendario"), (snap) => {
+    return onValue(ref(db, caminhoMesa("calendario")), (snap) => {
         callback(snap.exists() ? snap.val() : null);
     });
 }
 
 export async function salvarCalendario(novoCalendario) {
-    await set(ref(db, "calendario"), novoCalendario);
+    await set(ref(db, caminhoMesa("calendario")), novoCalendario);
 }
 
 // Avança 1 dia. Retorna { calendario, viroudomingo }.
@@ -92,13 +93,13 @@ function avancarDataLabel(dataLabel) {
 const LIMITE_LOG = 30;
 
 export async function registrarRolagem({ quem, modificador, resultado, detalhe }) {
-    await push(ref(db, "logDados"), {
+    await push(ref(db, caminhoMesa("logDados")), {
         quem, modificador: modificador ?? 0, resultado, detalhe: detalhe || "", timestamp: Date.now()
     });
 }
 
 export function ouvirLogDados(callback) {
-    const q = query(ref(db, "logDados"), limitToLast(LIMITE_LOG));
+    const q = query(ref(db, caminhoMesa("logDados")), limitToLast(LIMITE_LOG));
     return onValue(q, (snap) => {
         if (!snap.exists()) { callback([]); return; }
         const valores = snap.val();
@@ -113,15 +114,15 @@ export function ouvirLogDados(callback) {
 // Aviso de custo de vida (disparado quando o dia avança pra Domingo).
 // ---------------------------------------------------------------------
 export async function dispararAvisoCustoVida() {
-    await set(ref(db, "avisoCustoVida"), { ativo: true, timestamp: Date.now() });
+    await set(ref(db, caminhoMesa("avisoCustoVida")), { ativo: true, timestamp: Date.now() });
 }
 
 export function ouvirAvisoCustoVida(callback) {
-    return onValue(ref(db, "avisoCustoVida"), (snap) => {
+    return onValue(ref(db, caminhoMesa("avisoCustoVida")), (snap) => {
         callback(snap.exists() ? snap.val() : null);
     });
 }
 
 export async function limparAvisoCustoVida() {
-    await set(ref(db, "avisoCustoVida"), { ativo: false, timestamp: Date.now() });
+    await set(ref(db, caminhoMesa("avisoCustoVida")), { ativo: false, timestamp: Date.now() });
 }

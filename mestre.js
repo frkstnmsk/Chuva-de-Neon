@@ -7,6 +7,7 @@
 
 import { db } from "./firebase-config.js";
 import { ref, set, get, update, push, remove, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+import { caminhoMesa } from "./mesa.js";
 import {
     rolarD20, rolarDado, calcularDerivados, coletarModificadores,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada
@@ -42,7 +43,7 @@ export function custoSemanalTotal(fichaAtual) {
 // Lista de fichas ativas (dashboard do Mestre).
 // ---------------------------------------------------------------------
 export function ouvirTodasAsFichas(callback) {
-    return onValue(ref(db, "fichas"), (snap) => {
+    return onValue(ref(db, caminhoMesa("fichas")), (snap) => {
         callback(snap.exists() ? snap.val() : {});
     });
 }
@@ -51,9 +52,9 @@ export function ouvirTodasAsFichas(callback) {
 // Dar XP
 // ---------------------------------------------------------------------
 export async function darXp(fichaId, quantidade) {
-    const snap = await get(ref(db, `fichas/${fichaId}/dados/xp`));
+    const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados/xp`)));
     const xpAtual = snap.exists() ? Number(snap.val()) : 0;
-    await update(ref(db, `fichas/${fichaId}/dados`), { xp: xpAtual + Number(quantidade) });
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { xp: xpAtual + Number(quantidade) });
 }
 
 // ---------------------------------------------------------------------
@@ -62,11 +63,11 @@ export async function darXp(fichaId, quantidade) {
 // QUALQUER ficha que ele esteja olhando.
 // ---------------------------------------------------------------------
 export function ouvirGodmode(callback) {
-    return onValue(ref(db, "godmode"), (snap) => callback(snap.exists() ? !!snap.val() : false));
+    return onValue(ref(db, caminhoMesa("godmode")), (snap) => callback(snap.exists() ? !!snap.val() : false));
 }
 
 export async function definirGodmode(ativo) {
-    await set(ref(db, "godmode"), !!ativo);
+    await set(ref(db, caminhoMesa("godmode")), !!ativo);
 }
 
 // Sub-opção do Godmode (ver acima): por padrão, Godmode ligado NÃO
@@ -75,11 +76,11 @@ export async function definirGodmode(ativo) {
 // "godmode") justamente pra poder ficar marcado/desmarcado independente
 // do Godmode estar ativo ou não no momento em que for usado.
 export function ouvirIgnorarPenalidadeSaude(callback) {
-    return onValue(ref(db, "godmodeIgnorarPenalidadeSaude"), (snap) => callback(snap.exists() ? !!snap.val() : false));
+    return onValue(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")), (snap) => callback(snap.exists() ? !!snap.val() : false));
 }
 
 export async function definirIgnorarPenalidadeSaude(ativo) {
-    await set(ref(db, "godmodeIgnorarPenalidadeSaude"), !!ativo);
+    await set(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")), !!ativo);
 }
 
 // ---------------------------------------------------------------------
@@ -102,7 +103,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
     const brutoNum = Number(danoBruto) || 0;
 
     if (alvoTipo === "ficha") {
-        const snap = await get(ref(db, `fichas/${alvoId}`));
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoId}`)));
         if (!snap.exists()) throw new Error("Ficha do alvo não encontrada.");
         const raw = snap.val();
         const nomeAlvo = (raw.config && raw.config.nomeExibicao) || alvoId;
@@ -116,11 +117,11 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
             }, 0) : 0;
         const danoFinal = Math.max(0, brutoNum - reducao);
         const novoPv = pvAtual - danoFinal;
-        await update(ref(db, `fichas/${alvoId}/dados`), { pvAtual: novoPv });
+        await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
         return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv };
     }
 
-    const snap = await get(ref(db, `npcs/${alvoId}`));
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoId}`)));
     if (!snap.exists()) throw new Error("NPC alvo não encontrado.");
     const npc = snap.val();
     const nomeAlvo = npc.nome || "NPC";
@@ -137,7 +138,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
         : 0;
     const danoFinal = Math.max(0, brutoNum - reducao);
     const novoPv = pvAtual - danoFinal;
-    await update(ref(db, `npcs/${alvoId}`), { pvAtual: novoPv });
+    await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
     return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv };
 }
 
@@ -155,7 +156,7 @@ export async function causarDanoNpc(npcId, valor) {
 // NPCs — gerador rápido de ficha de combate.
 // ---------------------------------------------------------------------
 export function ouvirNpcs(callback) {
-    return onValue(ref(db, "npcs"), (snap) => {
+    return onValue(ref(db, caminhoMesa("npcs")), (snap) => {
         if (!snap.exists()) { callback([]); return; }
         const valores = snap.val();
         callback(Object.entries(valores).map(([id, v]) => ({ id, ...v })));
@@ -165,7 +166,7 @@ export function ouvirNpcs(callback) {
 // Retorna o id do NPC recém-criado (usado pelo Gerenciador de Combate
 // pra já entrar direto na lista de participantes, sem passo extra).
 export async function criarNpc({ nome, pvs, periciasResumo, itensEssenciais, atributos, atributosSecundarios, agilidade, constituicao, reducoesDano }) {
-    const novaRef = push(ref(db, "npcs"));
+    const novaRef = push(ref(db, caminhoMesa("npcs")));
     await set(novaRef, {
         nome: nome || "NPC sem nome",
         pvs: Number(pvs) || 0,
@@ -189,7 +190,7 @@ export async function criarNpc({ nome, pvs, periciasResumo, itensEssenciais, atr
 }
 
 export async function excluirNpc(npcId) {
-    await remove(ref(db, `npcs/${npcId}`));
+    await remove(ref(db, caminhoMesa(`npcs/${npcId}`)));
 }
 
 // ---------------------------------------------------------------------
@@ -202,7 +203,7 @@ export async function excluirNpc(npcId) {
 // ---------------------------------------------------------------------
 export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
-    const novaRef = push(ref(db, "npcs"));
+    const novaRef = push(ref(db, caminhoMesa("npcs")));
     await set(novaRef, {
         nome: nome || "NPC sem nome",
         pvs: secundarios.recursos.pv.valor,
@@ -235,7 +236,7 @@ export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano }) {
 
 export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoesDano, pvAtual }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
-    await update(ref(db, `npcs/${npcId}`), {
+    await update(ref(db, caminhoMesa(`npcs/${npcId}`)), {
         nome: nome || "NPC sem nome",
         pvs: secundarios.recursos.pv.valor,
         pvAtual: pvAtual !== undefined && pvAtual !== null ? Number(pvAtual) : secundarios.recursos.pv.valor,
@@ -290,24 +291,24 @@ function resumoSecundariosNpc(secundarios) {
 // "Usar" das armas na ficha do jogador.
 // ---------------------------------------------------------------------
 export function ouvirCombateAtivo(callback) {
-    return onValue(ref(db, "combateAtivo"), (snap) => {
+    return onValue(ref(db, caminhoMesa("combateAtivo")), (snap) => {
         callback(snap.exists() ? snap.val() : { ativo: false, participantes: {} });
     });
 }
 
 export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
-    await update(ref(db, "combateAtivo"), { ativo: true });
-    const novaRef = push(ref(db, "combateAtivo/participantes"));
+    await update(ref(db, caminhoMesa("combateAtivo")), { ativo: true });
+    const novaRef = push(ref(db, caminhoMesa("combateAtivo/participantes")));
     await set(novaRef, { tipo, refId, nome: nome || refId });
     return novaRef.key;
 }
 
 export async function removerParticipanteCombate(participanteId) {
-    await remove(ref(db, `combateAtivo/participantes/${participanteId}`));
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}`)));
 }
 
 export async function encerrarCombate() {
-    await set(ref(db, "combateAtivo"), { ativo: false, participantes: {} });
+    await set(ref(db, caminhoMesa("combateAtivo")), { ativo: false, participantes: {} });
 }
 
 // ---------------------------------------------------------------------
@@ -343,7 +344,7 @@ export function calcularAcoesMax(velocidadeTotal) {
 // ficha (ver ficha.js).
 async function calcularStatsCombateParticipante(participante, ignorarPenalidadeSaude = false) {
     if (participante.tipo === "ficha") {
-        const snap = await get(ref(db, `fichas/${participante.refId}`));
+        const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
         if (!snap.exists()) return statsCombatePadrao();
         const ficha = normalizarFicha(snap.val());
         const modificadoresPlanos = coletarModificadores(ficha);
@@ -378,7 +379,7 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
     }
 
     // NPC
-    const snap = await get(ref(db, `npcs/${participante.refId}`));
+    const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
     if (!snap.exists()) return statsCombatePadrao();
     const npc = snap.val();
 
@@ -440,7 +441,7 @@ function ordenarPorIniciativa(participantes) {
 // grava a ordem de iniciativa. Chamar DEPOIS de montar a lista de
 // participantes pelo painel existente (adicionarParticipanteCombate).
 export async function iniciarIniciativaCombate() {
-    const snap = await get(ref(db, "combateAtivo/participantes"));
+    const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
     const participantesBase = snap.exists() ? snap.val() : {};
     const ids = Object.keys(participantesBase);
     if (!ids.length) {
@@ -452,8 +453,8 @@ export async function iniciarIniciativaCombate() {
     // Machucado/Muito Machucado sai zerada pra todos os participantes
     // (jogadores e NPCs) já no cálculo de iniciativa.
     const [snapGodmode, snapIgnorarSaude] = await Promise.all([
-        get(ref(db, "godmode")),
-        get(ref(db, "godmodeIgnorarPenalidadeSaude"))
+        get(ref(db, caminhoMesa("godmode"))),
+        get(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")))
     ]);
     const godmodeAtivo = snapGodmode.exists() ? !!snapGodmode.val() : false;
     const ignorarPenalidadeSaude = godmodeAtivo && (snapIgnorarSaude.exists() ? !!snapIgnorarSaude.val() : false);
@@ -487,7 +488,7 @@ export async function iniciarIniciativaCombate() {
 
     const ordemTurnos = ordenarPorIniciativa(participantesAtualizados);
 
-    await update(ref(db, "combateAtivo"), {
+    await update(ref(db, caminhoMesa("combateAtivo")), {
         ativo: true,
         rodada: 1,
         ordemTurnos,
@@ -502,7 +503,7 @@ export async function iniciarIniciativaCombate() {
 // ao início da ordem, inicia uma nova rodada e restaura as ações de
 // todo mundo pro respectivo máximo.
 export async function avancarTurnoCombate() {
-    const snap = await get(ref(db, "combateAtivo"));
+    const snap = await get(ref(db, caminhoMesa("combateAtivo")));
     const estado = snap.val();
 
     if (!estado?.ativo || !estado.ordemTurnos?.length) {
@@ -536,14 +537,14 @@ export async function avancarTurnoCombate() {
         }
     }
 
-    await update(ref(db, "combateAtivo"), atualizacoes);
+    await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
     return { turnoAtual: novoTurno, nome: (participantes[novoTurno] && participantes[novoTurno].nome) || novoTurno };
 }
 
 // Consome 1 ação do turno do participante (chamar isso na hora de uma
 // rolagem/ataque durante o combate ativo). Nunca deixa negativo.
 export async function consumirAcaoCombate(participanteId) {
-    const caminho = ref(db, `combateAtivo/participantes/${participanteId}/acoes`);
+    const caminho = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoes`));
     const snap = await get(caminho);
     const atual = snap.exists() ? Number(snap.val()) : 0;
     const novo = Math.max(0, atual - 1);
@@ -562,7 +563,7 @@ export async function consumirAcaoCombate(participanteId) {
 // de disparos (próxima ação) começa do zero, sem penalidade.
 export async function resetarRecuoArma(idDisparo, itemId) {
     if (!idDisparo || !itemId) return;
-    await remove(ref(db, `combateAtivo/disparosPorFicha/${idDisparo}/${itemId}`));
+    await remove(ref(db, caminhoMesa(`combateAtivo/disparosPorFicha/${idDisparo}/${itemId}`)));
 }
 
 // Usa UMA das ações de Esquiva/Bloqueio guardadas do alvo pra anular (ou
@@ -579,7 +580,7 @@ export async function resetarRecuoArma(idDisparo, itemId) {
 // (golpe anulado/reduzido) ou false se o alvo não tinha nenhuma
 // esquiva guardada.
 export async function usarEsquivaBloqueio(participanteId) {
-    const caminho = ref(db, `combateAtivo/participantes/${participanteId}/esquivasDisponiveis`);
+    const caminho = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/esquivasDisponiveis`));
     const snap = await get(caminho);
     const disponivel = snap.exists() ? Number(snap.val()) || 0 : 0;
     if (disponivel <= 0) return false;
@@ -594,7 +595,7 @@ export async function usarEsquivaBloqueio(participanteId) {
 // mais de um golpe recebido na mesma rodada (cada golpe ainda consome
 // só 1, ver usarEsquivaBloqueio).
 export async function adicionarEsquivaExtra(participanteId) {
-    const caminho = ref(db, `combateAtivo/participantes/${participanteId}/esquivasDisponiveis`);
+    const caminho = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/esquivasDisponiveis`));
     const snap = await get(caminho);
     const atual = snap.exists() ? Number(snap.val()) || 0 : 0;
     const novo = atual + 1;
@@ -615,7 +616,7 @@ export async function adicionarEsquivaExtra(participanteId) {
 // `participanteId` bate com ele, e chama responderReacaoPendente().
 // ---------------------------------------------------------------------
 export async function abrirReacaoPendente(dados) {
-    await set(ref(db, "combateAtivo/reacaoPendente"), { ...dados, timestamp: Date.now() });
+    await set(ref(db, caminhoMesa("combateAtivo/reacaoPendente")), { ...dados, timestamp: Date.now() });
 }
 
 // escolha: "esquivar" | "bloquear" | "nenhuma".
@@ -625,7 +626,7 @@ export async function abrirReacaoPendente(dados) {
 // guardada. "nenhuma" (ou a ação já ter sido gasta antes de responder)
 // deixa passar o golpe cheio e NÃO consome a ação guardada.
 export async function responderReacaoPendente(escolha) {
-    const snap = await get(ref(db, "combateAtivo/reacaoPendente"));
+    const snap = await get(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
     if (!snap.exists()) return null;
     const r = snap.val();
 
@@ -668,7 +669,7 @@ export async function responderReacaoPendente(escolha) {
         : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado. PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
 
     await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano });
-    await remove(ref(db, "combateAtivo/reacaoPendente"));
+    await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
     return { ...resultadoDano, detalhe: detalheDano };
 }
 
@@ -689,7 +690,7 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
             const ganhoFixo = Number(ficha.dados && ficha.dados.ganhoFixo) || 0;
             if (ganhoFixo > 0) {
                 const atual = Number(ficha.saldos && ficha.saldos.limpo && ficha.saldos.limpo.valor) || 0;
-                await update(ref(db, `fichas/${fichaId}/saldos/limpo`), { valor: atual + ganhoFixo });
+                await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/limpo`)), { valor: atual + ganhoFixo });
             }
         }
     }
@@ -702,14 +703,14 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
         }
     }
     if (popups.length) {
-        await set(ref(db, "popupTreinamento"), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
+        await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
     }
 
     return { calendario, virouDomingo, popups };
 }
 
 export function ouvirPopupTreinamento(callback) {
-    return onValue(ref(db, "popupTreinamento"), (snap) => {
+    return onValue(ref(db, caminhoMesa("popupTreinamento")), (snap) => {
         if (!snap.exists()) { callback([]); return; }
         const valores = snap.val();
         callback(Object.entries(valores).map(([id, v]) => ({ id, ...v })));
@@ -717,18 +718,18 @@ export function ouvirPopupTreinamento(callback) {
 }
 
 export async function confirmarAvancoTreinamento(fichaId, popupId) {
-    const snap = await get(ref(db, `fichas/${fichaId}`));
+    const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}`)));
     if (!snap.exists()) return [];
     const ficha = snap.val();
     if (!ficha.treinamento) return [];
     const concluidos = avancarUmDiaTreinamento(ficha);
-    await update(ref(db, `fichas/${fichaId}`), { treinamento: ficha.treinamento, dados: ficha.dados, pericias: ficha.pericias });
-    if (popupId) await remove(ref(db, `popupTreinamento/${popupId}`));
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}`)), { treinamento: ficha.treinamento, dados: ficha.dados, pericias: ficha.pericias });
+    if (popupId) await remove(ref(db, caminhoMesa(`popupTreinamento/${popupId}`)));
     return concluidos;
 }
 
 export async function descartarPopupTreinamento(popupId) {
-    await remove(ref(db, `popupTreinamento/${popupId}`));
+    await remove(ref(db, caminhoMesa(`popupTreinamento/${popupId}`)));
 }
 
 // ---------------------------------------------------------------------
@@ -742,8 +743,8 @@ export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId) {
     const total = custoBase + extras;
     const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
     const atual = Number(saldo.valor) || 0;
-    await update(ref(db, `fichas/${fichaId}/saldos/${saldoId}`), { valor: atual - total });
-    await update(ref(db, `fichas/${fichaId}/dados`), { ultimoPagamentoCustoVida: Date.now() });
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - total });
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { ultimoPagamentoCustoVida: Date.now() });
     return total;
 }
 
@@ -754,7 +755,7 @@ export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId) {
 // Mestre vê em tempo real e só executa de fato quando confirma.
 // ---------------------------------------------------------------------
 export function ouvirAcoesPendentes(callback) {
-    return onValue(ref(db, "acoesPendentes"), (snap) => {
+    return onValue(ref(db, caminhoMesa("acoesPendentes")), (snap) => {
         if (!snap.exists()) { callback([]); return; }
         const valores = snap.val();
         callback(Object.entries(valores).map(([id, v]) => ({ id, ...v })).sort((a, b) => (a.criadoEm || 0) - (b.criadoEm || 0)));
@@ -763,13 +764,13 @@ export function ouvirAcoesPendentes(callback) {
 
 // tipo: "remover_item" | "mover_item" | "gastar_dinheiro" | "dar_item"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
-    const novaRef = push(ref(db, "acoesPendentes"));
+    const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
     return novaRef.key;
 }
 
 export async function rejeitarAcaoPendente(acaoId) {
-    await remove(ref(db, `acoesPendentes/${acaoId}`));
+    await remove(ref(db, caminhoMesa(`acoesPendentes/${acaoId}`)));
 }
 
 // Executa de fato a ação pendente no banco e remove da fila. Só deve
@@ -778,24 +779,24 @@ export async function confirmarAcaoPendente(acao) {
     const { tipo, fichaId, payload } = acao;
 
     if (tipo === "remover_item") {
-        await remove(ref(db, `fichas/${fichaId}/inventario/${payload.itemId}`));
+        await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
 
     } else if (tipo === "mover_item") {
-        await update(ref(db, `fichas/${fichaId}/inventario/${payload.itemId}`), { categoria: payload.categoriaNova });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), { categoria: payload.categoriaNova });
 
     } else if (tipo === "gastar_dinheiro") {
         const saldoId = payload.saldoId;
-        const snap = await get(ref(db, `fichas/${fichaId}/saldos/${saldoId}/valor`));
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
         const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        await update(ref(db, `fichas/${fichaId}/saldos/${saldoId}`), { valor: atual - Number(payload.valor || 0) });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - Number(payload.valor || 0) });
 
     } else if (tipo === "dar_item") {
-        const snapItem = await get(ref(db, `fichas/${fichaId}/inventario/${payload.itemId}`));
+        const snapItem = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         if (snapItem.exists()) {
             const item = snapItem.val();
-            const novaRefItem = push(ref(db, `fichas/${payload.fichaDestinoId}/inventario`));
+            const novaRefItem = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
             await set(novaRefItem, { ...item, categoria: "levando" });
-            await remove(ref(db, `fichas/${fichaId}/inventario/${payload.itemId}`));
+            await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         }
 
     } else if (tipo === "gastar_acao_combate") {
@@ -816,5 +817,5 @@ export async function confirmarAcaoPendente(acao) {
         }
     }
 
-    await remove(ref(db, `acoesPendentes/${acao.id}`));
+    await remove(ref(db, caminhoMesa(`acoesPendentes/${acao.id}`)));
 }

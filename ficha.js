@@ -4,6 +4,7 @@
 
 import { db } from "./firebase-config.js";
 import { ref, set, get, update, remove, onValue, off } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+import { caminhoMesa } from "./mesa.js";
 import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS,
     listaAlvosModificador, rotuloAlvo,
@@ -88,12 +89,14 @@ let sessao = null;
 if (sessaoRaw) {
     try {
         const parsed = JSON.parse(sessaoRaw);
-        if (parsed && parsed.role) sessao = parsed;
+        if (parsed && parsed.role && parsed.mesaId) sessao = parsed;
     } catch (e) {
         sessao = null;
     }
 }
 if (!sessao) {
+    // Também cai aqui pra sessões salvas ANTES da mesa existir (sem
+    // mesaId) — precisam logar de novo pra escolher/confirmar a mesa.
     localStorage.removeItem("cdn_session");
     window.location.href = "index.html";
     throw new Error("Sem sessão válida — redirecionando para o login."); // interrompe a execução do módulo
@@ -184,6 +187,7 @@ const el = {
     app: document.getElementById("app"),
     nomeFichaAtiva: document.getElementById("nome-ficha-ativa"),
     userRole: document.getElementById("user-role"),
+    mesaIndicador: document.getElementById("mesa-indicador"),
     godmodeIndicador: document.getElementById("godmode-indicador"),
     painelMestreSeletor: document.getElementById("painel-mestre-seletor"),
     selectFicha: document.getElementById("select-ficha"),
@@ -368,6 +372,7 @@ init();
 async function init() {
     el.userRole.innerText = isMestre ? "Mestre" : (sessao.nome || "Jogador").toUpperCase();
     el.userRole.classList.add(isMestre ? "mestre" : "jogador");
+    if (el.mesaIndicador) el.mesaIndicador.innerText = `Mesa: ${sessao.mesaId || "?"}`;
 
     montarGridsEstaticas();
     montarAbas();
@@ -485,7 +490,7 @@ function renderTudoVazio() {
 // Lista de fichas pro Mestre escolher
 // ---------------------------------------------------------------------
 function ouvirListaDeFichas() {
-    onValue(ref(db, "fichas"), (snapshot) => {
+    onValue(ref(db, caminhoMesa("fichas")), (snapshot) => {
         const valorAntigo = el.selectFicha.value;
         el.selectFicha.innerHTML = '<option value="">-- Escolha uma ficha da rede --</option>';
         if (snapshot.exists()) {
@@ -542,7 +547,7 @@ function ouvirListaDeNpcsParaAtuar() {
 // escrita da tela da Ficha passa por aqui, pra funcionar sem duplicar
 // lógica pros dois casos.
 function caminhoBase() {
-    return modoNpc ? `npcs/${npcAtualId}` : `fichas/${fichaAtualId}`;
+    return caminhoMesa(modoNpc ? `npcs/${npcAtualId}` : `fichas/${fichaAtualId}`);
 }
 
 // Id do registro ativo, seja ficha de jogador ou NPC (modo "atuar
@@ -568,7 +573,7 @@ function caminhoLista(lista) {
 // ---------------------------------------------------------------------
 function ativarSincronizacao() {
     if (listenerAtivo) {
-        off(ref(db, `${listenerAtivoTipo}/${listenerAtivo}`));
+        off(ref(db, caminhoMesa(`${listenerAtivoTipo}/${listenerAtivo}`)));
     }
     if (modoNpc) {
         if (!npcAtualId) return;
@@ -1698,10 +1703,10 @@ async function proximoNumeroDisparo(itemId) {
     const idDisparo = modoNpc ? `npc_${npcAtualId}` : fichaAtualId;
     pausarSync();
     try {
-        const snap = await get(ref(db, `combateAtivo/disparosPorFicha/${idDisparo}/${chave}`));
+        const snap = await get(ref(db, caminhoMesa(`combateAtivo/disparosPorFicha/${idDisparo}/${chave}`)));
         const atual = snap.exists() ? (Number(snap.val()) || 0) : 0;
         const proximo = atual + 1;
-        await update(ref(db, `combateAtivo/disparosPorFicha/${idDisparo}`), { [chave]: proximo });
+        await update(ref(db, caminhoMesa(`combateAtivo/disparosPorFicha/${idDisparo}`)), { [chave]: proximo });
         return proximo;
     } finally {
         retornarSync();
@@ -1715,7 +1720,7 @@ async function proximoNumeroDisparo(itemId) {
 async function resetarDisparosTurno() {
     pausarSync();
     try {
-        await remove(ref(db, "combateAtivo/disparosPorFicha"));
+        await remove(ref(db, caminhoMesa("combateAtivo/disparosPorFicha")));
         toast("Recuo resetado — contagem de disparos zerada pra todo mundo.");
     } finally {
         retornarSync();
@@ -1774,7 +1779,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
     let dificuldade, nomeAlvo;
     try {
         if (participante.tipo === "ficha") {
-            const snap = await get(ref(db, `fichas/${participante.refId}`));
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
             if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
@@ -1788,7 +1793,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
                 dificuldade = calcularDificuldadeDefesaJogador(fichaAlvo.dados, atributoDefesaChave, modsAlvo, baseDif);
             }
         } else {
-            const snap = await get(ref(db, `npcs/${participante.refId}`));
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
             if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
             const npc = snap.val();
             nomeAlvo = npc.nome || participante.nome;

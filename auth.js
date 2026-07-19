@@ -2,8 +2,16 @@
 // CHUVA DE NEON — Autenticação (login / registro / sessão)
 // =====================================================================
 // Como funciona:
-// - "Login do Mestre" é fixo (definido abaixo) e dá acesso total.
-// - Qualquer outro login cria (ou acessa) uma ficha de jogador.
+// - Cada Mestre listado em MESTRES tem sua PRÓPRIA mesa (mesaId = o
+//   login dele). "Login do Mestre" dá acesso total, mas só à mesa
+//   daquele Mestre — nunca às mesas dos outros.
+// - Qualquer outro login cria (ou acessa) uma ficha de jogador. Ao
+//   REGISTRAR, o jogador escolhe em qual mesa (qual Mestre) vai jogar;
+//   essa escolha fica gravada na ficha e não muda mais sozinha.
+// - O login em si é único em toda a rede (não só dentro de uma mesa),
+//   pra manter o fluxo de "entrar" simples — sem precisar escolher a
+//   mesa de novo toda vez que loga. Um índice separado (`loginIndex`)
+//   guarda em qual mesa cada login mora, só pra resolver isso no login.
 // - A sessão fica salva no localStorage do navegador, então ao recarregar
 //   a página o jogador continua logado até clicar em "Sair".
 //
@@ -18,10 +26,12 @@
 import { db } from "./firebase-config.js";
 import { ref, set, get } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 
-// ACESSO DO(S) MESTRE(S) CANÔNICO(S)
+// ACESSO DO(S) MESTRE(S) CANÔNICO(S) — um por mesa. `mesaId` é o
+// identificador da mesa no banco (`mesas/{mesaId}/...`); `mesaNome` é
+// só o rótulo bonito mostrado pro jogador na hora de escolher a mesa.
 const MESTRES = [
-    { login: "frkstnmsk", senha: "31outcaseri" },
-    { login: "yan", senha: "ian" }
+    { login: "frkstnmsk", senha: "31outcaseri", mesaId: "frkstnmsk", mesaNome: "Mesa do frkstnmsk" },
+    { login: "yan", senha: "ian", mesaId: "yan", mesaNome: "Mesa do Yan" }
 ];
 
 let modoAtual = "entrar";
@@ -32,9 +42,13 @@ const btnAcao = document.getElementById("btn-acao");
 const statusMsg = document.getElementById("login-status-msg");
 const spinner = document.getElementById("login-spinner");
 const campoNomeExibicao = document.getElementById("campo-nome-exibicao");
+const campoMesa = document.getElementById("campo-mesa");
+const selectMesa = document.getElementById("login-mesa");
 const inputUser = document.getElementById("login-user");
 const inputPass = document.getElementById("login-pass");
 const inputNomeExibicao = document.getElementById("login-nome-exibicao");
+
+popularSelectMesas();
 
 // Se já existe sessão válida, manda direto pra ficha.
 (function redirecionarSeJaLogado() {
@@ -42,7 +56,7 @@ const inputNomeExibicao = document.getElementById("login-nome-exibicao");
     if (saved) {
         try {
             const sessao = JSON.parse(saved);
-            if (sessao && sessao.idLimpo !== undefined && sessao.role) {
+            if (sessao && sessao.idLimpo !== undefined && sessao.role && sessao.mesaId) {
                 window.location.href = "ficha.html";
             }
         } catch (e) {
@@ -51,12 +65,24 @@ const inputNomeExibicao = document.getElementById("login-nome-exibicao");
     }
 })();
 
+function popularSelectMesas() {
+    if (!selectMesa) return;
+    selectMesa.innerHTML = "";
+    MESTRES.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m.mesaId;
+        opt.innerText = m.mesaNome;
+        selectMesa.appendChild(opt);
+    });
+}
+
 tabEntrar.addEventListener("click", () => {
     modoAtual = "entrar";
     tabEntrar.classList.add("active");
     tabCriar.classList.remove("active");
     btnAcao.innerText = "Inicializar Link";
     campoNomeExibicao.style.display = "none";
+    if (campoMesa) campoMesa.style.display = "none";
     ocultarErro();
 });
 
@@ -66,6 +92,7 @@ tabCriar.addEventListener("click", () => {
     tabEntrar.classList.remove("active");
     btnAcao.innerText = "Registrar Nova Ficha";
     campoNomeExibicao.style.display = "flex";
+    if (campoMesa) campoMesa.style.display = "flex";
     ocultarErro();
 });
 
@@ -80,6 +107,7 @@ async function executarAcao() {
     const rawUser = inputUser.value.trim();
     const pass = inputPass.value;
     const nomeExibicao = inputNomeExibicao.value.trim();
+    const mesaEscolhida = selectMesa ? selectMesa.value : (MESTRES[0] && MESTRES[0].mesaId);
 
     if (rawUser === "" || pass === "") {
         mostrarErro("SINAL INCOMPLETO: preencha login e senha.");
@@ -87,6 +115,10 @@ async function executarAcao() {
     }
     if (modoAtual === "criar" && nomeExibicao === "") {
         mostrarErro("SINAL INCOMPLETO: dê um nome pra sua ficha.");
+        return;
+    }
+    if (modoAtual === "criar" && !mesaEscolhida) {
+        mostrarErro("SINAL INCOMPLETO: escolha em qual mesa você vai jogar.");
         return;
     }
 
@@ -98,10 +130,11 @@ async function executarAcao() {
     }
 
     // Validação do Mestre — sempre tratado de forma especial, em qualquer aba.
+    // Cada Mestre só acessa a própria mesa (mesaId = o login dele).
     const mestreEncontrado = MESTRES.find(m => m.login === rawUser.toLowerCase());
     if (mestreEncontrado) {
         if (pass === mestreEncontrado.senha) {
-            definirSessao("mestre", "Mestre", "");
+            definirSessao("mestre", "Mestre", "", mestreEncontrado.mesaId);
         } else {
             mostrarErro("CORTA-FOGO: senha de mestre inválida.");
         }
@@ -110,17 +143,25 @@ async function executarAcao() {
 
     travarBotao(true);
     try {
-        const configRef = ref(db, `fichas/${userClean}/config`);
-
         if (modoAtual === "criar") {
-            const snapshot = await get(configRef);
-            if (snapshot.exists()) {
+            const indiceRef = ref(db, `loginIndex/${userClean}`);
+            const snapIndice = await get(indiceRef);
+            if (snapIndice.exists()) {
                 mostrarErro("ERRO: esse login já está em uso. Escolha outro ou entre com a senha dele.");
                 return;
             }
-            await criarFichaNova(userClean, pass, nomeExibicao);
-            definirSessao("jogador", nomeExibicao, userClean);
+            await criarFichaNova(userClean, pass, nomeExibicao, mesaEscolhida);
+            definirSessao("jogador", nomeExibicao, userClean, mesaEscolhida);
         } else {
+            // "Entrar" não sabe de antemão em qual mesa o login mora —
+            // o loginIndex resolve isso antes de ler a ficha em si.
+            const snapIndice = await get(ref(db, `loginIndex/${userClean}`));
+            if (!snapIndice.exists()) {
+                mostrarErro("ERRO: ficha inexistente. Use a aba \"Registrar Nova Ficha\" pra criar uma.");
+                return;
+            }
+            const mesaId = snapIndice.val();
+            const configRef = ref(db, `mesas/${mesaId}/fichas/${userClean}/config`);
             const snapshot = await get(configRef);
             if (!snapshot.exists()) {
                 mostrarErro("ERRO: ficha inexistente. Use a aba \"Registrar Nova Ficha\" pra criar uma.");
@@ -128,7 +169,7 @@ async function executarAcao() {
             }
             const config = snapshot.val();
             if (config.senha === pass) {
-                definirSessao("jogador", config.nomeExibicao || rawUser, userClean);
+                definirSessao("jogador", config.nomeExibicao || rawUser, userClean, mesaId);
             } else {
                 mostrarErro("CORTA-FOGO: senha incorreta.");
             }
@@ -141,11 +182,12 @@ async function executarAcao() {
     }
 }
 
-async function criarFichaNova(idLimpo, senha, nomeExibicao) {
+async function criarFichaNova(idLimpo, senha, nomeExibicao, mesaId) {
     const fichaVazia = {
         config: {
             senha,
             nomeExibicao,
+            mesaId,
             criadoEm: Date.now()
         },
         dados: {
@@ -198,11 +240,15 @@ async function criarFichaNova(idLimpo, senha, nomeExibicao) {
         determinacoes: "",
         notas: ""
     };
-    await set(ref(db, `fichas/${idLimpo}`), fichaVazia);
+    // Grava a ficha dentro da mesa escolhida E registra no índice global
+    // de logins (só {mesaId}, pra achar a mesa certa num próximo login)
+    // — as duas escritas precisam acontecer juntas pro login funcionar.
+    await set(ref(db, `mesas/${mesaId}/fichas/${idLimpo}`), fichaVazia);
+    await set(ref(db, `loginIndex/${idLimpo}`), mesaId);
 }
 
-function definirSessao(role, nome, idLimpo) {
-    const sessao = { role, nome, idLimpo };
+function definirSessao(role, nome, idLimpo, mesaId) {
+    const sessao = { role, nome, idLimpo, mesaId };
     localStorage.setItem("cdn_session", JSON.stringify(sessao));
     window.location.href = "ficha.html";
 }
