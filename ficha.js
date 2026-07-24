@@ -27,7 +27,7 @@ import {
     ALCANCES_ARMA_FOGO, PADROES_RECUO, rotuloAlcanceArmaFogo, rotuloPadraoRecuo,
     modificadorRecuo, ESCALA_MULT_DESARMADO, ehGolpeDesarmadoComDano,
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
-    atendeRequisitoPericia
+    atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -70,7 +70,9 @@ import {
     ouvirCombateAtivo, adicionarParticipanteCombate, removerParticipanteCombate, encerrarCombate,
     ouvirAcoesPendentes, criarAcaoPendente, rejeitarAcaoPendente, confirmarAcaoPendente,
     iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, resetarRecuoArma,
-    abrirReacaoPendente, responderReacaoPendente, adicionarEsquivaExtra
+    abrirReacaoPendente, responderReacaoPendente, adicionarEsquivaExtra,
+    consumirContraAtaquePendente, definirAgarrado, soltarAgarrado,
+    definirAlcanceLimitado, soltarAlcanceLimitado
 } from "./mestre.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -343,6 +345,7 @@ const el = {
     reacaoDefesaCorpo: document.getElementById("reacao-defesa-corpo"),
     reacaoDefesaBotoes: document.getElementById("reacao-defesa-botoes"),
     alvoSelect: document.getElementById("alvo-select"),
+    alvoCampoExtra: document.getElementById("alvo-campo-extra"),
     alvoCancelar: document.getElementById("alvo-cancelar"),
     alvoConfirmar: document.getElementById("alvo-confirmar"),
     modalDarItem: document.getElementById("modal-dar-item"),
@@ -1191,7 +1194,7 @@ function estadoSaudeLabelAtual() {
 // Lista, em texto, cada penalidade/bônus não-zero que entrou na rolagem
 // de ataque (estado de saúde, recuo, precisão) — ex: "-4 muito machucado,
 // -1 recuo, -1 precisão". Devolve "—" quando não há nenhuma.
-function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao) {
+function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra = 0) {
     const partes = [];
     if (penalidadeSaude) {
         const rotulo = estadoSaudeLabelAtual().toLowerCase() || "estado de saúde";
@@ -1199,6 +1202,7 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao) {
     }
     if (modRecuo) partes.push(`${modRecuo >= 0 ? "+" : ""}${modRecuo} recuo`);
     if (modPrecisao) partes.push(`${modPrecisao >= 0 ? "+" : ""}${modPrecisao} precisão`);
+    if (modificadorExtra) partes.push(`${modificadorExtra >= 0 ? "+" : ""}${modificadorExtra} contra-ataque (Aparar)`);
     return partes.length ? partes.join(", ") : "—";
 }
 
@@ -1210,8 +1214,8 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao) {
 // (falha crítica), a linha de resultado mostra "CRÍTICO NEGATIVO" no
 // lugar do número — só um destaque visual; não muda se o ataque acerta
 // ou erra, que continua comparando resultadoAtaque com a dificuldade.
-function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque }) {
-    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao);
+function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0 }) {
+    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra);
     const resultadoTexto = brutoAtaque === 1 ? "CRÍTICO NEGATIVO" : `${resultadoAtaque}`;
     return `rolagem: ${brutoAtaque}\n`
         + `modificador de perícia: ${periciaBase >= 0 ? "+" : ""}${periciaBase}\n`
@@ -1588,6 +1592,21 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
         if (!podeDisparar) return;
     }
     if (ehArma(it.tag) && combateTemParticipantes()) {
+        // Contra-ataque imediato do Aparar (manual: "pode atacar
+        // imediatamente com modificador -1") — se este personagem tem um
+        // guardado, o próximo "Usar" de uma arma/manobra já mira
+        // automaticamente em quem atacou, sem passar pela seleção manual
+        // de alvo, e some sozinho depois de usado (é de 1 uso só).
+        const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+        const contraAtaque = meuPid ? await consumirContraAtaquePendente(meuPid) : null;
+        if (contraAtaque) {
+            const participanteAlvo = (combateAtivoCache.participantes || {})[contraAtaque.contraAlvoPid];
+            if (participanteAlvo) {
+                toast(`Contra-ataque do Aparar: atacando ${contraAtaque.contraAlvoNome} com modificador ${contraAtaque.modificador}.`);
+                await resolverAtaque(it, modificadoresPlanos, { ...participanteAlvo, _pid: contraAtaque.contraAlvoPid }, { modificadorExtra: contraAtaque.modificador, ehContraAtaque: true });
+                return;
+            }
+        }
         abrirModalSelecionarAlvo(it, modificadoresPlanos);
     } else {
         await rolarUsoItem(it, modificadoresPlanos);
@@ -1595,6 +1614,9 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
 }
 
 let contextoAtaque = null;
+let contextoAgarrar = null;
+let contextoDelimitar = null;
+let contextoRetomar = null;
 
 function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
@@ -1608,6 +1630,8 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
 
     contextoAtaque = { item: it, modificadoresPlanos };
     el.alvoTitulo.innerText = `Atacar com ${it.nome}`;
+    el.alvoCampoExtra.style.display = "none";
+    el.alvoCampoExtra.innerHTML = "";
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -1618,26 +1642,121 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     el.modalSelecionarAlvo.classList.add("active");
 }
 
+// Preenche o <select> de alvos do modal compartilhado — usado por todas
+// as variantes (ataque, Agarrar, Delimitar/Retomar alcance).
+function preencherOpcoesDeAlvo() {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([, p]) =>
+        !(p.tipo === "ficha" && p.refId === fichaAtualId) &&
+        !(modoNpc && p.tipo === "npc" && p.refId === npcAtualId)
+    );
+    el.alvoSelect.innerHTML = "";
+    opcoes.forEach(([pid, p]) => {
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.innerText = `${p.nome} (${p.tipo === "ficha" ? "jogador" : "NPC"})`;
+        el.alvoSelect.appendChild(opt);
+    });
+    return opcoes.length;
+}
+
+// Mesma modal de seleção de alvo, reaproveitada pra manobra "Agarrar"
+// (contexto separado de contextoAtaque, já que não usa item de arma).
+function abrirModalSelecionarAlvoAgarrar(nomePericia, modificador) {
+    contextoAgarrar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Agarrar com ${nomePericia}`;
+    el.alvoCampoExtra.style.display = "none";
+    el.alvoCampoExtra.innerHTML = "";
+    if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra agarrar.", "erro"); contextoAgarrar = null; return; }
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// Delimitar alcance (manual): além do alvo, escolhe QUAL alcance vai
+// ficar disponível pra vítima (Curto/Médio/Longo) — usa o campo extra
+// do modal compartilhado pra isso.
+function abrirModalSelecionarAlvoDelimitar(nomePericia, modificador) {
+    contextoDelimitar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Delimitar alcance com ${nomePericia}`;
+    if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra delimitar o alcance.", "erro"); contextoDelimitar = null; return; }
+    el.alvoCampoExtra.style.display = "block";
+    el.alvoCampoExtra.innerHTML = `
+        <label for="alvo-alcance-select">Alcance a impor no alvo</label>
+        <select id="alvo-alcance-select">
+            <option value="Curto">Curto</option>
+            <option value="Médio">Médio</option>
+            <option value="Longo">Longo</option>
+        </select>
+    `;
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// Retomar alcance (manual): só precisa do alvo — a dificuldade já é
+// fixa (pontuação da delimitação de alcance que o alvo colocou nele).
+// Só faz sentido em quem JÁ está com o alcance limitado agora — inclui
+// você mesmo (o caso normal: tirar a própria limitação) e também
+// permite "retomar" o alcance de um aliado limitado, se fizer sentido
+// na mesa.
+function abrirModalSelecionarAlvoRetomar(nomePericia, modificador) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([, p]) => p.alcanceLimitado && p.alcanceLimitado.ativo);
+    if (!opcoes.length) { toast("Ninguém no combate está com o alcance limitado agora.", "erro"); return; }
+
+    contextoRetomar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Retomar alcance com ${nomePericia}`;
+    el.alvoCampoExtra.style.display = "none";
+    el.alvoCampoExtra.innerHTML = "";
+    el.alvoSelect.innerHTML = "";
+    opcoes.forEach(([pid, p]) => {
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.innerText = `${p.nome} (limitado a ${p.alcanceLimitado.valor})`;
+        el.alvoSelect.appendChild(opt);
+    });
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
 function configurarModalSelecionarAlvo() {
+    const limparContextos = () => {
+        contextoAtaque = null;
+        contextoAgarrar = null;
+        contextoDelimitar = null;
+        contextoRetomar = null;
+    };
     el.alvoCancelar.addEventListener("click", () => {
         el.modalSelecionarAlvo.classList.remove("active");
-        contextoAtaque = null;
+        limparContextos();
     });
     el.modalSelecionarAlvo.addEventListener("click", (e) => {
         if (e.target === el.modalSelecionarAlvo) {
             el.modalSelecionarAlvo.classList.remove("active");
-            contextoAtaque = null;
+            limparContextos();
         }
     });
     el.alvoConfirmar.addEventListener("click", async () => {
-        if (!contextoAtaque) return;
+        if (!contextoAtaque && !contextoAgarrar && !contextoDelimitar && !contextoRetomar) return;
         const pid = el.alvoSelect.value;
         const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
-        const { item, modificadoresPlanos } = contextoAtaque;
         el.modalSelecionarAlvo.classList.remove("active");
-        contextoAtaque = null;
-        await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid });
+        if (contextoAtaque) {
+            const { item, modificadoresPlanos } = contextoAtaque;
+            limparContextos();
+            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid });
+        } else if (contextoAgarrar) {
+            const { nomePericia, modificador } = contextoAgarrar;
+            limparContextos();
+            await resolverAgarrar(nomePericia, modificador, { ...participante, _pid: pid });
+        } else if (contextoDelimitar) {
+            const { nomePericia, modificador } = contextoDelimitar;
+            const alcanceSelect = document.getElementById("alvo-alcance-select");
+            const alcanceEscolhido = alcanceSelect ? alcanceSelect.value : "Curto";
+            limparContextos();
+            await resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhido, { ...participante, _pid: pid });
+        } else if (contextoRetomar) {
+            const { nomePericia, modificador } = contextoRetomar;
+            limparContextos();
+            await resolverRetomarAlcance(nomePericia, modificador, { ...participante, _pid: pid });
+        }
     });
 }
 
@@ -1735,13 +1854,46 @@ async function resetarDisparosTurno() {
 // baseDificuldadeAtaque em dados-manual.js), e se acertar, resolve o dano (arma ou
 // golpe desarmado) descontando a redução de armadura do alvo — tudo
 // registrado numa única linha explícita de ACERTO/ERRO no Log de Dados.
-async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
+async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opcoes = {}) {
+    const modificadorExtra = opcoes.modificadorExtra || 0;
+    const ehContraAtaque = !!opcoes.ehContraAtaque;
     const nomePericia = it.periciaUso;
     if (!nomePericia) { toast("Esta arma não tem perícia vinculada.", "erro"); return; }
 
-    const consumo = checarConsumoDeAcao();
-    if (!consumo) return;
-    const participanteIdParaGastarAcao = consumo.participanteId;
+    // Agarrar (manual): quem está agarrado não consegue golpes de
+    // alcance médio/longo — só curto — enquanto durar. Verifica ANTES de
+    // gastar qualquer ação (o golpe nem chega a acontecer).
+    const statusAgarrado = meuStatusAgarrado();
+    if (statusAgarrado && statusAgarrado.ativo && golpeBloqueadoPorAgarrar(it.nome, nomePericia)) {
+        toast(`Você está AGARRADO por ${statusAgarrado.porNome} — só dá pra atacar com golpes de alcance curto enquanto isso durar.`, "erro");
+        return;
+    }
+
+    // Delimitar alcance (manual): golpe de alcance diferente do imposto
+    // (e não-Médio) fica bloqueado; Médio sempre passa, mas com dano pela
+    // metade — ver verificarAlcanceLimitado. Igual ao Agarrar, verifica
+    // antes de gastar a ação.
+    const statusAlcance = meuStatusAlcanceLimitado();
+    const alcanceGolpe = alcanceDoGolpe(it.nome, nomePericia);
+    const verifAlcance = verificarAlcanceLimitado(statusAlcance, alcanceGolpe);
+    if (verifAlcance.bloqueado) {
+        toast(`Seu alcance está limitado a ${statusAlcance.valor} por ${statusAlcance.porNome} — esse golpe (alcance ${alcanceGolpe}) não pode ser usado. Use "Retomar alcance" pra tirar a limitação.`, "erro");
+        return;
+    }
+
+    // Contra-ataque do Aparar é imediato (manual: "pode atacar
+    // imediatamente com modificador -1") — não espera o próprio turno
+    // nem gasta a ação normal do turno, então pula a trava de
+    // "é seu turno?/tem ação sobrando?" que vale pro ataque comum.
+    let consumo, participanteIdParaGastarAcao;
+    if (ehContraAtaque) {
+        consumo = { participanteId: null, direto: false };
+        participanteIdParaGastarAcao = null;
+    } else {
+        consumo = checarConsumoDeAcao();
+        if (!consumo) return;
+        participanteIdParaGastarAcao = consumo.participanteId;
+    }
 
     const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
     const armaConfig = it.arma || {};
@@ -1771,10 +1923,10 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
     const penalidadeSaude = penalidadeTestesAtual();
     const periciaBase = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanosAtacante, 0);
     const modPericia = periciaBase + penalidadeSaude;
-    const modAtaque = modPericia + modPrecisao + modRecuo;
+    const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra;
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
-    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque });
+    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra });
 
     let dificuldade, nomeAlvo;
     try {
@@ -1880,6 +2032,22 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
     }
     const tipoDanoLabel = TIPOS_DANO.find(t => t.key === tipoDanoKey)?.label || tipoDanoKey || "—";
 
+    // Agarrar (manual): dano causado PELA vítima do agarrão é reduzido
+    // pela metade enquanto durar — golpes de alcance curto ainda são
+    // permitidos (checagem lá em cima), só saem mais fracos. Delimitar
+    // alcance: golpe Médio "forçado" pra dentro de outro alcance também
+    // sai pela metade (mesma checagem). As duas reduções empilham se as
+    // duas condições valerem ao mesmo tempo.
+    let notaAgarrado = "";
+    if (statusAgarrado && statusAgarrado.ativo) {
+        danoTotal = Math.floor(danoTotal / 2);
+        notaAgarrado += ` (dano reduzido pela metade — AGARRADO por ${statusAgarrado.porNome})`;
+    }
+    if (verifAlcance.meioDano) {
+        danoTotal = Math.floor(danoTotal / 2);
+        notaAgarrado += ` (dano reduzido pela metade — alcance Médio usado "de perto" com alcance limitado a ${statusAlcance.valor})`;
+    }
+
     // Esquiva/Bloqueio (manual: só disponível depois que o alvo já teve
     // seu próprio turno na rodada). É UMA ação só, mas quem decide qual
     // manobra fazer com ela é o ALVO (na tela dele, ou o Mestre, se o
@@ -1889,20 +2057,34 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
     // golpe, e devolve o controle: quem responde é quem recebeu o golpe,
     // via responderReacaoPendente() — ver mestre.js.
     if (combateComIniciativaAtivo() && Number(participante.esquivasDisponiveis) > 0) {
+        const atacanteTipo = modoNpc ? "npc" : "ficha";
+        const atacanteRefId = modoNpc ? npcAtualId : fichaAtualId;
+        const atacantePid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
         await abrirReacaoPendente({
             participanteId: participante._pid,
             nomeAtacante, nomeAlvo, nomeArma: it.nome,
             danoTotal, tipoDanoKey, tipoDanoLabel, danoDadoTexto,
             alvoTipo: participante.tipo, alvoRefId: participante.refId,
             resultadoAtaque, dificuldade, modAtaque,
-            // Não dá pra esquivar de tiro — só de golpes corpo a corpo/
-            // arma branca. A tela de reação usa essa flag pra esconder
-            // o botão "Esquivar" quando o golpe veio de arma de fogo.
+            // Não dá pra esquivar/aparar de tiro — só de golpes corpo a
+            // corpo/arma branca. A tela de reação usa essa flag pra
+            // esconder os botões "Esquivar"/"Aparar" quando o golpe veio
+            // de arma de fogo.
             ehArmaFogo: ehFogo,
+            // Manual do Aparar: "não é possível aparar ataques de arma
+            // branca estando desarmado" — a tela de reação usa isso pra
+            // só oferecer perícias de arma branca (não as desarmadas)
+            // quando o golpe recebido também veio de uma perícia de
+            // arma branca.
+            ataqueArmaBranca: PERICIAS_ARMA_BRANCA.includes(nomePericia),
+            // Identidade de quem atacou — só usada se o Aparar for bem
+            // sucedido, pra saber em quem mirar o contra-ataque imediato
+            // (ver definirContraAtaquePendente em mestre.js).
+            atacanteTipo, atacanteRefId, atacantePid,
             detalheRolagem, efeitoTexto:
                 (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : ""
         });
-        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Levar o golpe.\n${detalheRolagem}`;
+        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
         toast(detalheAguardando);
         return;
     }
@@ -1918,15 +2100,200 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante) {
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado. PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado. PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano });
     toast(detalheDano);
 }
 
-// ---------------------------------------------------------------------
-// INVENTÁRIO
+// Agarrar (manual pg. 49-50): teste de Briga de Rua/Jiu Jitsu/Força
+// Bruta/CQC vs. "10 + Força do alvo" — sem dano, sem Esquiva/Bloqueio/
+// Aparar contra ela (o manual não prevê reação pra isso, diferente de
+// golpe que causa dano). Sucesso deixa o alvo Agarrado (ver
+// definirAgarrado em mestre.js): golpes de alcance médio/longo da
+// vítima ficam bloqueados e o dano dela sai pela metade, até alguém
+// soltar o agarrão (botão "Soltar" na lista de combate).
+async function resolverAgarrar(nomePericia, modificador, participante) {
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo;
+    try {
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
+            const fichaAlvo = normalizarFicha(snap.val());
+            nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
+            dificuldade = 10 + (Number(fichaAlvo.dados.forca) || 0);
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
+            const npc = snap.val();
+            nomeAlvo = npc.nome || participante.nome;
+            // NPC "rápido" (sem mini-ficha detalhada) não tem Força
+            // cadastrada — usa Constituição como aproximação (mesma que
+            // o resto do sistema já usa pra esses NPCs mais simples).
+            const forcaAlvo = npc.modoDetalhado ? (Number(npc.atributosPrimarios?.forca) || 0) : (Number(npc.constituicao) || 0);
+            dificuldade = 10 + forcaAlvo;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Agarrar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Agarrar ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    if (meuPid) {
+        await definirAgarrado(participante._pid, meuPid, nomeAtacante);
+    }
+    const detalhe = `${nomeAtacante} AGARROU ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} não consegue golpes de alcance médio/longo e causa metade do dano enquanto estiver agarrado.\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// Delimitar alcance (manual): teste vs. "11 + perícia corpo a corpo do
+// alvo" (usa a MELHOR das perícias corpo a corpo/arma branca do alvo —
+// ver calcularMelhorModCorpoACorpoParticipante). Sucesso trava a vítima
+// num único alcance (ver verificarAlcanceLimitado em resolverAtaque).
+async function resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhido, participante) {
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo;
+    try {
+        const melhorPericiaAlvo = await calcularMelhorModCorpoACorpoParticipante(participante.tipo, participante.refId);
+        dificuldade = 11 + melhorPericiaAlvo;
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            nomeAlvo = (snap.exists() && snap.val().config && snap.val().config.nomeExibicao) || participante.nome;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            nomeAlvo = (snap.exists() && snap.val().nome) || participante.nome;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Delimitar o alcance (${alcanceEscolhido}) de ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Delimitar o alcance de ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    await definirAlcanceLimitado(participante._pid, { valor: alcanceEscolhido, pontuacao: resultadoAtaque, porPid: meuPid, porNome: nomeAtacante });
+    const detalhe = `${nomeAtacante} DELIMITOU o alcance de ${nomeAlvo} pra ${alcanceEscolhido} (${nomePericia}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} só consegue usar golpes de alcance ${alcanceEscolhido} (Médio sempre passa, com metade do dano, se não for o escolhido).\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// Retomar alcance (manual): dificuldade fixa = pontuação do teste de
+// Delimitar alcance que travou a vítima (já guardada em
+// participante.alcanceLimitado.pontuacao — sem precisar buscar nada,
+// vem direto do combateAtivo).
+async function resolverRetomarAlcance(nomePericia, modificador, participante) {
+    if (!participante.alcanceLimitado || !participante.alcanceLimitado.ativo) {
+        toast(`${participante.nome} não está com o alcance limitado.`, "erro");
+        return;
+    }
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const nomeAlvo = participante.nome;
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+    const dificuldade = Number(participante.alcanceLimitado.pontuacao) || 0;
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    await soltarAlcanceLimitado(participante._pid);
+    const detalhe = `${nomeAtacante} RETOMOU o alcance de ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}. Limitação de alcance removida.\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+
 // ---------------------------------------------------------------------
 function renderizarInventario(modificadoresPlanos) {
     const carga = calcularCargaAtual(fichaAtual, modificadoresPlanos);
@@ -2217,6 +2584,43 @@ function renderizarManobrasCombate() {
                 const semPericia = nomePericia === "Sem Perícia";
                 const entrada = semPericia ? null : Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === nomePericia);
                 if (!semPericia && !entrada) return;
+
+                // Agarrar (manual): teste vs. "10 + Força do alvo", sem
+                // dano — resolve num fluxo próprio (resolverAgarrar), não
+                // no de dano/Esquiva-Bloqueio-Aparar que vale pro resto
+                // das manobras.
+                if (m.nome === "Agarrar") {
+                    if (!combateTemParticipantes()) {
+                        toast("Agarrar precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    abrirModalSelecionarAlvoAgarrar(nomePericia, modificador);
+                    return;
+                }
+
+                // Delimitar alcance / Retomar alcance (manual): mesma
+                // ideia do Agarrar — resolvem num fluxo próprio, sem
+                // dano direto. Delimitar ainda pede pra escolher QUAL
+                // alcance impor (campo extra no modal de alvo).
+                if (m.nome === "Delimitar alcance") {
+                    if (!combateTemParticipantes()) {
+                        toast("Delimitar alcance precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    abrirModalSelecionarAlvoDelimitar(nomePericia, modificador);
+                    return;
+                }
+                if (m.nome === "Retomar alcance") {
+                    if (!combateTemParticipantes()) {
+                        toast("Retomar alcance precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    abrirModalSelecionarAlvoRetomar(nomePericia, modificador);
+                    return;
+                }
 
                 // Soco/Chute/Joelhada/Cotovelada têm dano automatizável
                 // (1dForça + Força [escala], manual pg. 49-50) sem precisar
@@ -3786,27 +4190,62 @@ function avaliarReacaoPendente() {
 }
 
 function renderizarReacaoPendente(r) {
-    const avisoEsquiva = r.ehArmaFogo
-        ? `${escapeHtml(r.nomeAlvo)} tem Esquiva/Bloqueio guardada, mas não dá pra esquivar de arma de fogo — só Bloquear ou levar o golpe cheio. Bloquear reduz o dano pela metade (não reduz dano perfurante).`
-        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar anula o golpe inteiro; Bloquear reduz o dano pela metade (não reduz dano perfurante). Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
+    const avisoBase = r.ehArmaFogo
+        ? `${escapeHtml(r.nomeAlvo)} tem Esquiva/Bloqueio guardada, mas não dá pra esquivar/aparar de arma de fogo — só Bloquear ou levar o golpe cheio. Bloquear reduz o dano pela metade (não reduz dano perfurante).`
+        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar anula o golpe inteiro; Aparar (com teste de perícia contra o resultado do ataque) anula o golpe E permite contra-atacar na hora com -1; Bloquear reduz o dano pela metade (não reduz dano perfurante). Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
     el.reacaoDefesaCorpo.innerHTML = `
         <p class="hint">${escapeHtml(r.nomeAtacante)} acertou ${escapeHtml(r.nomeAlvo)} com ${escapeHtml(r.nomeArma)} (${r.resultadoAtaque} vs. dificuldade ${r.dificuldade}). Dano previsto${escapeHtml(r.danoDadoTexto || "")}: ${r.danoTotal} (${escapeHtml(r.tipoDanoLabel)}).</p>
-        <p class="hint">${avisoEsquiva}</p>
+        <p class="hint">${avisoBase}</p>
+        <div id="reacao-aparar-painel" style="display:none;"></div>
     `;
     el.reacaoDefesaBotoes.innerHTML = "";
-    const responder = async (escolha) => {
+    const painelAparar = el.reacaoDefesaCorpo.querySelector("#reacao-aparar-painel");
+
+    const responder = async (escolha, dadosExtra) => {
         el.reacaoDefesaBotoes.querySelectorAll("button").forEach(b => b.disabled = true);
-        const resultado = await responderReacaoPendente(escolha);
+        const resultado = await responderReacaoPendente(escolha, dadosExtra || null);
         if (resultado) toast(resultado.detalhe);
         el.modalReacaoDefesa.classList.remove("active");
     };
-    // Não dá pra esquivar de tiro — o botão "Esquivar" só aparece pra
+
+    // Não dá pra esquivar/aparar de tiro (só de golpes corpo a corpo/
+    // arma branca) — os botões "Esquivar"/"Aparar" só aparecem pra
     // golpes que não vieram de arma de fogo.
     if (!r.ehArmaFogo) {
         const btnEsquivar = document.createElement("button");
         btnEsquivar.className = "btn-lime"; btnEsquivar.type = "button"; btnEsquivar.innerText = "Esquivar";
         btnEsquivar.addEventListener("click", () => responder("esquivar"));
         el.reacaoDefesaBotoes.appendChild(btnEsquivar);
+
+        // Manual: "não é possível aparar ataques de armas brancas
+        // estando desarmado" — se o golpe recebido veio de uma perícia
+        // de arma branca, só oferece perícias de arma branca pra aparar
+        // (o alvo precisa estar armado com algo do mesmo tipo pra
+        // aparar); golpe desarmado/CQC libera qualquer uma das 9.
+        const opcoesPericiaAparar = r.ataqueArmaBranca ? PERICIAS_ARMA_BRANCA : PERICIAS_APARAR;
+        const btnAparar = document.createElement("button");
+        btnAparar.className = "btn-lime"; btnAparar.type = "button"; btnAparar.innerText = "Aparar";
+        btnAparar.addEventListener("click", () => {
+            painelAparar.style.display = "block";
+            painelAparar.innerHTML = `
+                <div class="modal-field">
+                    <label>Aparar com qual perícia? (dificuldade = ${r.resultadoAtaque}, o resultado do ataque)</label>
+                    <select id="reacao-aparar-select">
+                        ${opcoesPericiaAparar.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+                    </select>
+                </div>
+                <button id="reacao-aparar-confirmar" class="btn-lime" type="button">Rolar Aparar</button>
+            `;
+            painelAparar.querySelector("#reacao-aparar-confirmar").addEventListener("click", async () => {
+                const periciaEscolhida = painelAparar.querySelector("#reacao-aparar-select").value;
+                painelAparar.querySelector("#reacao-aparar-confirmar").disabled = true;
+                const modDado = await calcularModApararParticipante(r.alvoTipo, r.alvoRefId, periciaEscolhida);
+                const brutoDado = rolarD20();
+                const resultadoDado = brutoDado + modDado;
+                await responder("aparar", { periciaEscolhida, brutoDado, modDado, resultadoDado });
+            });
+        });
+        el.reacaoDefesaBotoes.appendChild(btnAparar);
     }
     const btnBloquear = document.createElement("button");
     btnBloquear.className = "btn-blue"; btnBloquear.type = "button"; btnBloquear.innerText = "Bloquear";
@@ -3817,6 +4256,79 @@ function renderizarReacaoPendente(r) {
     el.reacaoDefesaBotoes.appendChild(btnBloquear);
     el.reacaoDefesaBotoes.appendChild(btnNenhuma);
     el.modalReacaoDefesa.classList.add("active");
+}
+
+// Modificador (d20 + isso) do teste de Aparar de quem RECEBEU o golpe —
+// busca os dados de perícia mais atuais direto do banco (funciona tanto
+// pra um jogador quanto pra um NPC, detalhado ou "rápido"). Segue a
+// MESMA regra de qualquer outro teste de perícia: nível 0/perícia
+// ausente vira -1 fixo (destreinado), já com a penalidade de estado de
+// saúde embutida (Machucado/Muito Machucado). NPC "rápido" (sem
+// perícias estruturadas cadastradas) não tem como saber se está
+// treinado — sempre conta como destreinado (-1).
+async function calcularModApararParticipante(alvoTipo, alvoRefId, nomePericia) {
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
+        if (!snap.exists()) return -1;
+        const fichaAlvo = normalizarFicha(snap.val());
+        const modificadoresPlanos = coletarModificadores(fichaAlvo);
+        const pvMaxCalc = Math.round(calcularDerivados(fichaAlvo.dados, modificadoresPlanos).recursos.pv.total) + (Number(fichaAlvo.dados.pvBonusExtra) || 0);
+        const overridePv = fichaAlvo.dados.pvMaximoOverride;
+        const pvMax = (overridePv !== null && overridePv !== undefined && overridePv !== "") ? (Number(overridePv) || 0) : pvMaxCalc;
+        const pvAtual = (fichaAlvo.dados.pvAtual !== null && fichaAlvo.dados.pvAtual !== undefined) ? Number(fichaAlvo.dados.pvAtual) : pvMax;
+        const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
+        const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
+        return modificadorDePericiaComPenalidade(nomePericia, fichaAlvo.dados, fichaAlvo.pericias, modificadoresPlanos, estadoSaude.penalidadeTestes);
+    }
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoRefId}`)));
+    if (!snap.exists()) return -1;
+    const npc = snap.val();
+    if (npc.modoDetalhado && npc.periciasNpc) {
+        const entrada = Object.values(npc.periciasNpc).find(p => p.nome === nomePericia);
+        const nivel = entrada ? (Number(entrada.nivel) || 0) : 0;
+        return nivel > 0 ? nivel : -1;
+    }
+    return -1;
+}
+
+// Melhor perícia corpo a corpo/arma branca do alvo, pra dificuldade de
+// Delimitar alcance ("11 + perícia corpo a corpo do alvo" — manual não
+// especifica QUAL perícia, então usa a mais alta entre as elegíveis pra
+// Aparar/Delimitar, igual PERICIAS_APARAR). Busca tudo de uma vez (não
+// chama calcularModApararParticipante em loop) pra economizar leituras.
+async function calcularMelhorModCorpoACorpoParticipante(alvoTipo, alvoRefId) {
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
+        if (!snap.exists()) return -1;
+        const fichaAlvo = normalizarFicha(snap.val());
+        const modificadoresPlanos = coletarModificadores(fichaAlvo);
+        const pvMaxCalc = Math.round(calcularDerivados(fichaAlvo.dados, modificadoresPlanos).recursos.pv.total) + (Number(fichaAlvo.dados.pvBonusExtra) || 0);
+        const overridePv = fichaAlvo.dados.pvMaximoOverride;
+        const pvMax = (overridePv !== null && overridePv !== undefined && overridePv !== "") ? (Number(overridePv) || 0) : pvMaxCalc;
+        const pvAtual = (fichaAlvo.dados.pvAtual !== null && fichaAlvo.dados.pvAtual !== undefined) ? Number(fichaAlvo.dados.pvAtual) : pvMax;
+        const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
+        const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
+        let melhor = -1;
+        for (const nome of PERICIAS_APARAR) {
+            const mod = modificadorDePericiaComPenalidade(nome, fichaAlvo.dados, fichaAlvo.pericias, modificadoresPlanos, estadoSaude.penalidadeTestes);
+            if (mod > melhor) melhor = mod;
+        }
+        return melhor;
+    }
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoRefId}`)));
+    if (!snap.exists()) return -1;
+    const npc = snap.val();
+    if (npc.modoDetalhado && npc.periciasNpc) {
+        let melhor = -1;
+        Object.values(npc.periciasNpc).forEach(p => {
+            if (PERICIAS_APARAR.includes(p.nome)) {
+                const nivel = Number(p.nivel) || 0;
+                if (nivel > melhor) melhor = nivel;
+            }
+        });
+        return melhor;
+    }
+    return -1;
 }
 
 function combateTemParticipantes() {
@@ -3846,6 +4358,71 @@ function npcParticipanteIdCombate() {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     const entrada = Object.entries(participantes).find(([, p]) => p.tipo === "npc" && p.refId === npcAtualId);
     return entrada ? entrada[0] : null;
+}
+
+// Status de Agarrado (manual) de quem está sendo controlado nesta tela
+// agora — a própria ficha do jogador, ou o NPC que o Mestre estiver
+// atuando como. `null` se não estiver agarrado ou fora de combate.
+function meuStatusAgarrado() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return null;
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    return (participantes[meuPid] && participantes[meuPid].agarrado) || null;
+}
+
+// Agarrar (manual): "impossibilita golpes de alcance médio e longo".
+// Pra manobras desarmadas com dano (Soco/Chute/Joelhada/Cotovelada), o
+// alcance vem direto da própria manobra (MANOBRAS_COMBATE). Pra uma
+// arma equipada, o sistema não guarda "alcance" por item — só a perícia
+// vinculada — então o alcance é inferido a partir dela: perícias de
+// combate bem próximo (curtas/desarmadas) liberam o golpe; arma de fogo
+// e armas de alcance longo continuam bloqueadas.
+const PERICIAS_ALCANCE_CURTO_AGARRADO = [
+    "CQC", "Karatê Cobra Kai", "Jiu Jitsu", "Força Bruta", "Briga de Rua",
+    "Muay Thai", "Boxe", "Lâminas Curtas", "Contundentes Curtas"
+];
+function golpeBloqueadoPorAgarrar(nomeAtaque, nomePericia) {
+    const manobra = MANOBRAS_COMBATE.find(m => m.nome === nomeAtaque);
+    if (manobra && manobra.alcance && manobra.alcance !== "Variável") {
+        return manobra.alcance === "Médio" || manobra.alcance === "Longo";
+    }
+    return !PERICIAS_ALCANCE_CURTO_AGARRADO.includes(nomePericia);
+}
+
+// Status de Alcance Limitado (Delimitar alcance) de quem está sendo
+// controlado nesta tela agora. Mesma ideia de meuStatusAgarrado().
+function meuStatusAlcanceLimitado() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return null;
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    return (participantes[meuPid] && participantes[meuPid].alcanceLimitado) || null;
+}
+
+// Alcance (Curto/Médio/Longo) de um golpe — mesma inferência usada em
+// golpeBloqueadoPorAgarrar, mas distinguindo Médio de Longo (importa
+// pra a exceção do Médio no Delimitar alcance). Prioriza o alcance
+// cadastrado na própria manobra (Soco/Chute/etc); pra arma equipada,
+// sem "alcance" próprio no banco, infere pela perícia vinculada — sem
+// como saber Médio nesse caso (só via manobra explícita), então cai
+// pra Longo se não for uma das perícias de combate bem próximo.
+function alcanceDoGolpe(nomeAtaque, nomePericia) {
+    const manobra = MANOBRAS_COMBATE.find(m => m.nome === nomeAtaque);
+    if (manobra && ["Curto", "Médio", "Longo"].includes(manobra.alcance)) {
+        return manobra.alcance;
+    }
+    return PERICIAS_ALCANCE_CURTO_AGARRADO.includes(nomePericia) ? "Curto" : "Longo";
+}
+
+// Delimitar alcance (manual): "escolha um alcance único pra poder ser
+// utilizado. Alcance médio sempre pode ser utilizado em limite de curta
+// distância causando metade do dano." — ou seja: só o alcance escolhido
+// vale cheio; Médio (se não for o escolhido) ainda é permitido, mas com
+// dano pela metade; qualquer outro alcance fica bloqueado.
+function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
+    if (!statusAlcance || !statusAlcance.ativo) return { bloqueado: false, meioDano: false };
+    if (alcanceGolpe === statusAlcance.valor) return { bloqueado: false, meioDano: false };
+    if (alcanceGolpe === "Médio") return { bloqueado: false, meioDano: true };
+    return { bloqueado: true, meioDano: false };
 }
 
 // ---------------------------------------------------------------------
@@ -3971,6 +4548,14 @@ function montarPainelIniciativaJogador() {
         const marcadorVoce = pid === meuId ? " (você)" : "";
         const qtdEsquivas = Number(p.esquivasDisponiveis) || 0;
         const badgeEsquiva = qtdEsquivas > 0 ? ` <span title="Tem ${qtdEsquivas} ação(ões) de Esquiva/Bloqueio guardada(s)">🛡️${qtdEsquivas > 1 ? `×${qtdEsquivas}` : ""}</span>` : "";
+        const temContraAtaque = !!(combateAtivoCache.contraAtaquePendente && combateAtivoCache.contraAtaquePendente[pid]);
+        const badgeContraAtaque = temContraAtaque ? ` <span title="Aparou! Tem um contra-ataque imediato guardado (modificador -1)">🗡️</span>` : "";
+        const badgeAgarrado = (p.agarrado && p.agarrado.ativo)
+            ? ` <span class="mod-pill negativo" title="Agarrado por ${escapeHtml(p.agarrado.porNome)} — golpes de alcance médio/longo bloqueados, dano pela metade">🔗 Agarrado</span>${pid === meuId ? ` <button type="button" class="btn-ghost btn-soltar-agarrado" data-soltar-agarrado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Soltar</button>` : ""}`
+            : "";
+        const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
+            ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
+            : "";
         const badgeSaude = p.estadoSaude ? ` <span class="mod-pill negativo" title="-${p.estadoSaude === "muito_machucado" ? "4" : "2"} em todos os testes">${escapeHtml(p.estadoSaudeLabel)}</span>` : "";
         // Jogador não vê o PV de NPC (só o próprio e o de outros
         // jogadores) — só o Mestre tem essa informação, no Gerenciador de
@@ -3979,7 +4564,7 @@ function montarPainelIniciativaJogador() {
         const pvTexto = p.tipo === "npc" ? "" : `<span>${p.pv}/${p.pvMax} PV</span>`;
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeSaude}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}</span>
                 <span>Iniciativa ${p.iniciativa}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações</span>
@@ -3994,6 +4579,13 @@ function montarPainelIniciativaJogador() {
         <h4>Gerenciador de Combate do Jogador</h4>
         <div class="combate-lista">${linhas}</div>
     `;
+
+    modal.querySelectorAll("[data-soltar-agarrado]").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await soltarAgarrado(btn.dataset.soltarAgarrado);
+        });
+    });
 
     modal.querySelector(".combate-fechar").addEventListener("click", () => {
         modal.remove();
@@ -5016,13 +5608,28 @@ function montarGerenciadorCombate(corpoOriginal) {
             linha.className = "combate-linha" + (pid === turnoAtual ? " combate-linha-ativa" : "");
             const qtdEsquivas = Number(p.esquivasDisponiveis) || 0;
             const badgeEsquiva = qtdEsquivas > 0 ? ` <span title="Tem ${qtdEsquivas} ação(ões) de Esquiva/Bloqueio guardada(s)">🛡️${qtdEsquivas > 1 ? `×${qtdEsquivas}` : ""}</span>` : "";
+            const temContraAtaque = !!(combateAtivoCache.contraAtaquePendente && combateAtivoCache.contraAtaquePendente[pid]);
+            const badgeContraAtaque = temContraAtaque ? ` <span title="Aparou! Tem um contra-ataque imediato guardado (modificador -1)">🗡️</span>` : "";
+            const badgeAgarrado = (p.agarrado && p.agarrado.ativo)
+                ? ` <span class="mod-pill negativo" title="Agarrado por ${escapeHtml(p.agarrado.porNome)} — golpes de alcance médio/longo bloqueados, dano pela metade">🔗 Agarrado</span> <button type="button" class="btn-ghost btn-soltar-agarrado" data-soltar-agarrado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Soltar</button>`
+                : "";
+            const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
+                ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
+                : "";
             const badgeSaude = p.estadoSaude ? ` <span class="mod-pill negativo" title="-${p.estadoSaude === "muito_machucado" ? "4" : "2"} em todos os testes">${escapeHtml(p.estadoSaudeLabel)}</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeSaude}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações</span>
             `;
+            const btnSoltar = linha.querySelector("[data-soltar-agarrado]");
+            if (btnSoltar) {
+                btnSoltar.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await soltarAgarrado(pid);
+                });
+            }
             listaIniciativa.appendChild(linha);
         });
     }

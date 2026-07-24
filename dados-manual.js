@@ -507,6 +507,17 @@ export const PERICIAS_ARMA_BRANCA = [
     "Contundentes Longas", "Armas Brancas Exóticas"
 ];
 
+// Perícias desarmadas que servem pra Aparar (manobra defensiva, manual):
+// só as de combate corpo a corpo "de luta", não qualquer perícia física.
+export const PERICIAS_APARAR_DESARMADO = ["Karatê Cobra Kai", "Jiu Jitsu", "Força Bruta", "CQC"];
+
+// Todas as perícias com as quais dá pra tentar Aparar um golpe — arma
+// branca (curto/longo alcance) OU luta desarmada. Manual: "não é
+// possível aparar ataques de arma branca estando desarmado" — por isso
+// o código só oferece as opções desarmadas quando o golpe recebido NÃO
+// veio de uma perícia de arma branca (ver PERICIAS_ARMA_BRANCA acima).
+export const PERICIAS_APARAR = [...PERICIAS_ARMA_BRANCA, ...PERICIAS_APARAR_DESARMADO];
+
 // Devolve a dificuldade base (o número que soma com a Agilidade/Força
 // do alvo) pra um ataque, a partir do nome da manobra (golpes
 // desarmados clicados na lista de Manobras) ou da perícia usada
@@ -779,14 +790,14 @@ export const MANOBRAS_COMBATE = [
     {
         nome: "Delimitar alcance",
         alcance: "Variável",
-        pericias: ["Perícia corpo a corpo", "Armas Brancas"],
+        pericias: [...PERICIAS_APARAR],
         dificuldade: "11 + perícia corpo a corpo do alvo",
         efeito: "Escolhe um alcance único pra ser utilizado nesse combate"
     },
     {
         nome: "Retomar alcance",
         alcance: "Variável",
-        pericias: ["Perícia corpo a corpo", "Armas Brancas"],
+        pericias: [...PERICIAS_APARAR],
         dificuldade: "Igual à pontuação da delimitação de alcance do adversário",
         efeito: "Retira a limitação de alcance imposta pelo oponente"
     }

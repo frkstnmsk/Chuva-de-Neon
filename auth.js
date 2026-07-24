@@ -30,8 +30,9 @@ import { ref, set, get } from "https://www.gstatic.com/firebasejs/12.15.0/fireba
 // identificador da mesa no banco (`mesas/{mesaId}/...`); `mesaNome` é
 // só o rótulo bonito mostrado pro jogador na hora de escolher a mesa.
 const MESTRES = [
-    { login: "frkstnmsk", senha: "31outcaseri", mesaId: "frkstnmsk", mesaNome: "Mesa do frkstnmsk" },
-    { login: "yan", senha: "ian", mesaId: "yan", mesaNome: "Mesa do Yan" }
+    { login: "frkstnmsk", senha: "31outcaseri", mesaId: "frkstnmsk", mesaNome: "77³" },
+    { login: "yan", senha: "ian", mesaId: "yan", mesaNome: "Mesa do Yan" },
+    { login: "cyberpunk", senha: "31outcaseri", mesaId: "cyberpunk", mesaNome: "isso não é cyberpunk" }
 ];
 
 let modoAtual = "entrar";

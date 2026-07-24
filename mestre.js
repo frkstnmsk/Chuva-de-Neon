@@ -16,6 +16,7 @@ import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calenda
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
+import { PERICIAS_ARMA_BRANCA } from "./dados-manual.js";
 
 // ---------------------------------------------------------------------
 // Padrão de vida — valores semanais fixos do manual (pg. 105-106).
@@ -499,9 +500,18 @@ export async function iniciarIniciativaCombate() {
     return { ordemTurnos, participantes: participantesAtualizados };
 }
 
-// Passa a vez pro próximo participante na ordem de iniciativa. Ao voltar
-// ao início da ordem, inicia uma nova rodada e restaura as ações de
-// todo mundo pro respectivo máximo.
+// Passa a vez pro próximo participante na ordem de iniciativa. A cada
+// troca de turno (não só ao virar rodada), RECALCULA a Velocidade Total
+// (e portanto o teto de ações) de todo mundo a partir do PV atual — e
+// só ao voltar ao início da ordem restaura o contador de ações pro novo
+// máximo cheio.
+//
+// Isso importa porque Machucado/Muito Machucado cortam Velocidade, e o
+// PV de alguém pode mudar no meio da própria rodada (levou dano antes
+// da vez dele agir) depois que "Iniciar Combate" já tinha calculado as
+// ações máximas uma vez lá atrás. Sem recalcular a cada troca de turno,
+// o Gerenciador de Combate continuava oferecendo ações de antes de o
+// personagem ficar Machucado/Muito Machucado.
 export async function avancarTurnoCombate() {
     const snap = await get(ref(db, caminhoMesa("combateAtivo")));
     const estado = snap.val();
@@ -514,6 +524,7 @@ export async function avancarTurnoCombate() {
     const indiceAtual = ordemTurnos.indexOf(turnoAtual);
     const proximoIndice = (indiceAtual + 1) % ordemTurnos.length;
     const novoTurno = ordemTurnos[proximoIndice];
+    const virouRodada = proximoIndice === 0;
 
     const atualizacoes = { turnoAtual: novoTurno };
 
@@ -528,13 +539,39 @@ export async function avancarTurnoCombate() {
         atualizacoes[`participantes/${turnoAtual}/esquivasDisponiveis`] = esquivasAtuais + 1;
     }
 
-    if (proximoIndice === 0) {
+    if (virouRodada) {
         atualizacoes.rodada = (rodada || 1) + 1;
-        for (const id of ordemTurnos) {
-            if (participantes[id]) {
-                atualizacoes[`participantes/${id}/acoes`] = participantes[id].acoesMax;
-            }
-        }
+    }
+
+    // Mesma combinação Godmode + "ignorar penalidade de saúde" usada em
+    // iniciarIniciativaCombate — recalcular tem que respeitar o mesmo
+    // Godmode que já vale pro resto do combate.
+    const [snapGodmode, snapIgnorarSaude] = await Promise.all([
+        get(ref(db, caminhoMesa("godmode"))),
+        get(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")))
+    ]);
+    const godmodeAtivo = snapGodmode.exists() ? !!snapGodmode.val() : false;
+    const ignorarPenalidadeSaude = godmodeAtivo && (snapIgnorarSaude.exists() ? !!snapIgnorarSaude.val() : false);
+
+    for (const id of ordemTurnos) {
+        if (!participantes[id]) continue;
+        const statsAtualizados = await calcularStatsCombateParticipante(participantes[id], ignorarPenalidadeSaude);
+        const acoesMaxAtualizado = calcularAcoesMax(statsAtualizados.velocidade);
+        atualizacoes[`participantes/${id}/modAgilidade`] = statsAtualizados.modAgilidade;
+        atualizacoes[`participantes/${id}/velocidade`] = statsAtualizados.velocidade;
+        atualizacoes[`participantes/${id}/pv`] = statsAtualizados.pv;
+        atualizacoes[`participantes/${id}/pvMax`] = statsAtualizados.pvMax;
+        atualizacoes[`participantes/${id}/estadoSaude`] = statsAtualizados.estadoSaude;
+        atualizacoes[`participantes/${id}/estadoSaudeLabel`] = statsAtualizados.estadoSaudeLabel;
+        atualizacoes[`participantes/${id}/acoesMax`] = acoesMaxAtualizado;
+        // Rodada virando: reseta pro novo máximo cheio (comportamento de
+        // sempre). Meio da rodada: só TRAVA o contador de ações restantes
+        // no novo teto se ele tiver caído (ex: tinha 3/3 guardadas,
+        // machucou e o novo máximo é 1 — trava em 1); nunca aumenta o
+        // que já foi gasto de volta.
+        atualizacoes[`participantes/${id}/acoes`] = virouRodada
+            ? acoesMaxAtualizado
+            : Math.min(Number(participantes[id].acoes) || 0, acoesMaxAtualizado);
     }
 
     await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
@@ -604,6 +641,59 @@ export async function adicionarEsquivaExtra(participanteId) {
 }
 
 // ---------------------------------------------------------------------
+// Contra-ataque imediato do Aparar (manual: "pode atacar imediatamente
+// com modificador -1"). Fica guardado por participante — quem aparou
+// tem até seu próximo ataque (não precisa esperar o próprio turno) pra
+// usá-lo; ficha.js consome isso sozinho no fluxo normal de "Usar" arma,
+// aplicando o modificador e mirando automaticamente em quem atacou.
+// ---------------------------------------------------------------------
+export async function definirContraAtaquePendente(participanteId, dados) {
+    await set(ref(db, caminhoMesa(`combateAtivo/contraAtaquePendente/${participanteId}`)), dados);
+}
+
+export async function consumirContraAtaquePendente(participanteId) {
+    const caminho = ref(db, caminhoMesa(`combateAtivo/contraAtaquePendente/${participanteId}`));
+    const snap = await get(caminho);
+    if (!snap.exists()) return null;
+    await remove(caminho);
+    return snap.val();
+}
+
+// ---------------------------------------------------------------------
+// Agarrar (manual: "impossibilita golpes de alcance médio e longo e
+// reduz pela metade os danos da vítima"). Fica guardado no próprio
+// participante agarrado — ficha.js consulta isso pra bloquear golpes de
+// alcance médio/longo da vítima e pra cortar o dano dela pela metade
+// enquanto durar. Sem mecânica de "quebrar o agarrão" definida no
+// manual além disso, então é solto manualmente (Mestre ou a própria
+// vítima) — ver soltarAgarrado.
+// ---------------------------------------------------------------------
+export async function definirAgarrado(participanteId, porPid, porNome) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/agarrado`)), { ativo: true, porPid, porNome });
+}
+
+export async function soltarAgarrado(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/agarrado`)));
+}
+
+// ---------------------------------------------------------------------
+// Delimitar alcance / Retomar alcance (manual): a vítima só pode usar
+// golpes do alcance escolhido pelo atacante (exceto Médio, que sempre
+// pode ser usado "de perto", a metade do dano — ver checagem em
+// ficha.js). `pontuacao` é o resultado do teste de Delimitar alcance
+// que valeu — é a dificuldade que Retomar alcance precisa bater pra
+// remover a limitação (manual: "dificuldade igual à pontuação da
+// delimitação de alcance colocada pelo adversário").
+// ---------------------------------------------------------------------
+export async function definirAlcanceLimitado(participanteId, dados) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/alcanceLimitado`)), { ativo: true, ...dados });
+}
+
+export async function soltarAlcanceLimitado(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/alcanceLimitado`)));
+}
+
+// ---------------------------------------------------------------------
 // Reação pendente (Esquiva/Bloqueio) — quem escolhe é quem RECEBE o
 // golpe, não quem ataca. Como os dois jogadores estão em telas/sessões
 // diferentes, a escolha não pode ser um prompt() síncrono na tela de
@@ -619,32 +709,48 @@ export async function abrirReacaoPendente(dados) {
     await set(ref(db, caminhoMesa("combateAtivo/reacaoPendente")), { ...dados, timestamp: Date.now() });
 }
 
-// escolha: "esquivar" | "bloquear" | "nenhuma".
+// escolha: "esquivar" | "bloquear" | "aparar" | "nenhuma".
 // "esquivar" anula o golpe (dano 0). "bloquear" reduz o dano pela
 // metade, exceto se o tipo de dano for perfurante (comum ou especial),
-// que ignora bloqueio. As duas consomem a ação de Esquiva/Bloqueio
-// guardada. "nenhuma" (ou a ação já ter sido gasta antes de responder)
-// deixa passar o golpe cheio e NÃO consome a ação guardada.
-export async function responderReacaoPendente(escolha) {
+// que ignora bloqueio. "aparar" é a única que exige teste: `dadosAparar`
+// já vem com o resultado da rolagem (feita no cliente de quem defende,
+// que tem acesso aos próprios dados/perícias) — dificuldade = pontuação
+// do atacante no teste de ataque (r.resultadoAtaque, manual). Sucesso
+// anula o golpe (como Esquivar) E guarda um contra-ataque imediato
+// (modificador -1) pro personagem que aparou, contra quem atacou (ver
+// definirContraAtaquePendente/consumirContraAtaquePendente). Todas as
+// três (exceto "nenhuma") consomem a ação de Esquiva/Bloqueio guardada.
+// "nenhuma" (ou a ação já ter sido gasta antes de responder) deixa
+// passar o golpe cheio e NÃO consome a ação guardada.
+export async function responderReacaoPendente(escolha, dadosAparar = null) {
     const snap = await get(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
     if (!snap.exists()) return null;
     const r = snap.val();
 
-    // Não dá pra esquivar de tiro (só de golpes corpo a corpo/arma
-    // branca) — a UI já não oferece o botão "Esquivar" quando o golpe
-    // veio de arma de fogo (r.ehArmaFogo), mas revalidamos aqui também
-    // pra não dar pra burlar chamando esta função diretamente.
-    if (escolha === "esquivar" && r.ehArmaFogo) {
+    // Não dá pra esquivar/aparar de tiro (só de golpes corpo a corpo/
+    // arma branca) — a UI já não oferece os botões "Esquivar"/"Aparar"
+    // quando o golpe veio de arma de fogo (r.ehArmaFogo), mas
+    // revalidamos aqui também pra não dar pra burlar chamando esta
+    // função diretamente.
+    if ((escolha === "esquivar" || escolha === "aparar") && r.ehArmaFogo) {
+        escolha = "nenhuma";
+    }
+    // Manual: "não é possível aparar ataques de armas brancas estando
+    // desarmado" — revalida no servidor (mesma regra já aplicada na UI,
+    // que só oferece perícias desarmadas quando o golpe recebido não é
+    // de arma branca).
+    if (escolha === "aparar" && r.ataqueArmaBranca && dadosAparar && !PERICIAS_ARMA_BRANCA.includes(dadosAparar.periciaEscolhida)) {
         escolha = "nenhuma";
     }
 
     let consumiu = false;
-    if (escolha === "esquivar" || escolha === "bloquear") {
+    if (escolha === "esquivar" || escolha === "bloquear" || escolha === "aparar") {
         consumiu = await usarEsquivaBloqueio(r.participanteId);
     }
 
     let danoParaAplicar = r.danoTotal;
     let notaEscolha;
+    let apararConseguiu = false;
     if (escolha === "esquivar" && consumiu) {
         danoParaAplicar = 0;
         notaEscolha = `${r.nomeAlvo} usou a ação guardada pra ESQUIVAR e ANULOU o golpe.`;
@@ -655,8 +761,27 @@ export async function responderReacaoPendente(escolha) {
             danoParaAplicar = Math.floor(danoParaAplicar / 2);
             notaEscolha = `${r.nomeAlvo} usou a ação guardada pra BLOQUEAR e reduziu o dano pela metade.`;
         }
+    } else if (escolha === "aparar" && consumiu && dadosAparar) {
+        const { periciaEscolhida, brutoDado, modDado, resultadoDado } = dadosAparar;
+        apararConseguiu = resultadoDado >= r.resultadoAtaque;
+        const detalheDado = `d20 (${brutoDado}) ${modDado >= 0 ? "+" : ""}${modDado} = ${resultadoDado}`;
+        if (apararConseguiu) {
+            danoParaAplicar = 0;
+            notaEscolha = `${r.nomeAlvo} APAROU com ${periciaEscolhida} (${detalheDado}) vs. ${r.resultadoAtaque} do ataque — ANULOU o golpe e pode contra-atacar imediatamente (modificador -1).`;
+            if (r.atacanteTipo && r.atacanteRefId && r.atacantePid) {
+                await definirContraAtaquePendente(r.participanteId, {
+                    contraAlvoPid: r.atacantePid,
+                    contraAlvoTipo: r.atacanteTipo,
+                    contraAlvoRefId: r.atacanteRefId,
+                    contraAlvoNome: r.nomeAtacante,
+                    modificador: -1
+                });
+            }
+        } else {
+            notaEscolha = `${r.nomeAlvo} tentou APARAR com ${periciaEscolhida} (${detalheDado}) vs. ${r.resultadoAtaque} do ataque — FALHOU. Ação guardada consumida mesmo assim.`;
+        }
     } else {
-        notaEscolha = `${r.nomeAlvo} não usou Esquiva/Bloqueio e recebeu o golpe cheio.`;
+        notaEscolha = `${r.nomeAlvo} não usou Esquiva/Bloqueio/Aparar e recebeu o golpe cheio.`;
     }
 
     const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey);
