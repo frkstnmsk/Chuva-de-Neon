@@ -196,6 +196,7 @@ const el = {
     selectNpcAtuar: document.getElementById("select-npc-atuar"),
     syncIndicator: document.getElementById("sync-indicator"),
     btnLogout: document.getElementById("btn-logout"),
+    btnAbrirMapa: document.getElementById("btn-abrir-mapa"),
     btnAbrirMestre: document.getElementById("btn-abrir-mestre"),
     badgePendentes: document.getElementById("badge-pendentes"),
     btnAbrirCombate: document.getElementById("btn-abrir-combate"),
@@ -389,6 +390,10 @@ async function init() {
     el.btnLogout.addEventListener("click", () => {
         localStorage.removeItem("cdn_session");
         window.location.href = "index.html";
+    });
+
+    el.btnAbrirMapa.addEventListener("click", () => {
+        window.open("mapa.html", "_blank", "noopener");
     });
 
     el.btnSalvar.addEventListener("click", () => salvarTudo(true));
