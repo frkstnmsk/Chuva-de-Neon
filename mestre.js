@@ -427,8 +427,9 @@ function statsCombatePadrao() {
 }
 
 // Ordena por iniciativa decrescente; empate é decidido pelo maior
-// modificador de Agilidade (regra caseira, igual à usada na dificuldade
-// defensiva de combate.js do módulo de regras).
+// modificador de Agilidade (regra caseira de dificuldade defensiva
+// do módulo de regras — combateAtivo é a única fonte de estado de
+// combate deste sistema).
 function ordenarPorIniciativa(participantes) {
     return Object.keys(participantes).sort((a, b) => {
         const A = participantes[a], B = participantes[b];
@@ -786,14 +787,19 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
 
     const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey);
 
+    // r.danoTotal já chega dobrado do Acerto Crítico (ver resolverAtaque
+    // em ficha.js, que dobra ANTES de abrir a reação pendente) — aqui só
+    // repetimos a nota textual pro Log e sinalizamos critico:"acerto"
+    // pro destaque visual, sem mexer de novo no valor do dano.
     const efeitoTexto = r.efeitoTexto || "";
     const danoDadoTexto = r.danoDadoTexto || "";
+    const notaCritico = r.notaCritico || "";
     const detalheRolagemTexto = r.detalheRolagem ? `\n${r.detalheRolagem}` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado. PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`
-        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado. PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
+        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`
+        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
 
-    await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano });
+    await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: r.criticoPositivo ? "acerto" : null });
     await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
     return { ...resultadoDano, detalhe: detalheDano };
 }

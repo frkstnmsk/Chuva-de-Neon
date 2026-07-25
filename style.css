@@ -13,6 +13,7 @@
     --neon-lime: #a3e635;
     --neon-red: #ef4444;
     --neon-blue: #0ea5e9;
+    --neon-gold: #facc15;
     --text-main: #f0ecd8;
     --text-dim: #94a3b8;
     --border-style: 1px solid rgba(255, 255, 255, 0.15);
@@ -198,7 +199,10 @@ label {
     max-width: 320px;
 }
 .toast-msg.erro { border-color: var(--neon-red); color: var(--neon-red); box-shadow: 0 0 20px rgba(239, 68, 68, 0.2); }
+.toast-msg.critico-acerto { border-color: var(--neon-gold); color: var(--neon-gold); box-shadow: 0 0 24px rgba(250, 204, 21, 0.35); }
+.toast-msg.critico-falha { border-color: var(--neon-red); color: var(--neon-red); box-shadow: 0 0 24px rgba(239, 68, 68, 0.4); animation: toast-in 0.2s ease, critico-falha-pulso 1s ease-in-out 2; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes critico-falha-pulso { 0%, 100% { box-shadow: 0 0 24px rgba(239, 68, 68, 0.4); } 50% { box-shadow: 0 0 34px rgba(239, 68, 68, 0.75); } }
 
 /* ---------- Modal (compartilhado com o estilo do mapa) ---------- */
 .modal-overlay {

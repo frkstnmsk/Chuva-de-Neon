@@ -362,7 +362,7 @@ const el = {
 function toast(msg, tipo = "ok") {
     const container = document.getElementById("toast");
     const div = document.createElement("div");
-    div.className = "toast-msg" + (tipo === "erro" ? " erro" : "");
+    div.className = "toast-msg" + (tipo && tipo !== "ok" ? ` ${tipo}` : "");
     div.innerText = msg;
     container.appendChild(div);
     setTimeout(() => div.remove(), 3600);
@@ -1294,13 +1294,17 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
 // ataque (ver resolverAtaque): rolagem bruta do d20, modificador de
 // perícia isolado (perícia + ajustes estruturados, ou -1 se destreinada
 // — SEM o estado de saúde embutido), penalidades separadas (estado de
-// saúde/recuo/precisão) e o resultado final. Num d20 natural igual a 1
-// (falha crítica), a linha de resultado mostra "CRÍTICO NEGATIVO" no
-// lugar do número — só um destaque visual; não muda se o ataque acerta
-// ou erra, que continua comparando resultadoAtaque com a dificuldade.
-function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0 }) {
+// saúde/recuo/precisão) e o resultado final. Falha crítica (nat 1 OU
+// resultado final <= 1) mostra "CRÍTICO NEGATIVO" no lugar do número;
+// acerto crítico (nat 20 ou resultado final >= 20 — dobra o dano, ver
+// resolverAtaque) mostra "CRÍTICO POSITIVO" — só destaques visuais;
+// não mudam se o ataque acerta ou erra, que continua comparando
+// resultadoAtaque com a dificuldade.
+function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0, criticoPositivo = false, criticoNegativo = false }) {
     const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra);
-    const resultadoTexto = brutoAtaque === 1 ? "CRÍTICO NEGATIVO" : `${resultadoAtaque}`;
+    const resultadoTexto = criticoNegativo
+        ? "CRÍTICO NEGATIVO"
+        : (criticoPositivo ? `${resultadoAtaque} — CRÍTICO POSITIVO` : `${resultadoAtaque}`);
     return `rolagem: ${brutoAtaque}\n`
         + `modificador de perícia: ${periciaBase >= 0 ? "+" : ""}${periciaBase}\n`
         + `penalidades: ${penalidadesTexto}\n`
@@ -1384,9 +1388,28 @@ async function rolarERegistrar(nomeAlvo, modificador) {
 
     const bruto = rolarD20();
     const resultado = bruto + Number(modificador || 0);
+    // Acerto Crítico (d20 natural 20 ou resultado final >= 20) / Falha
+    // Crítica (d20 natural 1 ou resultado final <= 1) — aqui é só
+    // sinalização pro Log de Dados e resolução manual do Mestre; não há
+    // "dano" pra dobrar numa rolagem genérica de perícia/atributo (isso
+    // é exclusivo de resolverAtaque, que também aplica a dobra de dano
+    // de verdade).
+    const criticoPositivo = bruto === 20 || resultado >= 20;
+    // Falha Crítica: d20 natural 1, OU resultado final <= 1 — este
+    // segundo caso só é matematicamente possível com modificador
+    // negativo (ex: d20=2, modificador -1, resultado final = 1),
+    // já que o d20 sozinho nunca é menor que 1.
+    const criticoNegativo = bruto === 1 || resultado <= 1;
+    const notaCritico = criticoNegativo
+        ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre."
+        : (criticoPositivo ? " ⚡ ACERTO CRÍTICO!" : "");
     const quem = isMestre ? `Mestre (${modoNpc ? (fichaAtual?.config?.nomeExibicao || npcAtualId) : (nomeDeFicha(fichaAtualId) || "—")})` : (fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador");
-    await registrarRolagem({ quem, modificador, resultado, detalhe: `${nomeAlvo}: d20 (${bruto}) ${modificador >= 0 ? "+" : ""}${modificador}` });
-    toast(`${nomeAlvo}: ${resultado} (d20: ${bruto} ${modificador >= 0 ? "+" : ""}${modificador})`);
+    await registrarRolagem({
+        quem, modificador, resultado,
+        detalhe: `${nomeAlvo}: d20 (${bruto}) ${modificador >= 0 ? "+" : ""}${modificador}${notaCritico}`,
+        critico: criticoNegativo ? "falha" : (criticoPositivo ? "acerto" : null)
+    });
+    toast(`${nomeAlvo}: ${resultado} (d20: ${bruto} ${modificador >= 0 ? "+" : ""}${modificador})${notaCritico}`, criticoNegativo ? "critico-falha" : (criticoPositivo ? "critico-acerto" : "ok"));
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
@@ -2014,7 +2037,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra;
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
-    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra });
+    // Acerto Crítico (manual): d20 natural 20 OU resultado final >= 20
+    // dobra o dano do ataque (aplicado mais abaixo, sobre danoTotal,
+    // antes de reduções de armadura/agarrado/alcance). Falha Crítica:
+    // d20 natural 1, OU resultado final <= 1 (possível com modificador
+    // negativo, ex: d20=2, modificador -1, resultado final = 1) —
+    // sempre sinalizada no Log como "Fogo Amigo/Desastre" pra resolução
+    // rápida do Mestre, independente do resultado final ter batido a
+    // dificuldade ou não.
+    const criticoPositivo = brutoAtaque === 20 || resultadoAtaque >= 20;
+    const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
+    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, criticoPositivo, criticoNegativo });
 
     let dificuldade, nomeAlvo;
     try {
@@ -2086,9 +2119,10 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     }
 
     if (!acertou) {
-        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
-        await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoAtaque, detalhe });
-        toast(detalhe, "erro");
+        const notaFalhaCritica = criticoNegativo ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre." : "";
+        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.${notaFalhaCritica}\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoAtaque, detalhe, critico: criticoNegativo ? "falha" : null });
+        toast(detalhe, criticoNegativo ? "critico-falha" : "erro");
         return;
     }
 
@@ -2119,6 +2153,27 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         tipoDanoKey = armaConfig.tipoDano;
     }
     const tipoDanoLabel = TIPOS_DANO.find(t => t.key === tipoDanoKey)?.label || tipoDanoKey || "—";
+
+    // Acerto Crítico (manual): dobra o dano do ataque. Aplicado ANTES
+    // das reduções de Agarrado/alcance limitado (que também mexem em
+    // danoTotal logo abaixo) e ANTES da redução de armadura do alvo
+    // (que fica a cargo de aplicarDano) — assim o crítico dobra o dano
+    // "bruto" do ataque, e o resto do pipeline de reduções continua
+    // valendo normalmente em cima do valor já dobrado.
+    let notaCritico = "";
+    if (criticoPositivo) {
+        danoTotal *= 2;
+        notaCritico = " ⚡ ACERTO CRÍTICO — dano dobrado!";
+    }
+    // Falha Crítica (nat 1) que, apesar de tudo, ainda bateu a
+    // dificuldade (modificador alto o bastante) — caso raro, mas o
+    // manual não isenta o nat 1 de ser sinalizado só porque acertou;
+    // fica só como aviso pro Mestre, sem nenhum efeito mecânico aqui
+    // (a Falha Crítica não afeta dano/acerto, só pede resolução manual).
+    if (criticoNegativo) {
+        const motivo = brutoAtaque === 1 ? "d20 natural 1" : `resultado final ${resultadoAtaque}`;
+        notaCritico += ` 🔥 (${motivo} — Falha Crítica sinalizada mesmo tendo acertado; resolução a critério do Mestre.)`;
+    }
 
     // Agarrar (manual): dano causado PELA vítima do agarrão é reduzido
     // pela metade enquanto durar — golpes de alcance curto ainda são
@@ -2152,6 +2207,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             participanteId: participante._pid,
             nomeAtacante, nomeAlvo, nomeArma: it.nome,
             danoTotal, tipoDanoKey, tipoDanoLabel, danoDadoTexto,
+            criticoPositivo, notaCritico,
             alvoTipo: participante.tipo, alvoRefId: participante.refId,
             resultadoAtaque, dificuldade, modAtaque,
             // Não dá pra esquivar/aparar de tiro — só de golpes corpo a
@@ -2172,8 +2228,8 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             detalheRolagem, efeitoTexto:
                 (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : ""
         });
-        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
-        toast(detalheAguardando);
+        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
+        toast(detalheAguardando, criticoPositivo ? "critico-acerto" : "ok");
         return;
     }
 
@@ -2188,11 +2244,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`;
 
-    await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano });
-    toast(detalheDano);
+    await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
+    toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
 }
 
 // Agarrar (manual pg. 49-50): teste de Briga de Rua/Jiu Jitsu/Força
@@ -4192,14 +4248,19 @@ function configurarLogDados() {
         const cronologica = [...lista].reverse();
         cronologica.forEach(entrada => {
             const li = document.createElement("li");
-            li.className = "log-bolha" + (entrada.quem && entrada.quem.toLowerCase().includes("mestre") ? " log-mestre" : "");
+            const classeCritico = entrada.critico === "acerto" ? " log-critico-acerto" : (entrada.critico === "falha" ? " log-critico-falha" : "");
+            li.className = "log-bolha" + (entrada.quem && entrada.quem.toLowerCase().includes("mestre") ? " log-mestre" : "") + classeCritico;
             const modText = entrada.modificador ? ` (${entrada.modificador >= 0 ? "+" : ""}${entrada.modificador})` : "";
             const hora = entrada.timestamp ? new Date(entrada.timestamp).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+            const badgeCritico = entrada.critico === "acerto"
+                ? `<span class="log-badge-critico acerto">⚡ ACERTO CRÍTICO</span>`
+                : (entrada.critico === "falha" ? `<span class="log-badge-critico falha">🔥 FALHA CRÍTICA</span>` : "");
             li.innerHTML = `
                 <div class="log-linha-topo">
                     <span class="log-quem">${escapeHtml(entrada.quem || "—")}</span>
                     <span class="log-hora">${hora}</span>
                 </div>
+                ${badgeCritico}
                 ${entrada.detalhe ? `<span class="log-detalhe">${escapeHtml(entrada.detalhe)}</span>` : ""}
                 <div class="log-resultado-linha">
                     <span class="log-resultado">${entrada.resultado}</span>

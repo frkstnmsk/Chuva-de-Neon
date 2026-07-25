@@ -92,9 +92,13 @@ function avancarDataLabel(dataLabel) {
 // ---------------------------------------------------------------------
 const LIMITE_LOG = 30;
 
-export async function registrarRolagem({ quem, modificador, resultado, detalhe }) {
+// `critico`: "acerto" | "falha" | null — sinalização visual de Acerto
+// Crítico (d20 natural 20 ou resultado final >= 20) ou Falha Crítica
+// (d20 natural 1, "Fogo Amigo/Desastre") pro Log de Dados destacar a
+// rolagem, ver formatarDetalheRolagemAtaque/resolverAtaque em ficha.js.
+export async function registrarRolagem({ quem, modificador, resultado, detalhe, critico }) {
     await push(ref(db, caminhoMesa("logDados")), {
-        quem, modificador: modificador ?? 0, resultado, detalhe: detalhe || "", timestamp: Date.now()
+        quem, modificador: modificador ?? 0, resultado, detalhe: detalhe || "", critico: critico || null, timestamp: Date.now()
     });
 }
 
