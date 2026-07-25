@@ -468,6 +468,7 @@
             <button id="exportarPoisBtn">Backup de Dados (JSON)</button>
             <button id="importarPoisBtn" style="border-color: var(--text-dim); color: var(--text-dim);">Restaurar Backup</button>
             <input type="file" id="arquivoImportacao" accept=".json" style="display:none;">
+            <button id="btnRecarregarSeed" style="border-color: var(--neon-lime); color: var(--neon-lime);">Recarregar POIs originais da mesa</button>
         </div>
     </div>
 </div>
@@ -599,6 +600,7 @@
             }
         }
     })();
+    console.log("[mapa] mesa detectada:", MESA_ID, "| pois salvos agora:", localStorage.getItem(CHAVE_POIS) ? JSON.parse(localStorage.getItem(CHAVE_POIS)).length : 0);
 
     const BANCO_MAPAS = {
         distrito_norte: { nome: "Distrito Norte", url: "https://imgur.com/v8p3VvI.jpeg", larguraKm: 1000 }
@@ -1031,6 +1033,25 @@
     };
 
     document.getElementById('importarPoisBtn').onclick = () => document.getElementById('arquivoImportacao').click();
+
+    // Botão de recuperação manual: sobrescreve o que estiver salvo AGORA
+    // pra essa mesa com o registro inicial embutido (SEED_*_POR_MESA) —
+    // útil se o navegador já tinha alguma coisa (mesmo vazia) salva antes
+    // de o registro inicial existir, o que bloqueia o carregamento
+    // automático (ver prepararArmazenamentoDaMesa lá em cima).
+    document.getElementById('btnRecarregarSeed').onclick = () => {
+        if (!MESA_ID) { alert("Sem mesa detectada na sessão — abra o mapa pelo botão \"Mapa\" da ficha."); return; }
+        const temSeedPois = !!SEED_POIS_POR_MESA[MESA_ID];
+        const temSeedLinhas = !!SEED_LINHAS_POR_MESA[MESA_ID];
+        if (!temSeedPois && !temSeedLinhas) {
+            alert(`Não há registro inicial cadastrado pra mesa "${MESA_ID}" — só a 77³ (frkstnmsk) tem um até agora.`);
+            return;
+        }
+        if (!confirm("Isso substitui TODAS as marcações e linhas salvas agora neste navegador pelo registro inicial da mesa. Continuar?")) return;
+        if (temSeedPois) localStorage.setItem(CHAVE_POIS, JSON.stringify(SEED_POIS_POR_MESA[MESA_ID]));
+        if (temSeedLinhas) localStorage.setItem(CHAVE_LINHAS, JSON.stringify(SEED_LINHAS_POR_MESA[MESA_ID]));
+        location.reload();
+    };
     document.getElementById('arquivoImportacao').addEventListener('change', (e) => {
         const arquivo = e.target.files[0]; if (!arquivo) return;
         const reader = new FileReader();
