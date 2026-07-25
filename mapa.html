@@ -538,28 +538,29 @@
     </div>
 </div>
 
-<script>
+<script type="module">
+    import { db } from "./firebase-config.js";
+    import { ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+    import { obterMesaIdAtual, caminhoMesa } from "./mesa.js";
     // ===================================================================
     // Mapa por mesa: cada mesa (cada Mestre, ver auth.js do site
-    // principal) tem seu PRÓPRIO conjunto de marcações — não fica mais
-    // tudo misturado numa chave só. O id da mesa vem da mesma sessão de
-    // login do site (localStorage "cdn_session", só funciona se o mapa
-    // foi aberto pelo botão "Mapa" da ficha — aberto direto/sem sessão,
-    // cai num aviso pra abrir pelo site).
-    const SESSAO_SITE = (() => {
-        try {
-            const bruto = localStorage.getItem("cdn_session");
-            return bruto ? JSON.parse(bruto) : null;
-        } catch (e) {
-            return null;
-        }
-    })();
-    const MESA_ID = (SESSAO_SITE && SESSAO_SITE.mesaId) ? SESSAO_SITE.mesaId : null;
+    // principal) tem seu PRÓPRIO conjunto de marcações, sincronizadas em
+    // tempo real pelo Firebase (mesas/{mesaId}/mapaPois e mapaLinhas) —
+    // todo mundo vendo/mestrando essa mesa enxerga as mesmas marcações,
+    // ao vivo. O id da mesa vem da mesma sessão de login do site
+    // (localStorage "cdn_session", só funciona se o mapa foi aberto pelo
+    // botão "Mapa" da ficha — aberto direto/sem sessão, cai num aviso
+    // pra abrir pelo site).
+    const MESA_ID = obterMesaIdAtual();
     if (!MESA_ID) {
         alert("Não achei sua sessão de mesa. Abra o mapa pelo botão \"Mapa\" dentro da ficha (site principal), não direto pelo arquivo.");
     }
-    const CHAVE_POIS = `rpg_pois_${MESA_ID || "sem-mesa"}`;
-    const CHAVE_LINHAS = `rpg_linhas_ambiente_${MESA_ID || "sem-mesa"}`;
+    // Chaves antigas (de antes de existir sincronização — cada
+    // navegador guardava tudo sozinho, sem mesa nem Firebase) — só lidas
+    // uma vez, pra puxar marcações feitas localmente antes dessa mudança
+    // e não perder nada (ver prepararDadosDaMesa).
+    const CHAVE_POIS_LOCAL_ANTIGA = `rpg_pois_${MESA_ID || "sem-mesa"}`;
+    const CHAVE_LINHAS_LOCAL_ANTIGA = `rpg_linhas_ambiente_${MESA_ID || "sem-mesa"}`;
     document.addEventListener("DOMContentLoaded", () => {
         const label = document.getElementById("mesaAtualLabel");
         if (label) label.innerText = MESA_ID || "nenhuma (sessão não encontrada)";
@@ -577,30 +578,36 @@
         frkstnmsk: [{"id": 1782525435916, "mapa": "distrito_norte", "nome": "Córrego", "cor": "#0ea5e9", "tipo": "continuo", "latlngs": [[5514, 3396.96875], [5506, 3384.96875], [5511, 3369.96875], [5521, 3360.96875], [5527, 3352.96875], [5533, 3341.96875], [5542, 3327.96875], [5549, 3314.96875], [5552, 3302.96875], [5568, 3304.96875], [5577, 3306.96875], [5594, 3303.96875], [5603, 3303.96875], [5620, 3304.96875]]}, {"id": 1782525503452, "mapa": "distrito_norte", "nome": "Linha de trem desativada", "cor": "#a3e635", "tipo": "tracejado", "latlngs": [[5630, 3381.96875], [5618, 3380.96875], [5609, 3377.96875], [5602, 3365.96875], [5593, 3350.96875], [5575, 3335.96875], [5568, 3319.96875], [5578, 3299.96875], [5581, 3268.96875], [5582, 3243.96875], [5578, 3207.96875], [5568, 3169.96875], [5556, 3143.96875], [5547, 3116.96875], [5500, 3073.96875], [5476, 3035.984375], [5458, 3001.984375], [5440.5, 3000.984375], [5425, 3008.484375], [5420, 2999.484375], [5416.5, 2985.484375], [5408, 2968.96875], [5401.5, 2953.984375], [5402, 2947.984375], [5404, 2941.484375], [5410, 2933.984375], [5417.5, 2930.484375], [5430, 2914.96875], [5438.5, 2910.484375], [5432.5, 2896.484375], [5425, 2876.984375], [5417.5, 2863.984375], [5412.5, 2865.484375], [5403, 2868.484375], [5399.5, 2860.984375], [5396, 2848.984375], [5390, 2835.484375], [5367.5, 2831.484375]]}]
     };
 
-    // Preenche a chave da mesa, uma vez só, na seguinte ordem de
-    // prioridade: 1) já tem dado salvo pra essa mesa → não mexe;
-    // 2) navegador tinha a chave ANTIGA (achatada, de antes da
-    // separação) → migra ela; 3) tem um registro inicial embutido pra
-    // essa mesa (SEED_*_POR_MESA) → usa ele. Cobre tanto "o navegador
-    // que já usava o mapa antes" quanto "abri numa máquina nova".
-    (function prepararArmazenamentoDaMesa() {
+    // Prepara os dados da mesa no Firebase, na seguinte ordem de
+    // prioridade, e SÓ NA PRIMEIRA VEZ (se já existe algo em
+    // mesas/{mesaId}/mapaPois não mexe em nada): 1) navegador tinha
+    // marcações salvas localmente de antes de existir sincronização →
+    // sobe elas pro Firebase; 2) tem um registro inicial embutido pra
+    // essa mesa (SEED_*_POR_MESA) → usa ele. Mesas novas sem nenhum dos
+    // dois simplesmente começam vazias, esperando a primeira marcação.
+    async function prepararDadosDaMesa() {
         if (!MESA_ID) return;
-        if (localStorage.getItem(CHAVE_POIS) === null) {
-            if (localStorage.getItem("rpg_pois") !== null) {
-                localStorage.setItem(CHAVE_POIS, localStorage.getItem("rpg_pois"));
+        const poisRef = ref(db, caminhoMesa("mapaPois"));
+        const snapPois = await get(poisRef);
+        if (!snapPois.exists()) {
+            const local = localStorage.getItem(CHAVE_POIS_LOCAL_ANTIGA) || localStorage.getItem("rpg_pois");
+            if (local) {
+                try { await set(poisRef, JSON.parse(local)); } catch (e) { /* ignora lixo local malformado */ }
             } else if (SEED_POIS_POR_MESA[MESA_ID]) {
-                localStorage.setItem(CHAVE_POIS, JSON.stringify(SEED_POIS_POR_MESA[MESA_ID]));
+                await set(poisRef, SEED_POIS_POR_MESA[MESA_ID]);
             }
         }
-        if (localStorage.getItem(CHAVE_LINHAS) === null) {
-            if (localStorage.getItem("rpg_linhas_ambiente") !== null) {
-                localStorage.setItem(CHAVE_LINHAS, localStorage.getItem("rpg_linhas_ambiente"));
+        const linhasRef = ref(db, caminhoMesa("mapaLinhas"));
+        const snapLinhas = await get(linhasRef);
+        if (!snapLinhas.exists()) {
+            const local = localStorage.getItem(CHAVE_LINHAS_LOCAL_ANTIGA) || localStorage.getItem("rpg_linhas_ambiente");
+            if (local) {
+                try { await set(linhasRef, JSON.parse(local)); } catch (e) { /* ignora lixo local malformado */ }
             } else if (SEED_LINHAS_POR_MESA[MESA_ID]) {
-                localStorage.setItem(CHAVE_LINHAS, JSON.stringify(SEED_LINHAS_POR_MESA[MESA_ID]));
+                await set(linhasRef, SEED_LINHAS_POR_MESA[MESA_ID]);
             }
         }
-    })();
-    console.log("[mapa] mesa detectada:", MESA_ID, "| pois salvos agora:", localStorage.getItem(CHAVE_POIS) ? JSON.parse(localStorage.getItem(CHAVE_POIS)).length : 0);
+    }
 
     const BANCO_MAPAS = {
         distrito_norte: { nome: "Distrito Norte", url: "https://imgur.com/v8p3VvI.jpeg", larguraKm: 1000 }
@@ -622,6 +629,12 @@
     
     let map, camadaImagemOverlay = null, camadaGrid = null, marcadoresAB = [], linhaDistancia = null, distanciaAtualKm = null, distanciaBrutaCoordenadas = 0;
     let pois = [];
+    // Marcadores realmente adicionados ao mapa agora — rastreados à
+    // parte do array `pois` porque esse array é totalmente RESUBSTITUÍDO
+    // a cada atualização em tempo real do Firebase (perde as referências
+    // .marker antigas), então sem essa lista renderizarTodosPOIs() não
+    // teria como saber quais marcadores antigos remover.
+    let markersAtuais = [];
     let categoriasVisiveis = new Set(CATEGORIAS_POI);
     let imgLargura = 0, imgAltura = 0;
     let coordenadasTemporarias = null;
@@ -862,16 +875,16 @@
             };
 
             linhasCustomizadas.push(novaLinha);
-            localStorage.setItem(CHAVE_LINHAS, JSON.stringify(linhasCustomizadas));
+            salvarLinhas();
             
             renderizarTodasLinhasAmbiente();
             finalizarModoDesenho();
         };
 
         document.getElementById("btnLimparTodasLinhas").onclick = () => {
-            if(confirm("Deseja apagar todas as linhas geográficas criadas neste navegador?")) {
+            if(confirm("Deseja apagar todas as linhas geográficas dessa mesa (pra todo mundo)?")) {
                 linhasCustomizadas = [];
-                localStorage.removeItem(CHAVE_LINHAS);
+                salvarLinhas();
                 renderizarTodasLinhasAmbiente();
             }
         };
@@ -909,26 +922,30 @@
             });
         })();
         
-        // Carrega POIs salvos
-        const salvos = localStorage.getItem(CHAVE_POIS);
-        if (salvos) {
-            pois = JSON.parse(salvos); 
-            pois.forEach(p => {
-                p.lat = coordenadaMundoParaPixel(p.coordMundo.x, p.coordMundo.y).lat;
-                p.lng = coordenadaMundoParaPixel(p.coordMundo.x, p.coordMundo.y).lng;
-                desenharPOI(p);
+        // Sobe o registro inicial (se for a primeira vez dessa mesa no
+        // Firebase) e então liga a sincronização ao vivo: dali pra
+        // frente, qualquer marcação feita por QUALQUER PESSOA na mesma
+        // mesa aparece automaticamente pra todo mundo vendo o mapa.
+        prepararDadosDaMesa().then(() => {
+            if (!MESA_ID) return;
+            onValue(ref(db, caminhoMesa("mapaPois")), (snap) => {
+                const dados = snap.val();
+                pois = Array.isArray(dados) ? dados : Object.values(dados || {});
+                pois.forEach(p => {
+                    const px = coordenadaMundoParaPixel(p.coordMundo.x, p.coordMundo.y);
+                    p.lat = px.lat;
+                    p.lng = px.lng;
+                });
+                renderizarTodosPOIs();
+                atualizarListaPOI();
+                atualizarVisibilidadePOIs();
             });
-        }
-
-        // Carrega as linhas de limite persistidas no cache local
-        const linhasSalvas = localStorage.getItem(CHAVE_LINHAS);
-        if (linhasSalvas) {
-            linhasCustomizadas = JSON.parse(linhasSalvas);
-        }
-
-        renderizarTodasLinhasAmbiente();
-        atualizarListaPOI(); 
-        atualizarVisibilidadePOIs();
+            onValue(ref(db, caminhoMesa("mapaLinhas")), (snap) => {
+                const dados = snap.val();
+                linhasCustomizadas = Array.isArray(dados) ? dados : Object.values(dados || {});
+                renderizarTodasLinhasAmbiente();
+            });
+        });
     }
 
     function renderizarTodasLinhasAmbiente() {
@@ -1039,7 +1056,7 @@
     // útil se o navegador já tinha alguma coisa (mesmo vazia) salva antes
     // de o registro inicial existir, o que bloqueia o carregamento
     // automático (ver prepararArmazenamentoDaMesa lá em cima).
-    document.getElementById('btnRecarregarSeed').onclick = () => {
+    document.getElementById('btnRecarregarSeed').onclick = async () => {
         if (!MESA_ID) { alert("Sem mesa detectada na sessão — abra o mapa pelo botão \"Mapa\" da ficha."); return; }
         const temSeedPois = !!SEED_POIS_POR_MESA[MESA_ID];
         const temSeedLinhas = !!SEED_LINHAS_POR_MESA[MESA_ID];
@@ -1047,10 +1064,9 @@
             alert(`Não há registro inicial cadastrado pra mesa "${MESA_ID}" — só a 77³ (frkstnmsk) tem um até agora.`);
             return;
         }
-        if (!confirm("Isso substitui TODAS as marcações e linhas salvas agora neste navegador pelo registro inicial da mesa. Continuar?")) return;
-        if (temSeedPois) localStorage.setItem(CHAVE_POIS, JSON.stringify(SEED_POIS_POR_MESA[MESA_ID]));
-        if (temSeedLinhas) localStorage.setItem(CHAVE_LINHAS, JSON.stringify(SEED_LINHAS_POR_MESA[MESA_ID]));
-        location.reload();
+        if (!confirm("Isso substitui TODAS as marcações e linhas dessa mesa (pra todo mundo) pelo registro inicial. Continuar?")) return;
+        if (temSeedPois) await set(ref(db, caminhoMesa("mapaPois")), SEED_POIS_POR_MESA[MESA_ID]);
+        if (temSeedLinhas) await set(ref(db, caminhoMesa("mapaLinhas")), SEED_LINHAS_POR_MESA[MESA_ID]);
     };
     document.getElementById('arquivoImportacao').addEventListener('change', (e) => {
         const arquivo = e.target.files[0]; if (!arquivo) return;
@@ -1072,9 +1088,8 @@
                 }
                 
                 salvarColecao(); 
-                localStorage.setItem(CHAVE_LINHAS, JSON.stringify(linhasCustomizadas));
-                alert("Backup unificado restaurado com sucesso!");
-                location.reload();
+                salvarLinhas();
+                alert("Backup unificado restaurado com sucesso pra todo mundo vendo essa mesa!");
             } catch(err) { alert("Erro ao ler o arquivo JSON."); } 
         };
         reader.readAsText(arquivo);
@@ -1113,22 +1128,38 @@
         });
         
         p.marker = marker;
+        markersAtuais.push(marker);
         const visivel = !p.categorias || p.categorias.length === 0 || p.categorias.some(cat => categoriasVisiveis.has(cat));
         if (visivel) {
             marker.addTo(map);
         }
     }
 
+    // Redesenha TODOS os POIs do zero (limpa os marcadores atuais e
+    // recria a partir de `pois`) — chamada sempre que a sincronização ao
+    // vivo do Firebase traz um estado novo, seja de uma edição sua ou de
+    // qualquer outra pessoa vendo essa mesa. Evita marcador duplicado.
+    function renderizarTodosPOIs() {
+        markersAtuais.forEach(m => map.removeLayer(m));
+        markersAtuais = [];
+        pois.forEach(p => desenharPOI(p));
+    }
+
     function removerPOI(id) {
-        const p = pois.find(p => p.id === id); if (p && p.marker) map.removeLayer(p.marker);
-        pois = pois.filter(p => p.id !== id); 
+        pois = pois.filter(p => p.id !== id);
         salvarColecao();
         atualizarListaPOI();
     }
 
     function salvarColecao() {
         const limpo = pois.map(p => ({ id: p.id, mapa: p.mapa, nome: p.nome, emoji: p.emoji, lat: p.lat, lng: p.lng, categorias: p.categorias || [], coordMundo: p.coordMundo }));
-        localStorage.setItem(CHAVE_POIS, JSON.stringify(limpo));
+        if (!MESA_ID) return;
+        set(ref(db, caminhoMesa("mapaPois")), limpo);
+    }
+
+    function salvarLinhas() {
+        if (!MESA_ID) return;
+        set(ref(db, caminhoMesa("mapaLinhas")), linhasCustomizadas);
     }
 
     function atualizarVisibilidadePOIs() { 
