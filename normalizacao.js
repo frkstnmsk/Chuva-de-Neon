@@ -146,6 +146,7 @@ export function normalizarInventario(lista) {
             nome: it.nome || "",
             descricao: it.descricao || "",
             modificadores: it.modificadores || [],
+            ativo: it.ativo ?? true,
             tag: it.tag || "geral",
             nivelTag: it.nivelTag ?? null,
             peso: it.peso ?? 0,

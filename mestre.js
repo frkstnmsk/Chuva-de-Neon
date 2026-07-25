@@ -111,7 +111,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
         const pvAtual = (raw.dados && raw.dados.pvAtual !== null && raw.dados.pvAtual !== undefined) ? Number(raw.dados.pvAtual) : 0;
         const inventario = raw.inventario || {};
         const reducao = tipoDanoKey ? Object.values(inventario)
-            .filter(it => it.categoria === "levando" && Array.isArray(it.reducoesDano))
+            .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano))
             .reduce((acc, it) => {
                 const entrada = it.reducoesDano.find(r => r.tipo === tipoDanoKey);
                 return acc + (entrada ? Number(entrada.valor) || 0 : 0);

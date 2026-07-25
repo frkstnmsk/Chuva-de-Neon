@@ -85,6 +85,11 @@ export function coletarModificadores(ficha) {
         const lista = fonte.lista || {};
         for (const id of Object.keys(lista)) {
             const entidade = lista[id];
+            // Entidade desligada (botão ativo/desativado) não contribui com
+            // nenhum modificador — mas continua cadastrada normalmente.
+            // `ativo` ausente (fichas antigas, antes desse campo existir)
+            // conta como ativo, pra não desligar tudo retroativamente.
+            if (entidade.ativo === false) continue;
             const mods = entidade.modificadores || [];
             for (const m of mods) {
                 if (!m.alvo || !m.valor) continue;

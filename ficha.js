@@ -7,7 +7,7 @@ import { ref, set, get, update, remove, onValue, off } from "https://www.gstatic
 import { caminhoMesa } from "./mesa.js";
 import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS,
-    listaAlvosModificador, rotuloAlvo,
+    listaAlvosModificador, rotuloAlvo, modificadoresQueAfetam,
     coletarModificadores, calcularDerivados, calcularTotalPericia,
     rolarD20, rolarDado,
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
@@ -1049,22 +1049,76 @@ function renderizarListaSimples(container, objeto, mapeador, listaChave) {
     ids.forEach(id => {
         const item = objeto[id];
         const { nome, sub, direita } = mapeador(id, item);
+        // Só entidades com modificadores estruturados ganham o botão de
+        // ativo/desativado — o resto (ex: gastos extras) não tem "efeito"
+        // pra ligar/desligar.
+        const temEfeito = !!(item.modificadores && item.modificadores.length);
+        const ativo = item.ativo !== false;
         const li = document.createElement("li");
+        li.className = temEfeito && !ativo ? "entidade-desativada" : "";
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(nome)}</span>
                 ${sub ? `<span class="entity-sub">${escapeHtml(sub)}</span>` : ""}
             </div>
-            ${direita ? `<span class="entity-sub">${escapeHtml(direita)}</span>` : ""}
+            <div class="entity-badges">
+                ${direita ? `<span class="entity-sub">${escapeHtml(direita)}</span>` : ""}
+                ${temEfeito ? `<button type="button" class="btn-toggle-ativo ${ativo ? "ligado" : "desligado"}" title="${ativo ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativo ? "● Ativo" : "○ Inativo"}</button>` : ""}
+            </div>
         `;
+        if (temEfeito) {
+            li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
+                e.stopPropagation();
+                alternarAtivoEntidade(listaChave, id, !ativo);
+            });
+        }
         li.addEventListener("click", () => abrirModalEdicao(listaChave, id));
         container.appendChild(li);
     });
 }
 
+// ---------------------------------------------------------------------
+// Liga/desliga o efeito (modificadores) de uma entidade qualquer — item,
+// vantagem, desvantagem, fato universal ou especialização — sem mexer
+// no resto do seu cadastro. `coletarModificadores` (regras.js) ignora
+// modificadores de qualquer entidade com `ativo: false`. A sincronização
+// em tempo real (ativarSincronizacao) já re-renderiza a ficha inteira
+// assim que o Firebase confirma a escrita, então não precisamos chamar
+// nenhuma função de render manualmente aqui.
+// ---------------------------------------------------------------------
+async function alternarAtivoEntidade(lista, id, novoValor) {
+    if (!idAtivo()) return;
+    try {
+        await update(ref(db, `${caminhoBase()}/${caminhoLista(lista)}/${id}`), { ativo: novoValor });
+    } catch (e) {
+        toast("Não foi possível atualizar o efeito. Tente de novo.", "erro");
+    }
+}
+
 function escapeHtml(str) {
     if (str === null || str === undefined) return "";
     return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---------------------------------------------------------------------
+// Texto de detalhamento (hover) — "como cheguei nesse valor": base +
+// cada modificador com a origem (item/vantagem/desvantagem/etc.) + total.
+// Usado como `title` (tooltip nativo) em atributos, perícias, PV/Energia
+// e qualquer outro valor calculado da ficha. `title` nativo já quebra
+// linha em "\n" (mesmo truque já usado no tooltip do carregador).
+// ---------------------------------------------------------------------
+function textoDetalhamento(label, baseValor, baseLabel, ajustes, totalValor) {
+    const fmt = n => {
+        const r = Math.round((Number(n) || 0) * 10) / 10;
+        return Number.isInteger(r) ? r : r.toFixed(1);
+    };
+    let texto = `${label}\n${baseLabel}: ${fmt(baseValor)}`;
+    (ajustes || []).forEach(a => {
+        texto += `\n${a.valor >= 0 ? "+" : ""}${fmt(a.valor)} — ${a.origem}`;
+    });
+    if (!ajustes || !ajustes.length) texto += "\nSem modificadores ativos.";
+    texto += `\n\nTotal: ${fmt(totalValor)}`;
+    return texto;
 }
 
 // ---------------------------------------------------------------------
@@ -1090,6 +1144,15 @@ function renderizarAtributos(modificadoresPlanos) {
         } else {
             input.max = "7";
         }
+        // Tooltip: atributo primário é editável diretamente (o número no
+        // campo já É a base), mas alguns efeitos (vantagens, itens etc.)
+        // podem mirar `atributo:X` e só entram em jogo em cálculos
+        // específicos (ex: dificuldade de defesa) — o hover deixa isso
+        // visível mesmo sem mudar o valor exibido no campo.
+        const baseAttr = Number(d[attr.key]) || 0;
+        const ajustesAttr = modificadoresQueAfetam(`atributo:${attr.key}`, modificadoresPlanos);
+        const totalAttr = baseAttr + ajustesAttr.reduce((acc, m) => acc + m.valor, 0);
+        input.closest(".attr-card").title = textoDetalhamento(attr.label, baseAttr, "Base (valor cadastrado)", ajustesAttr, totalAttr);
     });
 
     // Recursos (PV, Energia) — máximo calculado, atual editável por qualquer um.
@@ -1109,9 +1172,20 @@ function renderizarAtributos(modificadoresPlanos) {
         // (levelup.js). Sem isso o ganho só existia enquanto o PV atual
         // não descia abaixo do máximo antigo.
         const bonusExtra = rec.key === "pv" ? (Number(d.pvBonusExtra) || 0) : 0;
-        const totalCalculado = Math.round(derivados.recursos[rec.key].total) + bonusExtra;
+        const infoRecurso = derivados.recursos[rec.key];
+        const totalCalculado = Math.round(infoRecurso.total) + bonusExtra;
         const total = maximoComOverride(rec.key, d, totalCalculado);
         if (rec.key === "pv") pvMaximoTotal = total;
+        // Tooltip do máximo: fórmula base + modificadores estruturados +
+        // bônus de dado de vida (Level Up) + override manual (Godmode),
+        // cada um só aparecendo se realmente existir.
+        const ajustesRecurso = [...infoRecurso.ajustes];
+        if (bonusExtra) ajustesRecurso.push({ valor: bonusExtra, origem: "Dado de vida (Level Up)" });
+        const override = d[rec.key + "MaximoOverride"];
+        const temOverride = override !== null && override !== undefined && override !== "";
+        if (temOverride) ajustesRecurso.push({ valor: total - (Math.round(infoRecurso.base) + ajustesRecurso.reduce((a, m) => a + m.valor, 0)), origem: "Override manual do Mestre (Godmode)" });
+        const cardRecurso = document.querySelector(`[data-recurso="${rec.key}"]`);
+        if (cardRecurso) cardRecurso.title = textoDetalhamento(rec.label, infoRecurso.base, "Base (fórmula do manual)", ajustesRecurso, total);
         if (maxLabel) {
             maxLabel.innerText = total;
             maxLabel.style.display = godmodeRecursos ? "none" : "";
@@ -1149,6 +1223,11 @@ function renderizarAtributos(modificadoresPlanos) {
     ATRIBUTOS_SECUNDARIOS.forEach(attr => {
         const span = document.querySelector(`[data-attr-secundario-valor="${attr.key}"]`);
         if (span) span.innerText = Math.round(derivados.secundarios[attr.key].total * 10) / 10;
+        const cardSecundario = document.querySelector(`[data-attr-secundario="${attr.key}"]`);
+        if (cardSecundario) {
+            const infoSec = derivados.secundarios[attr.key];
+            cardSecundario.title = textoDetalhamento(attr.label, infoSec.base, "Base (fórmula do manual)", infoSec.ajustes, infoSec.total);
+        }
     });
 
     window._ultimosDerivados = derivados; // usado pelo detalhamento ao clicar
@@ -1266,6 +1345,10 @@ function renderizarPericias(modificadoresPlanos) {
         const li = document.createElement("li");
         if (!podeEditar) li.classList.add("locked-visual");
         const textoSaude = calc.penalidadeSaude ? ` · ${calc.penalidadeSaude} (estado de saúde)` : "";
+        const ajustesPericia = calc.penalidadeSaude
+            ? [...calc.ajustes, { valor: calc.penalidadeSaude, origem: "Estado de saúde" }]
+            : calc.ajustes;
+        li.title = textoDetalhamento(p.nome, calc.nivel, "Nível da perícia", ajustesPericia, calc.total);
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
@@ -2309,6 +2392,8 @@ function renderizarInventario(modificadoresPlanos) {
     }
     const detalheBonus = carga.bonusExtra ? ` (base ${carga.limiteBase.toFixed(1)} + ${carga.bonusExtra >= 0 ? "+" : ""}${carga.bonusExtra} de modificadores)` : "";
     el.resumoCarga.innerText = `${carga.pesoTotal.toFixed(1)} kg / ${carga.limite.toFixed(1)} kg carregados (${pct}%)${detalheBonus}${avisoPenalidade}`;
+    const ajustesCarga = modificadoresQueAfetam("carga_extra", modificadoresPlanos);
+    el.resumoCarga.title = textoDetalhamento("Limite de carga", carga.limiteBase, "Base (Constituição)", ajustesCarga, carga.limite);
 
     const categorias = listaCategorias(fichaAtual);
     el.inventarioCategoriasNav.innerHTML = "";
@@ -2341,6 +2426,12 @@ function renderizarInventario(modificadoresPlanos) {
     } else {
         itensCategoria.forEach(([id, it]) => {
             const li = document.createElement("li");
+            // Item com modificadores estruturados (ex: colete que dá +Defesa)
+            // ganha o mesmo botão de ativo/desativado das vantagens/etc —
+            // pra "vestir/tirar" o efeito sem removê-lo do inventário.
+            const temEfeitoItem = !!(it.modificadores && it.modificadores.length);
+            const ativoItem = it.ativo !== false;
+            if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
             const podeUsar = itemPodeUsar(it) && !!it.periciaUso;
             const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
             const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
@@ -2376,6 +2467,7 @@ function renderizarInventario(modificadoresPlanos) {
                     <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${classeLabel}${calibreLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
                 </div>
                 <div class="entity-badges">
+                    ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
                     <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${it.periciaUso}` : "Sem perícia vinculada"}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
@@ -2383,6 +2475,12 @@ function renderizarInventario(modificadoresPlanos) {
                     <select class="select-transferir"></select>
                 </div>
             `;
+            if (temEfeitoItem) {
+                li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    alternarAtivoEntidade("inventario", id, !ativoItem);
+                });
+            }
             const selectTransferir = li.querySelector(".select-transferir");
             categorias.forEach(cat => {
                 if (cat.id === it.categoria) return;
@@ -3719,10 +3817,15 @@ async function salvarEntidadeAtual() {
     }
     const nome = el.modalNome.value.trim();
     if (!nome) { toast("Dê um nome antes de salvar.", "erro"); return; }
+    // Preserva o estado do botão ativo/desativado ao editar um registro
+    // já existente (senão salvar a descrição, por exemplo, reativaria
+    // sem querer um efeito que o jogador tinha desligado).
+    const existente = (id && fichaAtual[lista] && fichaAtual[lista][id]) || {};
     const registro = {
         nome,
         descricao: el.modalDescricao.value.trim(),
-        modificadores: lerModificadoresDoModal()
+        modificadores: lerModificadoresDoModal(),
+        ativo: existente.ativo ?? true
     };
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual[lista]) fichaAtual[lista] = {};
@@ -3837,10 +3940,15 @@ async function salvarItemDoModal(id) {
         projetil = { quantidade: Math.max(0, Number(el.modalProjetilQuantidade.value) || 0) };
     }
 
+    // Preserva o estado do botão ativo/desativado ao editar um item já
+    // existente (senão editar peso/descrição, por exemplo, reativaria
+    // sem querer um item que o jogador tinha desligado).
+    const existenteItem = (id && fichaAtual.inventario && fichaAtual.inventario[id]) || {};
     const registro = {
         nome,
         descricao: el.modalDescricao.value.trim(),
         modificadores: lerModificadoresDoModal(),
+        ativo: existenteItem.ativo ?? true,
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         peso: Number(el.modalPeso.value) || 0,
