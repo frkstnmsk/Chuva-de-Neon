@@ -273,6 +273,30 @@
     background: rgba(239, 68, 68, 0.16);
     box-shadow: 0 0 12px rgba(239, 68, 68, 0.25);
 }
+
+/* Estado de Energia (Energia Baixa / Energia Crítica / Morte) — mesmo
+   badge de aviso do estado de saúde acima, mas em azul (cor de Energia
+   no resto da ficha); ver calcularEstadoEnergia em regras.js. Fica
+   sempre um pouco abaixo do badge de saúde (ver margin-top). */
+.estado-energia-badge {
+    margin-top: 8px;
+    border-color: rgba(14, 165, 233, 0.5);
+    background: rgba(14, 165, 233, 0.08);
+    color: var(--neon-blue);
+    text-shadow: 0 0 6px rgba(14, 165, 233, 0.35);
+}
+.estado-energia-badge.energia-critica {
+    border-color: var(--neon-blue);
+    background: rgba(14, 165, 233, 0.16);
+    box-shadow: 0 0 12px rgba(14, 165, 233, 0.25);
+}
+.estado-energia-badge.morte {
+    border-color: var(--neon-red);
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--neon-red);
+    text-shadow: 0 0 6px rgba(239, 68, 68, 0.35);
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.35);
+}
 .attr-card.locked { opacity: 0.6; }
 .attr-card.locked input { pointer-events: none; opacity: 0.7; }
 
@@ -979,4 +1003,84 @@
 @media (max-width: 600px) {
     .app-shell { padding: 12px; }
     .tab-panel { padding: 18px; }
+}
+
+/* ---------- Overlay de Morte (0 PV / 0 Energia) ---------- */
+/* Cobre a tela inteira — enquanto visível, bloqueia qualquer interação
+   com o resto da ficha por baixo (ver #overlay-morte em ficha.html e
+   verificarMorte() em ficha.js). */
+.overlay-morte {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 5, 5, 0.94);
+    backdrop-filter: blur(2px);
+    padding: 24px;
+    text-align: center;
+}
+.overlay-morte-conteudo {
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+}
+.overlay-morte-conteudo h1 {
+    font-family: var(--font-display, var(--font-mono));
+    font-size: clamp(2.4rem, 10vw, 4.2rem);
+    color: var(--neon-red);
+    text-shadow: 0 0 18px rgba(239, 68, 68, 0.65), 0 0 40px rgba(239, 68, 68, 0.35);
+    letter-spacing: 2px;
+    margin: 0;
+    line-height: 1.05;
+}
+.overlay-morte-conteudo p {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin: 0;
+}
+.overlay-morte-botao {
+    font-size: 1.1rem;
+    font-weight: 700;
+    padding: 16px 26px;
+    animation: overlay-morte-tremor 0.18s infinite;
+}
+.overlay-morte-botao:disabled {
+    opacity: 0.5;
+    animation: none;
+    cursor: not-allowed;
+}
+@keyframes overlay-morte-tremor {
+    0% { transform: translate(0, 0) rotate(0deg); }
+    25% { transform: translate(-1px, 1px) rotate(-0.4deg); }
+    50% { transform: translate(1px, -1px) rotate(0.4deg); }
+    75% { transform: translate(-1px, -1px) rotate(-0.3deg); }
+    100% { transform: translate(0, 0) rotate(0deg); }
+}
+.overlay-morte-resultado {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    min-height: 1.2em;
+}
+.overlay-morte-resultado.sucesso { color: var(--neon-lime); }
+.overlay-morte-resultado.falha { color: var(--neon-red); }
+.overlay-morte.definitiva .overlay-morte-conteudo h1 { color: var(--neon-red); }
+.overlay-morte.definitiva .overlay-morte-botao { display: none; }
+
+/* Botão flutuante "Reviver (Godmode)" — só aparece pro Mestre em
+   Godmode quando a ficha aberta está morta (ver #btn-reviver-godmode
+   em ficha.html e verificarMorte() em ficha.js). */
+.godmode-revive-btn {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 9998;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    padding: 10px 16px;
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.45);
 }

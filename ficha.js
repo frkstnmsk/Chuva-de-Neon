@@ -12,7 +12,8 @@ import {
     rolarD20, rolarDado,
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
     calcularDanoDesarmado, calcularDificuldadeArmaFogo, MAX_ATRIBUTO_JOGO,
-    calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada
+    calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
+    calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -27,7 +28,8 @@ import {
     ALCANCES_ARMA_FOGO, PADROES_RECUO, rotuloAlcanceArmaFogo, rotuloPadraoRecuo,
     modificadorRecuo, ESCALA_MULT_DESARMADO, ehGolpeDesarmadoComDano,
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
-    atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR
+    atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
+    LOCAIS_MIRA, localMiraPorKey
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -62,7 +64,7 @@ import {
     PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal,
     ouvirTodasAsFichas, darXp, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
-    mestreRolarDado, aplicarDano,
+    mestreRolarDado, aplicarDano, testarSangramento,
     ouvirNpcs, excluirNpc, passarODia,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
@@ -210,6 +212,13 @@ const el = {
     gridAtributosSecundarios: document.getElementById("grid-atributos-secundarios"),
     gridRecursos: document.getElementById("grid-recursos"),
     estadoSaudeBadge: document.getElementById("estado-saude-badge"),
+    estadoEnergiaBadge: document.getElementById("estado-energia-badge"),
+    overlayMorte: document.getElementById("overlay-morte"),
+    overlayMorteTitulo: document.getElementById("overlay-morte-titulo"),
+    overlayMorteTexto: document.getElementById("overlay-morte-texto"),
+    btnNaoQueroMorrer: document.getElementById("btn-nao-quero-morrer"),
+    overlayMorteResultado: document.getElementById("overlay-morte-resultado"),
+    btnReviverGodmode: document.getElementById("btn-reviver-godmode"),
     listaPericias: document.getElementById("lista-pericias"),
     btnAddPericia: document.getElementById("btn-add-pericia"),
     listaVantagens: document.getElementById("lista-vantagens"),
@@ -397,6 +406,9 @@ async function init() {
     });
 
     el.btnSalvar.addEventListener("click", () => salvarTudo(true));
+
+    el.btnNaoQueroMorrer.addEventListener("click", tentarReanimacao);
+    el.btnReviverGodmode.addEventListener("click", reviverGodmode);
 
     if (isMestre) {
         el.painelMestreSeletor.style.display = "flex";
@@ -870,6 +882,7 @@ function renderizarTudo() {
     renderizarPerfil();
     renderizarFinancas();
     renderizarAtributos(modificadoresPlanos);
+    verificarMorte();
     renderizarPericias(modificadoresPlanos);
     renderizarInventario(modificadoresPlanos);
     renderizarCombate();
@@ -1162,6 +1175,7 @@ function renderizarAtributos(modificadoresPlanos) {
     const derivados = calcularDerivados(d, modificadoresPlanos);
     const godmodeRecursos = isMestre && godmodeAtivo;
     let pvMaximoTotal = 0;
+    let energiaMaximoTotal = 0;
     RECURSOS.forEach(rec => {
         const maxLabel = document.querySelector(`[data-recurso-max="${rec.key}"]`);
         const maxInput = document.querySelector(`[data-recurso-max-input="${rec.key}"]`);
@@ -1176,6 +1190,7 @@ function renderizarAtributos(modificadoresPlanos) {
         const totalCalculado = Math.round(infoRecurso.total) + bonusExtra;
         const total = maximoComOverride(rec.key, d, totalCalculado);
         if (rec.key === "pv") pvMaximoTotal = total;
+        if (rec.key === "energia") energiaMaximoTotal = total;
         // Tooltip do máximo: fórmula base + modificadores estruturados +
         // bônus de dado de vida (Level Up) + override manual (Godmode),
         // cada um só aparecendo se realmente existir.
@@ -1219,6 +1234,16 @@ function renderizarAtributos(modificadoresPlanos) {
     derivados.secundarios.velocidade = aplicarEstadoSaudeVelocidade(derivados.secundarios.velocidade, estadoSaude);
     renderizarEstadoSaude(estadoSaude);
 
+    // Estado de Energia (Energia Baixa / Energia Crítica / Morte — ver
+    // regras.js) a partir da Energia atual x Energia máxima. Mesma
+    // filosofia do estado de saúde: o efeito em testes (físicos/mentais)
+    // é lido depois por penalidadeEnergiaParaPericia() em toda rolagem
+    // de perícia. Reaproveita o mesmo toggle de Godmode que já ignora a
+    // penalidade de saúde — "ignorar penalidade" no Godmode passa a
+    // valer pros dois recursos vitais de uma vez.
+    const estadoEnergia = calcularEstadoEnergia(d.energiaAtual, energiaMaximoTotal, ignorarPenalidadeSaude);
+    renderizarEstadoEnergia(estadoEnergia);
+
     // Secundários calculados
     ATRIBUTOS_SECUNDARIOS.forEach(attr => {
         const span = document.querySelector(`[data-attr-secundario-valor="${attr.key}"]`);
@@ -1233,6 +1258,7 @@ function renderizarAtributos(modificadoresPlanos) {
     window._ultimosDerivados = derivados; // usado pelo detalhamento ao clicar
     window._ultimosModificadores = modificadoresPlanos;
     window._estadoSaudeAtual = estadoSaude; // usado por penalidadeTestesAtual() nas rolagens
+    window._estadoEnergiaAtual = estadoEnergia; // usado por penalidadeEnergiaParaPericia() nas rolagens
 }
 
 // Atualiza o badge de aviso "Machucado"/"Muito Machucado" (some quando o
@@ -1255,6 +1281,184 @@ function renderizarEstadoSaude(estadoSaude) {
 // em renderizarAtributos, que sempre roda antes das demais seções.
 function penalidadeTestesAtual() {
     return (window._estadoSaudeAtual && window._estadoSaudeAtual.penalidadeTestes) || 0;
+}
+
+// Atualiza o badge de aviso "Energia Baixa"/"Energia Crítica"/"Morte"
+// (some quando a Energia atual está saudável) — mesmo padrão visual de
+// renderizarEstadoSaude acima.
+function renderizarEstadoEnergia(estadoEnergia) {
+    if (!el.estadoEnergiaBadge) return;
+    if (!estadoEnergia || !estadoEnergia.estado) {
+        el.estadoEnergiaBadge.style.display = "none";
+        el.estadoEnergiaBadge.innerHTML = "";
+        return;
+    }
+    el.estadoEnergiaBadge.style.display = "block";
+    el.estadoEnergiaBadge.classList.toggle("energia-critica", estadoEnergia.estado === "energia_critica");
+    el.estadoEnergiaBadge.classList.toggle("morte", estadoEnergia.estado === "morte");
+    if (estadoEnergia.morte) {
+        el.estadoEnergiaBadge.innerHTML = `<strong>${escapeHtml(estadoEnergia.label)}</strong> — Energia chegou a 0. O personagem não sobrevive ao esgotamento.`;
+        return;
+    }
+    el.estadoEnergiaBadge.innerHTML = `<strong>${escapeHtml(estadoEnergia.label)}</strong> — ${estadoEnergia.penalidadeFisica} em testes físicos${estadoEnergia.penalidadeMental ? ` · ${estadoEnergia.penalidadeMental} em testes mentais` : ""}`;
+}
+
+// Penalidade extra (além do estado de saúde) que o estado de Energia
+// atual aplica sobre uma categoria de teste específica ("fisica" ou
+// "mental" — ver CATEGORIAS_PERICIA em dados-manual.js). Testes sociais
+// e perícias "legado" sem categoria conhecida não são afetados.
+function penalidadeEnergiaPara(categoria) {
+    const estado = window._estadoEnergiaAtual;
+    if (!estado || !estado.estado) return 0;
+    if (categoria === "fisica") return estado.penalidadeFisica || 0;
+    if (categoria === "mental") return estado.penalidadeMental || 0;
+    return 0;
+}
+
+// Mesma ideia acima, mas resolvendo a categoria a partir do nome da
+// perícia (consulta a lista fechada do manual em dados-manual.js).
+function penalidadeEnergiaParaPericia(nomePericia) {
+    const info = buscarPericiaPorNome(nomePericia);
+    return info ? penalidadeEnergiaPara(info.categoria) : 0;
+}
+
+// Badge de "Machucado"/"Muito Machucado"/"Morte" pra uma linha de
+// participante do Gerenciador de Combate — mesmo helper compartilhado
+// que badgeEstadoEnergiaCombate() logo abaixo.
+function badgeEstadoSaudeCombate(p) {
+    if (!p.estadoSaude) return "";
+    const titulo = p.estadoSaude === "morte"
+        ? "PV chegou a 0"
+        : `-${p.estadoSaude === "muito_machucado" ? "4" : "2"} em todos os testes`;
+    return ` <span class="mod-pill negativo" title="${titulo}">${escapeHtml(p.estadoSaudeLabel)}</span>`;
+}
+
+// Badge de "Energia Baixa"/"Energia Crítica"/"Morte" pra uma linha de
+// participante do Gerenciador de Combate (painel do jogador e painel
+// do Mestre reaproveitam esta mesma função) — mesmo padrão visual do
+// badge de estado de saúde já usado nessas listas.
+function badgeEstadoEnergiaCombate(p) {
+    if (!p.estadoEnergia) return "";
+    const titulo = p.estadoEnergia === "morte"
+        ? "Energia esgotada"
+        : (p.estadoEnergia === "energia_critica" ? "-3 em testes físicos, -2 em testes mentais" : "-2 em testes físicos");
+    return ` <span class="mod-pill negativo" title="${titulo}">${escapeHtml(p.estadoEnergiaLabel)}</span>`;
+}
+
+// Badges de status ativos por turno (Tick System — ex: Sangramento) pra
+// uma linha de participante do Gerenciador de Combate. Um badge por
+// efeito ativo, mostrando quantos turnos faltam — ver
+// aplicarSangramento/processarStatusInicioTurno em mestre.js.
+function badgeStatusAtivosCombate(p) {
+    if (!p.statusAtivos) return "";
+    return Object.values(p.statusAtivos)
+        .filter(s => s && (Number(s.turnosRestantes) || 0) > 0)
+        .map(s => ` <span class="mod-pill negativo" title="${escapeHtml(s.origem || "")} — ${s.danoPorTurno ?? `1d${s.faces || 1}`} de dano fixo por turno">🩸 ${escapeHtml(s.label || s.tipo)} (${s.turnosRestantes})</span>`)
+        .join("");
+}
+
+// ---------------------------------------------------------------------
+// Overlay de Morte (0 PV ou 0 Energia — ver calcularEstadoSaude e
+// calcularEstadoEnergia em regras.js). Chamada a cada renderizarTudo(),
+// depois que renderizarAtributos() já recalculou window._estadoSaudeAtual
+// e window._estadoEnergiaAtual pro ciclo atual.
+//
+// Godmode do Mestre ignora a trava por completo (mesma filosofia usada
+// em podeEditarPericiaAtributo() etc.) — é a única forma de mexer numa
+// ficha morta depois da falha na reanimação.
+// ---------------------------------------------------------------------
+function verificarMorte() {
+    if (isMestre && godmodeAtivo) {
+        el.overlayMorte.style.display = "none";
+        // Godmode ignora o overlay cheio (pra não travar a edição), mas
+        // se a ficha ainda estiver morta por baixo, deixa um botão
+        // pequeno no canto pra reverter sem precisar mexer no Firebase
+        // na mão.
+        const definitivaGodmode = !!(fichaAtual.dados && fichaAtual.dados.mortoDeVez);
+        const morreuAgoraGodmode = !!((window._estadoSaudeAtual && window._estadoSaudeAtual.morte) || (window._estadoEnergiaAtual && window._estadoEnergiaAtual.morte));
+        el.btnReviverGodmode.style.display = (definitivaGodmode || morreuAgoraGodmode) ? "block" : "none";
+        return;
+    }
+    el.btnReviverGodmode.style.display = "none";
+
+    const definitiva = !!(fichaAtual.dados && fichaAtual.dados.mortoDeVez);
+    const morreuAgora = !!((window._estadoSaudeAtual && window._estadoSaudeAtual.morte) || (window._estadoEnergiaAtual && window._estadoEnergiaAtual.morte));
+
+    if (!definitiva && !morreuAgora) {
+        el.overlayMorte.style.display = "none";
+        el.overlayMorte.classList.remove("definitiva");
+        el.overlayMorteResultado.innerHTML = "";
+        el.overlayMorteResultado.className = "overlay-morte-resultado";
+        el.btnNaoQueroMorrer.disabled = false;
+        return;
+    }
+
+    el.overlayMorte.style.display = "flex";
+    el.overlayMorte.classList.toggle("definitiva", definitiva);
+    if (definitiva) {
+        el.overlayMorteTitulo.innerText = "VOCÊ MORREU!";
+        el.overlayMorteTexto.innerText = "A reanimação falhou. Não tem mais volta — só o Mestre pode mexer nessa ficha agora.";
+    } else {
+        el.overlayMorteTitulo.innerText = "VOCÊ MORREU!";
+        el.overlayMorteTexto.innerText = "Role 3d20 contra dificuldade 11. Acerte os três pra voltar com 1 PV.";
+    }
+}
+
+// Rola o teste de reanimação (3d20, dif 11, precisa dos três) ao
+// clicar em "AAAAA NÃO QUERO MORRER". Sucesso total: pvAtual volta a 1
+// (e energiaAtual também, se estava em 0, pra não reabrir o overlay na
+// hora). Qualquer falha: mortoDeVez fica marcado pra sempre — ver
+// verificarMorte() acima.
+async function tentarReanimacao() {
+    if (el.btnNaoQueroMorrer.disabled) return;
+    el.btnNaoQueroMorrer.disabled = true;
+
+    const resultado = rolarTesteReanimacao();
+    const detalheDados = resultado.dados
+        .map((d, i) => `${d}${resultado.sucessos[i] ? " ✓" : " ✗"}`)
+        .join(" · ");
+
+    el.overlayMorteResultado.className = `overlay-morte-resultado ${resultado.sucessoTotal ? "sucesso" : "falha"}`;
+    el.overlayMorteResultado.innerText = `${detalheDados} — ${resultado.sucessoTotal ? "sobreviveu!" : "não resistiu."}`;
+
+    await registrarRolagem({
+        quem: `${fichaAtual.dados.nome || fichaAtualId} (reanimação)`,
+        modificador: 0,
+        resultado: detalheDados,
+        detalhe: `Teste de reanimação (dif ${DIFICULDADE_REANIMACAO}, precisa dos 3): ${resultado.sucessoTotal ? "SUCESSO" : "FALHA"}`,
+        critico: resultado.sucessoTotal ? "acerto" : "falha"
+    });
+
+    if (resultado.sucessoTotal) {
+        const atualizacoes = { pvAtual: 1 };
+        // energiaAtual null/undefined = Energia cheia por convenção (ver
+        // calcularEstadoEnergia) — só mexe se realmente estava em 0 ou
+        // menos, pra não zerar a Energia de quem morreu só por causa do PV.
+        const energiaAtual = fichaAtual.dados.energiaAtual;
+        if (energiaAtual !== null && energiaAtual !== undefined && Number(energiaAtual) <= 0) {
+            atualizacoes.energiaAtual = 1;
+        }
+        await update(ref(db, `${caminhoBase()}/dados`), atualizacoes);
+        toast("Reanimação bem-sucedida — voltou com 1 PV.", "sucesso");
+    } else {
+        await update(ref(db, `${caminhoBase()}/dados`), { mortoDeVez: true });
+        toast("A reanimação falhou. Morte definitiva.", "erro");
+    }
+}
+
+// "Reviver (Godmode)": botão de emergência só visível pro Mestre com
+// Godmode ativo (ver verificarMorte() acima), pra destravar uma ficha
+// morta sem precisar editar o Firebase na mão. Zera mortoDeVez e
+// devolve 1 PV (e 1 Energia, se estava zerada também).
+async function reviverGodmode() {
+    if (!(isMestre && godmodeAtivo)) return;
+    const atualizacoes = { pvAtual: 1, mortoDeVez: false };
+    const energiaAtual = fichaAtual.dados.energiaAtual;
+    if (energiaAtual !== null && energiaAtual !== undefined && Number(energiaAtual) <= 0) {
+        atualizacoes.energiaAtual = 1;
+    }
+    await update(ref(db, `${caminhoBase()}/dados`), atualizacoes);
+    toast("Ficha revivida via Godmode.", "sucesso");
 }
 
 // Máximo "de verdade" de um recurso (PV/Energia): normalmente é só o
@@ -1345,7 +1549,7 @@ function renderizarPericias(modificadoresPlanos) {
 
     ids.forEach(id => {
         const p = fichaAtual.pericias[id];
-        const calc = calcularTotalPericia(p, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual());
+        const calc = calcularTotalPericia(p, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(p.nome));
         const li = document.createElement("li");
         if (!podeEditar) li.classList.add("locked-visual");
         const textoSaude = calc.penalidadeSaude ? ` · ${calc.penalidadeSaude} (estado de saúde)` : "";
@@ -1445,7 +1649,7 @@ async function executarManobraEsquivar(modificadoresPlanos) {
     const participanteIdParaGastarAcao = consumo.participanteId;
 
     const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
-    const modAgilidade = derivados.secundarios.agilidade.total + penalidadeTestesAtual();
+    const modAgilidade = derivados.secundarios.agilidade.total + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
     const bruto = rolarD20();
     const resultado = bruto + modAgilidade;
     const quem = isMestre
@@ -1484,8 +1688,9 @@ async function executarManobraEsquivar(modificadoresPlanos) {
 // ficha) vira -1 fixo, em vez do total calculado normalmente.
 function modificadorDePericiaComPenalidade(nomePericia, dadosPrimarios, pericias, modificadoresPlanos, penalidadeSaude = 0) {
     const entrada = Object.entries(pericias || {}).find(([, p]) => p.nome === nomePericia);
-    if (!entrada || (Number(entrada[1].nivel) || 0) <= 0) return -1 + (Number(penalidadeSaude) || 0);
-    return calcularTotalPericia(entrada[1], dadosPrimarios, modificadoresPlanos, penalidadeSaude).total;
+    const penalidadeTotal = (Number(penalidadeSaude) || 0) + penalidadeEnergiaParaPericia(nomePericia);
+    if (!entrada || (Number(entrada[1].nivel) || 0) <= 0) return -1 + penalidadeTotal;
+    return calcularTotalPericia(entrada[1], dadosPrimarios, modificadoresPlanos, penalidadeTotal).total;
 }
 
 // Só armas de fogo de verdade (não golpe desarmado nem arma branca) tem
@@ -1741,8 +1946,6 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
 
     contextoAtaque = { item: it, modificadoresPlanos };
     el.alvoTitulo.innerText = `Atacar com ${it.nome}`;
-    el.alvoCampoExtra.style.display = "none";
-    el.alvoCampoExtra.innerHTML = "";
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -1750,6 +1953,21 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
         opt.innerText = `${p.nome} (${p.tipo === "ficha" ? "jogador" : "NPC"})`;
         el.alvoSelect.appendChild(opt);
     });
+
+    // Golpes Mirados (manual): escolher onde vai acertar aumenta a
+    // dificuldade de acordo com o local (e o dano, no caso da Cabeça) —
+    // ver LOCAIS_MIRA em dados-manual.js. Cabeça só aparece pra arma de
+    // fogo de verdade (golpe desarmado nunca é "arma de fogo" mesmo com
+    // perícia de tiro vinculada, mesma checagem de sempre).
+    const ehFogoItem = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso) && !(it.arma && it.arma.desarmado);
+    const locaisDisponiveis = LOCAIS_MIRA.filter(l => !l.soArmaFogo || ehFogoItem);
+    el.alvoCampoExtra.style.display = "block";
+    el.alvoCampoExtra.innerHTML = `
+        <label for="alvo-local-mira-select">Mirar em</label>
+        <select id="alvo-local-mira-select">
+            ${locaisDisponiveis.map(l => `<option value="${l.key}">${escapeHtml(l.label)}${l.difMod ? ` (dificuldade +${l.difMod})` : ""}</option>`).join("")}
+        </select>
+    `;
     el.modalSelecionarAlvo.classList.add("active");
 }
 
@@ -1851,8 +2069,10 @@ function configurarModalSelecionarAlvo() {
         el.modalSelecionarAlvo.classList.remove("active");
         if (contextoAtaque) {
             const { item, modificadoresPlanos } = contextoAtaque;
+            const localMiraSelect = document.getElementById("alvo-local-mira-select");
+            const localMira = localMiraSelect ? localMiraSelect.value : "padrao";
             limparContextos();
-            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid });
+            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira });
         } else if (contextoAgarrar) {
             const { nomePericia, modificador } = contextoAgarrar;
             limparContextos();
@@ -2010,6 +2230,18 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const armaConfig = it.arma || {};
     const ehFogo = ehArmaDeFogo(nomePericia) && !armaConfig.desarmado;
 
+    // Golpes Mirados (manual): local do corpo escolhido pra mirar —
+    // aumenta a dificuldade (todo mundo, ver LOCAIS_MIRA em
+    // dados-manual.js) e, no caso da Cabeça, também o dano. Cabeça é
+    // exclusiva de arma de fogo de verdade — revalida aqui (além da UI
+    // já filtrar a opção) pra não dar pra burlar chamando a função
+    // direto com um localMira inválido pro tipo de golpe.
+    let localMira = localMiraPorKey(opcoes.localMira);
+    if (localMira.soArmaFogo && !ehFogo) localMira = localMiraPorKey("padrao");
+    const notaLocalMira = localMira.key !== "padrao"
+        ? ` Mirando: ${localMira.label} (dificuldade +${localMira.difMod}${localMira.bonusDanoFracao ? `, dano +${Math.round(localMira.bonusDanoFracao * 100)}%` : ""}).`
+        : "";
+
     // Recuo — só disparos de arma de fogo de verdade contam (golpe
     // desarmado nunca é "arma de fogo" mesmo se a perícia usada fosse
     // uma perícia de tiro, o que nem é o caso aqui). idDisparoAtual/chave
@@ -2049,7 +2281,10 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
     const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, criticoPositivo, criticoNegativo });
 
-    let dificuldade, nomeAlvo;
+    // constituicaoAlvo só é preenchida quando ehFogo (usada mais abaixo,
+    // depois do dano aplicado, pro teste de Constituição que decide SE o
+    // sangramento acontece — ver comentário lá embaixo).
+    let dificuldade, nomeAlvo, constituicaoAlvo = 0;
     try {
         if (participante.tipo === "ficha") {
             const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
@@ -2059,6 +2294,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
+                const modsAlvo = coletarModificadores(fichaAlvo);
+                // Constituição é atributo primário (não um secundário
+                // calculado) — reaproveita calcularDificuldadeDefesaJogador
+                // com base 0 só pra somar valor bruto + modificadores
+                // estruturados ("atributo:constituicao").
+                constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
                 const modsAlvo = coletarModificadores(fichaAlvo);
@@ -2073,6 +2314,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
+                constituicaoAlvo = Number(npc.constituicao) || 0;
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
                 const valorAtributo = atributoDefesaChave === "constituicao" ? (Number(npc.constituicao) || 0) : (Number(npc.agilidade) || 0);
@@ -2085,6 +2327,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         toast("Falha ao buscar dados do alvo.", "erro");
         return;
     }
+
+    // Golpes Mirados: agravante de dificuldade do local escolhido soma
+    // em cima da dificuldade normal (de acerto da arma de fogo, ou de
+    // defesa do alvo pra corpo a corpo/desarmado).
+    dificuldade += localMira.difMod;
 
     const acertou = resultadoAtaque >= dificuldade;
 
@@ -2120,7 +2367,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     if (!acertou) {
         const notaFalhaCritica = criticoNegativo ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre." : "";
-        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.${notaFalhaCritica}\n${detalheRolagem}`;
+        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.${notaLocalMira}${notaFalhaCritica}\n${detalheRolagem}`;
         await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoAtaque, detalhe, critico: criticoNegativo ? "falha" : null });
         toast(detalhe, criticoNegativo ? "critico-falha" : "erro");
         return;
@@ -2153,6 +2400,15 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         tipoDanoKey = armaConfig.tipoDano;
     }
     const tipoDanoLabel = TIPOS_DANO.find(t => t.key === tipoDanoKey)?.label || tipoDanoKey || "—";
+
+    // Golpes Mirados (manual): Cabeça aumenta o dano em 1/3 — aplicado
+    // sobre o dano "base" do golpe, ANTES do Acerto Crítico (que dobra
+    // o valor já com esse bônus embutido).
+    if (localMira.bonusDanoFracao > 0) {
+        const bonusMira = Math.floor(danoTotal * localMira.bonusDanoFracao);
+        danoTotal += bonusMira;
+        danoDadoTexto += ` [+${bonusMira} por mirar ${localMira.label}]`;
+    }
 
     // Acerto Crítico (manual): dobra o dano do ataque. Aplicado ANTES
     // das reduções de Agarrado/alcance limitado (que também mexem em
@@ -2199,7 +2455,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // em tempo real pra todo mundo) com tudo que falta pra fechar o
     // golpe, e devolve o controle: quem responde é quem recebeu o golpe,
     // via responderReacaoPendente() — ver mestre.js.
-    if (combateComIniciativaAtivo() && Number(participante.esquivasDisponiveis) > 0) {
+    // Disparo de arma de fogo NUNCA passa por aqui (manual: não dá pra
+    // esquivar, aparar NEM bloquear tiro — só golpes corpo a corpo/arma
+    // branca têm essa reação). Um tiro que acerta sempre vai direto pro
+    // caminho de dano logo abaixo.
+    if (!ehFogo && combateComIniciativaAtivo() && Number(participante.esquivasDisponiveis) > 0) {
         const atacanteTipo = modoNpc ? "npc" : "ficha";
         const atacanteRefId = modoNpc ? npcAtualId : fichaAtualId;
         const atacantePid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
@@ -2210,11 +2470,14 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             criticoPositivo, notaCritico,
             alvoTipo: participante.tipo, alvoRefId: participante.refId,
             resultadoAtaque, dificuldade, modAtaque,
-            // Não dá pra esquivar/aparar de tiro — só de golpes corpo a
-            // corpo/arma branca. A tela de reação usa essa flag pra
-            // esconder os botões "Esquivar"/"Aparar" quando o golpe veio
-            // de arma de fogo.
-            ehArmaFogo: ehFogo,
+            // Sempre false neste ponto (golpe de arma de fogo já retornou
+            // mais acima) — mantido só por compatibilidade com o que a
+            // tela de reação em mestre.js/ficha.js ainda espera receber.
+            ehArmaFogo: false,
+            // Golpes Mirados (manual): local escolhido, só pra exibir a
+            // nota no Log final, e se a redução de armadura do alvo vale
+            // pra esse local — ver LOCAIS_MIRA em dados-manual.js.
+            notaLocalMira, reduzArmaduraLocal: localMira.reduzArmadura,
             // Manual do Aparar: "não é possível aparar ataques de arma
             // branca estando desarmado" — a tela de reação usa isso pra
             // só oferecer perícias de arma branca (não as desarmadas)
@@ -2228,24 +2491,49 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             detalheRolagem, efeitoTexto:
                 (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : ""
         });
-        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
+        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
         toast(detalheAguardando, criticoPositivo ? "critico-acerto" : "ok");
         return;
     }
 
     let resultadoDano;
     try {
-        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey);
+        // Golpes Mirados: a redução de armadura do alvo só vale pro
+        // local escolhido (localMira.reduzArmadura) — pra locais sem
+        // essa cobertura (Cabeça/Membro/Extremidade), manda
+        // tipoDanoKey null pra aplicarDano não descontar nada (mesmo
+        // truque usado em mestre.js/responderReacaoPendente).
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, localMira.reduzArmadura ? tipoDanoKey : null);
     } catch (err) {
         console.error(err);
         toast("Ataque acertou, mas falhou ao aplicar o dano no alvo.", "erro");
         return;
     }
 
+    // Sangramento por Disparo de Arma de Fogo (manual): só entra em jogo
+    // se o tiro causou dano de verdade e só faz sentido dentro do
+    // Gerenciador de Combate com iniciativa (é lá que existe a noção de
+    // "turno" pra decrementar — ver processarStatusInicioTurno em
+    // mestre.js, chamada de avancarTurnoCombate). O ferimento só sangra
+    // de fato se o teste de Constituição (dif. 10 + nível da arma)
+    // falhar — ver testarSangramento em mestre.js, que já decide isso e
+    // só chama aplicarSangramento internamente quando o teste falha.
+    let notaSangramento = "";
+    if (ehFogo && danoTotal > 0 && participante._pid && combateComIniciativaAtivo()) {
+        const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal);
+        if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+    }
+
+    // Tiro de arma de fogo não pode ser esquivado, aparado NEM bloqueado
+    // (manual) — por isso o golpe que acerta vai sempre direto pro dano
+    // cheio, sem reação nenhuma do alvo. "🔫 X foi baleado!" deixa isso
+    // bem claro no Log/tela pra quem está acompanhando o combate.
+    const notaBaleado = ehFogo ? ` 🔫 ${nomeAlvo} foi baleado!` : "";
+
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}. Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
@@ -2753,7 +3041,7 @@ function renderizarManobrasCombate() {
                         toast("Agarrar precisa de um combate com participantes cadastrado.", "erro");
                         return;
                     }
-                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                     abrirModalSelecionarAlvoAgarrar(nomePericia, modificador);
                     return;
                 }
@@ -2767,7 +3055,7 @@ function renderizarManobrasCombate() {
                         toast("Delimitar alcance precisa de um combate com participantes cadastrado.", "erro");
                         return;
                     }
-                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                     abrirModalSelecionarAlvoDelimitar(nomePericia, modificador);
                     return;
                 }
@@ -2776,7 +3064,7 @@ function renderizarManobrasCombate() {
                         toast("Retomar alcance precisa de um combate com participantes cadastrado.", "erro");
                         return;
                     }
-                    const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                     abrirModalSelecionarAlvoRetomar(nomePericia, modificador);
                     return;
                 }
@@ -2810,7 +3098,7 @@ function renderizarManobrasCombate() {
                     if (combateTemParticipantes()) {
                         abrirModalSelecionarAlvo(itemDesarmado, modificadoresPlanos);
                     } else {
-                        const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                        const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                         const forcaAtual = Number(fichaAtual.dados.forca) || 0;
                         const danoCalc = calcularDanoDesarmado(forcaAtual, especificidade.escalaMult, especificidade);
                         const dadoTexto = danoCalc.dadoMultiplicador > 1
@@ -2821,7 +3109,7 @@ function renderizarManobrasCombate() {
                     return;
                 }
 
-                const modificador = semPericia ? (-1 + penalidadeTestesAtual()) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual()).total;
+                const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                 await rolarERegistrar(`${m.nome} (${nomePericia})`, modificador);
             });
         });
@@ -4730,7 +5018,9 @@ function montarPainelIniciativaJogador() {
         const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
             ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
             : "";
-        const badgeSaude = p.estadoSaude ? ` <span class="mod-pill negativo" title="-${p.estadoSaude === "muito_machucado" ? "4" : "2"} em todos os testes">${escapeHtml(p.estadoSaudeLabel)}</span>` : "";
+        const badgeSaude = badgeEstadoSaudeCombate(p);
+        const badgeEnergia = badgeEstadoEnergiaCombate(p);
+        const badgeStatus = badgeStatusAtivosCombate(p);
         // Jogador não vê o PV de NPC (só o próprio e o de outros
         // jogadores) — só o Mestre tem essa informação, no Gerenciador de
         // Combate dele (montarGerenciadorCombate). Sem isso o painel do
@@ -4738,7 +5028,7 @@ function montarPainelIniciativaJogador() {
         const pvTexto = p.tipo === "npc" ? "" : `<span>${p.pv}/${p.pvMax} PV</span>`;
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações</span>
@@ -5790,9 +6080,11 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
                 ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
                 : "";
-            const badgeSaude = p.estadoSaude ? ` <span class="mod-pill negativo" title="-${p.estadoSaude === "muito_machucado" ? "4" : "2"} em todos os testes">${escapeHtml(p.estadoSaudeLabel)}</span>` : "";
+            const badgeSaude = badgeEstadoSaudeCombate(p);
+            const badgeEnergia = badgeEstadoEnergiaCombate(p);
+            const badgeStatus = badgeStatusAtivosCombate(p);
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações</span>
@@ -5826,9 +6118,10 @@ function montarGerenciadorCombate(corpoOriginal) {
     btnAvancarTurno.innerText = "Avançar Turno →";
     btnAvancarTurno.addEventListener("click", async () => {
         try {
-            const { nome } = await avancarTurnoCombate();
+            const { nome, notasStatus } = await avancarTurnoCombate();
             await resetarDisparosTurno(); // zera o Recuo acumulado junto com a virada de turno
             toast(`Turno de ${nome}.`);
+            (notasStatus || []).forEach(nota => toast(nota, "erro"));
         } catch (e) {
             toast(e.message || "Falha ao avançar o turno.", "erro");
         }

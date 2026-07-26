@@ -674,6 +674,32 @@ export const TIPOS_DANO = [
     { key: "especial", label: "Especial (ácido, mental, outro)" }
 ];
 
+// ---------------------------------------------------------------------
+// Golpes Mirados (manual): local do corpo escolhido pra mirar o
+// ataque, cada um com seu próprio agravante de dificuldade. A Cabeça só
+// pode ser mirada com arma de fogo de verdade ("Atirar com arma de
+// fogo especificamente na cabeça...", manual) — golpes corpo a
+// corpo/arma branca não têm essa opção. Mirar na Cabeça também aumenta
+// o dano em 1/3 (bonusDanoFracao).
+//
+// reduzArmadura: false significa que a redução de dano de colete/placa
+// NÃO vale pra esse local — regra de mesa adotada enquanto a ficha só
+// tem UM valor de redução por item (cobrindo o torso); Cabeça, Membro e
+// Extremidade ficam sem essa proteção até a ficha ganhar armadura
+// detalhada por parte do corpo.
+// ---------------------------------------------------------------------
+export const LOCAIS_MIRA = [
+    { key: "padrao", label: "Padrão (sem mirar)", difMod: 0, reduzArmadura: true, soArmaFogo: false, bonusDanoFracao: 0 },
+    { key: "torso", label: "Torso", difMod: 1, reduzArmadura: true, soArmaFogo: false, bonusDanoFracao: 0 },
+    { key: "membro", label: "Membro (braço/perna)", difMod: 2, reduzArmadura: false, soArmaFogo: false, bonusDanoFracao: 0 },
+    { key: "extremidade", label: "Extremidade (mão/pé)", difMod: 3, reduzArmadura: false, soArmaFogo: false, bonusDanoFracao: 0 },
+    { key: "cabeca", label: "Cabeça (só arma de fogo)", difMod: 4, reduzArmadura: false, soArmaFogo: true, bonusDanoFracao: 1 / 3 }
+];
+
+export function localMiraPorKey(key) {
+    return LOCAIS_MIRA.find(l => l.key === key) || LOCAIS_MIRA[0];
+}
+
 // Tags cujo item pode ter redução de dano configurada (coletes, placas
 // balísticas, etc — manual pg. 52-53). Um mesmo item pode reduzir vários
 // tipos de dano diferentes, cada um com seu próprio valor de redução.

@@ -36,6 +36,7 @@ export function normalizarFicha(raw) {
             sabedoria: dados.sabedoria ?? 0, inteligencia: dados.inteligencia ?? 0,
             raciocinio: dados.raciocinio ?? 0, carisma: dados.carisma ?? 0, manipulacao: dados.manipulacao ?? 0,
             pvAtual: dados.pvAtual ?? null, energiaAtual: dados.energiaAtual ?? null,
+            mortoDeVez: dados.mortoDeVez ?? false,
             pvBonusExtra: dados.pvBonusExtra ?? 0,
             padraoDeVida: dados.padraoDeVida ?? "",
             ganhoFixo: dados.ganhoFixo ?? 0,
@@ -173,6 +174,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
             forca: 0, constituicao: 0, destreza: 0, sabedoria: 0,
             inteligencia: 0, raciocinio: 0, carisma: 0, manipulacao: 0,
             pvAtual: null, energiaAtual: null,
+            mortoDeVez: false,
             pvBonusExtra: 0,
             padraoDeVida: "",
             ganhoFixo: 0,
@@ -263,6 +265,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
             sabedoria: ap.sabedoria ?? 0, inteligencia: ap.inteligencia ?? 0,
             raciocinio: ap.raciocinio ?? 0, carisma: ap.carisma ?? 0, manipulacao: ap.manipulacao ?? 0,
             pvAtual: npc.pvAtual ?? null, energiaAtual: npc.energiaAtual ?? null,
+            mortoDeVez: npc.mortoDeVez ?? false,
             pvBonusExtra: 0,
             padraoDeVida: "", ganhoFixo: 0, ultimoPagamentoCustoVida: 0,
             criacaoConcluida: true

@@ -232,6 +232,7 @@
                     <div class="section-header">Recursos vitais</div>
                     <div class="grid-recursos" id="grid-recursos"></div>
                     <div class="estado-saude-badge" id="estado-saude-badge" style="display:none;"></div>
+                    <div class="estado-saude-badge estado-energia-badge" id="estado-energia-badge" style="display:none;"></div>
 
                     <div class="section-header">Atributos secundários (calculados) <span class="hint-inline">base do manual + modificadores de itens/vantagens/desvantagens/especializações</span></div>
                     <div class="grid-atributos" id="grid-atributos-secundarios"></div>
@@ -685,6 +686,27 @@
         <button class="modarma-remover btn-red" type="button" title="Remover">×</button>
     </div>
 </template>
+
+<!-- Overlay de Morte — fica escondido (display:none) até o PV ou a
+     Energia chegarem a 0 (ver calcularEstadoSaude/calcularEstadoEnergia
+     em regras.js e verificarMorte() em ficha.js). Cobre a tela inteira
+     de propósito: enquanto está visível, ninguém (exceto o Mestre em
+     Godmode) consegue interagir com o resto da ficha por baixo dele. -->
+<div id="overlay-morte" class="overlay-morte" style="display:none;">
+    <div class="overlay-morte-conteudo">
+        <h1 id="overlay-morte-titulo">VOCÊ MORREU!</h1>
+        <p id="overlay-morte-texto"></p>
+        <button type="button" id="btn-nao-quero-morrer" class="btn-red overlay-morte-botao">AAAAA NÃO QUERO MORRER</button>
+        <div id="overlay-morte-resultado" class="overlay-morte-resultado"></div>
+    </div>
+</div>
+
+<!-- Botão pequeno, canto da tela, não bloqueia nada — só aparece pro
+     Mestre com Godmode ativo quando a ficha aberta está morta (Godmode
+     ignora o overlay cheio de propósito, ver verificarMorte() em
+     ficha.js, então essa é a única forma de "destravar" a ficha sem
+     mexer direto no Firebase). -->
+<button type="button" id="btn-reviver-godmode" class="btn-red godmode-revive-btn" style="display:none;" title="Zera mortoDeVez e devolve 1 PV/Energia">💀 Reviver (Godmode)</button>
 
 <div id="toast"></div>
 

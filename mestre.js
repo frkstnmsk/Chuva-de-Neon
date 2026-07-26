@@ -10,7 +10,8 @@ import { ref, set, get, update, push, remove, onValue } from "https://www.gstati
 import { caminhoMesa } from "./mesa.js";
 import {
     rolarD20, rolarDado, calcularDerivados, coletarModificadores,
-    calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada
+    calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
+    calcularEstadoEnergia, dificuldadeSangramento
 } from "./regras.js";
 import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calendario.js";
 import { avancarUmDiaTreinamento } from "./treinamento.js";
@@ -151,6 +152,114 @@ export async function causarDanoJogador(fichaId, valor) {
 
 export async function causarDanoNpc(npcId, valor) {
     return aplicarDano("npc", npcId, valor, null);
+}
+
+// ---------------------------------------------------------------------
+// Status por turno (Tick System) — efeitos que ficam "grudados" num
+// participante do Gerenciador de Combate e se resolvem sozinhos a cada
+// troca de turno, com contagem regressiva própria. Guardados em
+// combateAtivo/participantes/{id}/statusAtivos/{chave} — cada chave é
+// um efeito independente (dá pra ter mais de um ativo ao mesmo tempo).
+// Processados em processarStatusInicioTurno(), chamada de dentro de
+// avancarTurnoCombate() logo abaixo.
+// ---------------------------------------------------------------------
+
+// Sangramento por Disparo de Arma de Fogo (manual): dura 3 turnos. O
+// dano por turno é 1d(metade do dano do ataque, arredondado pra baixo)
+// — mas SÓ ROLADO UMA VEZ, no momento do tiro: o mesmo valor se repete
+// nos três turnos (exemplo do manual: 20 de dano → 1d10 → rolou 7 →
+// recebe 7 de dano em cada um dos três turnos, não um novo 1d10 a cada
+// vez). Cada tiro que causa Sangramento entra como uma entrada NOVA e
+// independente (não sobrescreve/renova a anterior) — vários tiros
+// seguidos empilham vários sangramentos simultâneos, cada um com sua
+// própria contagem e seu próprio dano fixo, todos tickando juntos a
+// cada turno (ver processarStatusInicioTurno abaixo).
+export async function aplicarSangramento(participanteId, danoOriginalBruto) {
+    if (!participanteId) return;
+    const faces = Math.max(1, Math.floor((Number(danoOriginalBruto) || 0) / 2));
+    const danoPorTurno = rolarDado(faces);
+    const novaRef = push(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos`)));
+    await set(novaRef, {
+        tipo: "sangramento",
+        label: "Sangramento",
+        turnosRestantes: 3,
+        faces,
+        danoPorTurno,
+        origem: "Disparo de arma de fogo"
+    });
+    return { faces, danoPorTurno };
+}
+
+// Teste de Constituição contra Sangramento (manual): rolado uma vez por
+// tiro que causa dano de verdade, ANTES de decidir se aplicarSangramento
+// entra em ação. dificuldade = 10 + nível da arma (dificuldadeSangramento
+// em regras.js). Sucesso (d20 + Constituição do alvo >= dificuldade)
+// resiste — o ferimento não sangra, sem nenhum efeito mecânico. Falha
+// entra como uma entrada nova de Sangramento (mesma regra de
+// empilhamento de sempre: cada tiro que sangra é independente dos
+// outros). Retorna o detalhe da rolagem pro chamador registrar no Log.
+export async function testarSangramento(participanteId, constituicaoAlvo, nivelArma, danoOriginalBruto) {
+    if (!participanteId) return null;
+    const dificuldade = dificuldadeSangramento(nivelArma);
+    const bruto = rolarD20();
+    const modConstituicao = Number(constituicaoAlvo) || 0;
+    const resultado = bruto + modConstituicao;
+    const sucesso = resultado >= dificuldade;
+    let sangramento = null;
+    if (!sucesso) {
+        sangramento = await aplicarSangramento(participanteId, danoOriginalBruto);
+    }
+    return {
+        dificuldade, bruto, modConstituicao, resultado, sucesso, sangramento,
+        detalhe: sucesso
+            ? `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — RESISTIU, não sangrou.`
+            : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR.`
+    };
+}
+
+// Resolve os status ativos de quem está prestes a agir (chamada com o
+// PRÓXIMO turnoAtual, antes do recálculo de PV/Velocidade/estado de
+// saúde de avancarTurnoCombate — assim o dano do tick já entra nesse
+// mesmo recálculo). Cada entrada em statusAtivos é resolvida
+// independente — se houver mais de um Sangramento empilhado, cada um
+// causa seu próprio dano fixo no mesmo turno (e a soma total é logada
+// à parte, pra ficar claro no Log de Dados). Retorna as notas de log
+// (uma por efeito resolvido, + o total combinado se houver mais de
+// um) pro chamador registrar.
+async function processarStatusInicioTurno(participanteId, participante) {
+    const statusAtivos = participante && participante.statusAtivos;
+    if (!statusAtivos) return { statusFinal: null, notas: [] };
+
+    const statusFinal = {};
+    const notas = [];
+    let totalDanoTurno = 0;
+    let sangramentosAtivos = 0;
+
+    for (const [chave, status] of Object.entries(statusAtivos)) {
+        if (!status || (Number(status.turnosRestantes) || 0) <= 0) continue;
+
+        if (status.tipo === "sangramento") {
+            sangramentosAtivos++;
+            const dano = Number(status.danoPorTurno) || 0;
+            const resultado = await aplicarDano(participante.tipo, participante.refId, dano, null);
+            totalDanoTurno += dano;
+            notas.push(`${resultado.nomeAlvo} sangrou (${status.turnosRestantes} turno(s) restante(s)): ${dano} de dano fixo (era 1d${status.faces}). PV restante: ${resultado.novoPv}.`);
+        }
+
+        const restante = (Number(status.turnosRestantes) || 0) - 1;
+        if (restante > 0) {
+            statusFinal[chave] = { ...status, turnosRestantes: restante };
+        } else {
+            statusFinal[chave] = null; // expira — update() remove a chave
+            notas.push(`${participante.nome || participanteId}: ${status.label || status.tipo} terminou.`);
+        }
+    }
+
+    if (sangramentosAtivos > 1) {
+        notas.push(`${participante.nome || participanteId}: ${sangramentosAtivos} sangramentos empilhados causaram ${totalDanoTurno} de dano combinado neste turno.`);
+    }
+
+    return { statusFinal, notas };
 }
 
 // ---------------------------------------------------------------------
@@ -369,13 +478,24 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
         const temTolerancia = temPericiaTreinada(ficha.pericias, "Tolerância");
         const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, ignorarPenalidadeSaude);
         const velocidadeAjustada = aplicarEstadoSaudeVelocidade(derivados.secundarios.velocidade, estadoSaude).total;
+        // Energia — mesma automação da Ficha (ver regras.js): Energia
+        // Baixa/Crítica penaliza modAgilidade (teste físico) igual ao
+        // estado de saúde; em 0 de Energia, o participante está morto.
+        const energiaMax = Math.round(derivados.recursos.energia.total);
+        const energiaAtual = (ficha.dados.energiaAtual !== null && ficha.dados.energiaAtual !== undefined)
+            ? Number(ficha.dados.energiaAtual) : energiaMax;
+        const estadoEnergia = calcularEstadoEnergia(energiaAtual, energiaMax, ignorarPenalidadeSaude);
         return {
-            modAgilidade: Math.round(derivados.secundarios.agilidade.total) + estadoSaude.penalidadeTestes,
+            modAgilidade: Math.round(derivados.secundarios.agilidade.total) + estadoSaude.penalidadeTestes + estadoEnergia.penalidadeFisica,
             velocidade: Math.round(velocidadeAjustada),
             pv: pvAtual,
             pvMax,
             estadoSaude: estadoSaude.estado,
-            estadoSaudeLabel: estadoSaude.label
+            estadoSaudeLabel: estadoSaude.label,
+            energia: energiaAtual,
+            energiaMax,
+            estadoEnergia: estadoEnergia.estado,
+            estadoEnergiaLabel: estadoEnergia.label
         };
     }
 
@@ -391,13 +511,20 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
         const temTolerancia = temPericiaTreinada(npc.periciasNpc, "Tolerância");
         const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, ignorarPenalidadeSaude);
         const velocidadeAjustada = aplicarEstadoSaudeVelocidade({ total: secundarios.secundarios.velocidade.valor, ajustes: [] }, estadoSaude).total;
+        const energiaMax = secundarios.recursos.energia.valor;
+        const energiaAtual = (npc.energiaAtual !== null && npc.energiaAtual !== undefined) ? Number(npc.energiaAtual) : energiaMax;
+        const estadoEnergia = calcularEstadoEnergia(energiaAtual, energiaMax, ignorarPenalidadeSaude);
         return {
-            modAgilidade: Math.round(secundarios.secundarios.agilidade.valor) + estadoSaude.penalidadeTestes,
+            modAgilidade: Math.round(secundarios.secundarios.agilidade.valor) + estadoSaude.penalidadeTestes + estadoEnergia.penalidadeFisica,
             velocidade: Math.round(velocidadeAjustada),
             pv: pvAtual,
             pvMax,
             estadoSaude: estadoSaude.estado,
-            estadoSaudeLabel: estadoSaude.label
+            estadoSaudeLabel: estadoSaude.label,
+            energia: energiaAtual,
+            energiaMax,
+            estadoEnergia: estadoEnergia.estado,
+            estadoEnergiaLabel: estadoEnergia.label
         };
     }
 
@@ -412,18 +539,33 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
     const estadoSaudeRapido = calcularEstadoSaude(pvAtualRapido, pvMaxRapido, false, ignorarPenalidadeSaude);
     const agilidadeBase = Number(npc.agilidade) || 0;
     const velocidadeAjustadaRapido = aplicarEstadoSaudeVelocidade({ total: agilidadeBase, ajustes: [] }, estadoSaudeRapido).total;
+    // Energia — o gerador rápido não tem atributos primários separados,
+    // só a Constituição solta; usamos a mesma fórmula do manual (6 +
+    // Constituição) pro máximo. Sem campo pra editar a Energia atual
+    // aqui, conta sempre como cheia (sem penalidade) até esse NPC ser
+    // recadastrado no modo detalhado.
+    const energiaMaxRapido = 6 + (Number(npc.constituicao) || 0);
+    const energiaAtualRapido = (npc.energiaAtual !== null && npc.energiaAtual !== undefined) ? Number(npc.energiaAtual) : energiaMaxRapido;
+    const estadoEnergiaRapido = calcularEstadoEnergia(energiaAtualRapido, energiaMaxRapido, ignorarPenalidadeSaude);
     return {
-        modAgilidade: agilidadeBase + estadoSaudeRapido.penalidadeTestes,
+        modAgilidade: agilidadeBase + estadoSaudeRapido.penalidadeTestes + estadoEnergiaRapido.penalidadeFisica,
         velocidade: Math.round(velocidadeAjustadaRapido),
         pv: pvAtualRapido,
         pvMax: pvMaxRapido,
         estadoSaude: estadoSaudeRapido.estado,
-        estadoSaudeLabel: estadoSaudeRapido.label
+        estadoSaudeLabel: estadoSaudeRapido.label,
+        energia: energiaAtualRapido,
+        energiaMax: energiaMaxRapido,
+        estadoEnergia: estadoEnergiaRapido.estado,
+        estadoEnergiaLabel: estadoEnergiaRapido.label
     };
 }
 
 function statsCombatePadrao() {
-    return { modAgilidade: 0, velocidade: 0, pv: 0, pvMax: 0, estadoSaude: null, estadoSaudeLabel: null };
+    return {
+        modAgilidade: 0, velocidade: 0, pv: 0, pvMax: 0, estadoSaude: null, estadoSaudeLabel: null,
+        energia: 0, energiaMax: 0, estadoEnergia: null, estadoEnergiaLabel: null
+    };
 }
 
 // Ordena por iniciativa decrescente; empate é decidido pelo maior
@@ -544,6 +686,23 @@ export async function avancarTurnoCombate() {
         atualizacoes.rodada = (rodada || 1) + 1;
     }
 
+    // Tick System (Sangramento e outros efeitos por turno): processa os
+    // status de quem está prestes a agir ANTES do recálculo de PV/
+    // Velocidade/estado de saúde logo abaixo — assim o dano do tick já
+    // entra nesse mesmo recálculo, e não só na próxima troca de turno.
+    let notasStatus = [];
+    if (participantes[novoTurno]) {
+        const { statusFinal, notas } = await processarStatusInicioTurno(novoTurno, participantes[novoTurno]);
+        if (statusFinal) {
+            atualizacoes[`participantes/${novoTurno}/statusAtivos`] = statusFinal;
+            // Já aplicado direto no nó da ficha/NPC por aplicarDano() lá
+            // dentro — refletir aqui também pra não ler o PV velho da
+            // rodada passada no loop de recálculo abaixo.
+            participantes[novoTurno] = { ...participantes[novoTurno], statusAtivos: statusFinal };
+        }
+        notasStatus = notas;
+    }
+
     // Mesma combinação Godmode + "ignorar penalidade de saúde" usada em
     // iniciarIniciativaCombate — recalcular tem que respeitar o mesmo
     // Godmode que já vale pro resto do combate.
@@ -564,6 +723,10 @@ export async function avancarTurnoCombate() {
         atualizacoes[`participantes/${id}/pvMax`] = statsAtualizados.pvMax;
         atualizacoes[`participantes/${id}/estadoSaude`] = statsAtualizados.estadoSaude;
         atualizacoes[`participantes/${id}/estadoSaudeLabel`] = statsAtualizados.estadoSaudeLabel;
+        atualizacoes[`participantes/${id}/energia`] = statsAtualizados.energia;
+        atualizacoes[`participantes/${id}/energiaMax`] = statsAtualizados.energiaMax;
+        atualizacoes[`participantes/${id}/estadoEnergia`] = statsAtualizados.estadoEnergia;
+        atualizacoes[`participantes/${id}/estadoEnergiaLabel`] = statsAtualizados.estadoEnergiaLabel;
         atualizacoes[`participantes/${id}/acoesMax`] = acoesMaxAtualizado;
         // Rodada virando: reseta pro novo máximo cheio (comportamento de
         // sempre). Meio da rodada: só TRAVA o contador de ações restantes
@@ -576,7 +739,12 @@ export async function avancarTurnoCombate() {
     }
 
     await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
-    return { turnoAtual: novoTurno, nome: (participantes[novoTurno] && participantes[novoTurno].nome) || novoTurno };
+
+    for (const nota of notasStatus) {
+        await registrarRolagem({ quem: "Tick de status", modificador: 0, resultado: nota, detalhe: nota });
+    }
+
+    return { turnoAtual: novoTurno, nome: (participantes[novoTurno] && participantes[novoTurno].nome) || novoTurno, notasStatus };
 }
 
 // Consome 1 ação do turno do participante (chamar isso na hora de uma
@@ -785,7 +953,20 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
         notaEscolha = `${r.nomeAlvo} não usou Esquiva/Bloqueio/Aparar e recebeu o golpe cheio.`;
     }
 
-    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey);
+    // Golpes Mirados (manual): a redução de armadura do alvo só vale se
+    // o local mirado tiver essa cobertura (r.reduzArmaduraLocal — ver
+    // LOCAIS_MIRA em dados-manual.js/resolverAtaque em ficha.js).
+    // Ausente (reação antiga, de antes dessa mudança) cai no padrão
+    // `true`, preservando o comportamento de sempre.
+    const reduzArmaduraLocal = r.reduzArmaduraLocal !== false;
+    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, reduzArmaduraLocal ? r.tipoDanoKey : null);
+
+    // Nenhum tratamento de Sangramento aqui: disparo de arma de fogo não
+    // pode mais ser esquivado, aparado NEM bloqueado (manual) — por isso
+    // resolverAtaque (ficha.js) nunca abre esta reação pendente pra um
+    // tiro (r.ehArmaFogo nunca chega true neste ponto). O teste de
+    // Constituição/Sangramento do tiro acontece direto no caminho sem
+    // reação, logo depois de aplicarDano — ver testarSangramento acima.
 
     // r.danoTotal já chega dobrado do Acerto Crítico (ver resolverAtaque
     // em ficha.js, que dobra ANTES de abrir a reação pendente) — aqui só
@@ -794,10 +975,11 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
     const efeitoTexto = r.efeitoTexto || "";
     const danoDadoTexto = r.danoDadoTexto || "";
     const notaCritico = r.notaCritico || "";
+    const notaLocalMira = r.notaLocalMira || "";
     const detalheRolagemTexto = r.detalheRolagem ? `\n${r.detalheRolagem}` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`
-        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}. ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
+        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`
+        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
 
     await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: r.criticoPositivo ? "acerto" : null });
     await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));

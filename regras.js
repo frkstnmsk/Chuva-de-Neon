@@ -219,18 +219,34 @@ export function temPericiaTreinada(pericias, nomePericia) {
 
 // `ignorarPenalidade` (default false): quando o Godmode do Mestre está
 // ativo (ver mestre.js/ficha.js), o estado de Machucado/Muito Machucado
-// deixa de ter qualquer efeito mecânico — mesma filosofia de "Godmode
-// ignora tudo" já usada pra trava de edição. Devolve o mesmo formato
-// "vazio" do caso de PV máximo 0 (sem estado, sem badge, sem penalidade).
+// (e a Morte por PV — ver abaixo) deixa de ter qualquer efeito mecânico
+// — mesma filosofia de "Godmode ignora tudo" já usada pra trava de
+// edição. Devolve o mesmo formato "vazio" do caso de PV máximo 0 (sem
+// estado, sem badge, sem penalidade).
 export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ignorarPenalidade = false) {
     const max = Number(pvMaximo) || 0;
-    const vazio = { estado: null, label: null, penalidadeTestes: 0, penalidadeVelocidade: 0, metadeVelocidade: false };
+    const vazio = { estado: null, label: null, penalidadeTestes: 0, penalidadeVelocidade: 0, metadeVelocidade: false, morte: false };
     if (max <= 0) return vazio;
     if (ignorarPenalidade) return vazio;
 
     // PV atual ainda não definido (ficha nova/NPC recém-criado) conta
     // como PV cheio — não há ferimento registrado ainda.
     const atual = (pvAtual === null || pvAtual === undefined) ? max : (Number(pvAtual) || 0);
+
+    // Em 0 PV (ou menos) o personagem morre — mesma regra de "Morte" já
+    // usada pra Energia em calcularEstadoEnergia (ver abaixo). É checado
+    // ANTES de Muito Machucado porque 0 sempre está dentro daquele
+    // limiar também — só o efeito mais severo (morte) deve valer.
+    if (atual <= 0) {
+        return {
+            estado: "morte",
+            label: "Morte",
+            penalidadeTestes: 0,
+            penalidadeVelocidade: 0,
+            metadeVelocidade: false,
+            morte: true
+        };
+    }
 
     const limiarMuitoMachucado = temTolerancia ? LIMIAR_MUITO_MACHUCADO_COM_TOLERANCIA : LIMIAR_MUITO_MACHUCADO_PADRAO;
 
@@ -240,7 +256,8 @@ export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ig
             label: "Muito Machucado",
             penalidadeTestes: -4,
             penalidadeVelocidade: 0,
-            metadeVelocidade: true
+            metadeVelocidade: true,
+            morte: false
         };
     }
     if (atual <= max * LIMIAR_MACHUCADO) {
@@ -249,7 +266,8 @@ export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ig
             label: "Machucado",
             penalidadeTestes: -2,
             penalidadeVelocidade: -2,
-            metadeVelocidade: false
+            metadeVelocidade: false,
+            morte: false
         };
     }
     return vazio;
@@ -272,6 +290,63 @@ export function aplicarEstadoSaudeVelocidade(infoVelocidade, estadoSaude) {
         ajustes: [...infoVelocidade.ajustes, { valor: depois - antes, origem: `Estado de saúde: ${estadoSaude.label}` }],
         total: depois
     };
+}
+
+// ---------------------------------------------------------------------
+// Estado de Energia (gasto ao usar poderes/habilidades — manual).
+// Energia = 6 + Constituição (ver RECURSOS acima).
+//
+// Em 1/2 da Energia máxima ou menos: -2 em testes físicos.
+// Em 1/3 da Energia máxima ou menos: -3 em testes físicos e -2 em
+// testes mentais. Os dois limiares NÃO se acumulam: ao atingir 1/3
+// (que por definição também está em 1/2 ou menos), só o efeito mais
+// severo vale — mesma filosofia de calcularEstadoSaude acima.
+// Em 0 de Energia: Morte.
+// ---------------------------------------------------------------------
+export const LIMIAR_ENERGIA_BAIXA = 1 / 2;
+export const LIMIAR_ENERGIA_CRITICA = 1 / 3;
+
+// `ignorarPenalidade` (default false): mesma lógica de Godmode usada em
+// calcularEstadoSaude — quando ativo, o estado de Energia deixa de ter
+// qualquer efeito mecânico, inclusive a morte em 0.
+export function calcularEstadoEnergia(energiaAtual, energiaMaxima, ignorarPenalidade = false) {
+    const max = Number(energiaMaxima) || 0;
+    const vazio = { estado: null, label: null, penalidadeFisica: 0, penalidadeMental: 0, morte: false };
+    if (max <= 0) return vazio;
+    if (ignorarPenalidade) return vazio;
+
+    // Energia atual ainda não definida (ficha nova/NPC recém-criado)
+    // conta como Energia cheia — mesma convenção do PV em calcularEstadoSaude.
+    const atual = (energiaAtual === null || energiaAtual === undefined) ? max : (Number(energiaAtual) || 0);
+
+    if (atual <= 0) {
+        return {
+            estado: "morte",
+            label: "Morte",
+            penalidadeFisica: 0,
+            penalidadeMental: 0,
+            morte: true
+        };
+    }
+    if (atual <= max * LIMIAR_ENERGIA_CRITICA) {
+        return {
+            estado: "energia_critica",
+            label: "Energia Crítica",
+            penalidadeFisica: -3,
+            penalidadeMental: -2,
+            morte: false
+        };
+    }
+    if (atual <= max * LIMIAR_ENERGIA_BAIXA) {
+        return {
+            estado: "energia_baixa",
+            label: "Energia Baixa",
+            penalidadeFisica: -2,
+            penalidadeMental: 0,
+            morte: false
+        };
+    }
+    return vazio;
 }
 
 // Limite de atributo fora da criação (level up), diferente do limite de
@@ -339,6 +414,39 @@ export function rolarD20() {
 
 export function rolarDado(faces) {
     return 1 + Math.floor(Math.random() * Number(faces || 20));
+}
+
+// ---------------------------------------------------------------------
+// Teste de reanimação — ao morrer (0 PV ou 0 Energia), o jogador tem
+// uma última chance: rola 3d20, precisa de 11+ em CADA um dos três
+// dados pra sobreviver (volta a 1 PV). Errar qualquer um dos três é
+// morte definitiva — ver verificarMorte()/tentarReanimacao() em
+// ficha.js, que trava a edição da ficha inteira depois disso (só o
+// Mestre em Godmode continua conseguindo mexer).
+// ---------------------------------------------------------------------
+export const DIFICULDADE_REANIMACAO = 11;
+
+export function rolarTesteReanimacao() {
+    const dados = [rolarD20(), rolarD20(), rolarD20()];
+    const sucessos = dados.map(d => d >= DIFICULDADE_REANIMACAO);
+    return {
+        dados,
+        sucessos,
+        sucessoTotal: sucessos.every(Boolean)
+    };
+}
+
+// ---------------------------------------------------------------------
+// Teste de Constituição contra Sangramento (Disparo de Arma de Fogo) —
+// decide SE o ferimento sangra (a rolagem em mestre.js só entra em
+// aplicarSangramento se este teste FALHAR). dificuldade = 10 + nível da
+// arma que disparou. Continua sendo a rolagem "d20 + Constituição do
+// alvo" comparada contra essa dificuldade — ver testarSangramento em
+// mestre.js, que faz a rolagem de verdade e decide se chama
+// aplicarSangramento.
+// ---------------------------------------------------------------------
+export function dificuldadeSangramento(nivelArma) {
+    return 10 + (Number(nivelArma) || 0);
 }
 
 // ---------------------------------------------------------------------
