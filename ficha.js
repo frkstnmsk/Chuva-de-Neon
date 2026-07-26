@@ -1596,10 +1596,14 @@ async function rolarERegistrar(nomeAlvo, modificador) {
     // acontece se for o turno de quem está agindo (jogador OU o NPC que
     // o Mestre estiver controlando) E ainda houver ação sobrando nesse
     // turno. A rolagem em si acontece na hora (o dado é rolado e
-    // registrado no Log normalmente); o CONSUMO da ação do jogador entra
-    // na fila do Sistema de Aprovação, enquanto o do Mestre (agindo por
-    // um NPC) é consumido direto, sem precisar de aprovação de si mesmo.
-    const consumo = checarConsumoDeAcao();
+    // registrado no Log normalmente); o CONSUMO da ação SEMPRE entra na
+    // fila do Sistema de Aprovação, mesmo com o Mestre controlando o NPC
+    // que rolou — rolarERegistrar cobre perícia solta/atributo (ex.:
+    // Percepção, Constituição) e qualquer rolagem de arma de fogo feita
+    // fora do fluxo de ataque completo, e nenhuma dessas gasta ação
+    // automaticamente (só golpe corpo a corpo/arma branca em
+    // resolverAtaque faz isso — ver checarConsumoDeAcao).
+    const consumo = checarConsumoDeAcao(false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -2226,23 +2230,30 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         return;
     }
 
+    const armaConfig = it.arma || {};
+    const ehFogo = ehArmaDeFogo(nomePericia) && !armaConfig.desarmado;
+
     // Contra-ataque do Aparar é imediato (manual: "pode atacar
     // imediatamente com modificador -1") — não espera o próprio turno
     // nem gasta a ação normal do turno, então pula a trava de
     // "é seu turno?/tem ação sobrando?" que vale pro ataque comum.
+    //
+    // Gasto automático (direto, sem passar pelo Mestre) só é permitido
+    // pra golpe corpo a corpo/arma branca (ehFogo === false). Disparo de
+    // arma de fogo NUNCA gasta a ação na hora, mesmo sendo o Mestre
+    // controlando o NPC que atirou — sempre entra na fila de Ações
+    // Pendentes pra ele decidir (ver checarConsumoDeAcao).
     let consumo, participanteIdParaGastarAcao;
     if (ehContraAtaque) {
         consumo = { participanteId: null, direto: false };
         participanteIdParaGastarAcao = null;
     } else {
-        consumo = checarConsumoDeAcao();
+        consumo = checarConsumoDeAcao(!ehFogo);
         if (!consumo) return;
         participanteIdParaGastarAcao = consumo.participanteId;
     }
 
     const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
-    const armaConfig = it.arma || {};
-    const ehFogo = ehArmaDeFogo(nomePericia) && !armaConfig.desarmado;
 
     // Golpes Mirados (manual): local do corpo escolhido pra mirar —
     // todo golpe pode ser mirado (a Cabeça muda de dificuldade e ganha
@@ -4952,7 +4963,18 @@ function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
 // Retorna null se a ação não pode prosseguir (toast já disparado), ou
 // um objeto { participanteId, direto } — participanteId é null quando
 // não há economia de ação a aplicar.
-function checarConsumoDeAcao() {
+//
+// permiteDireto (default true): controla se o gasto do Mestre agindo por
+// um NPC pode ser consumido NA HORA (direto: true) ou se, mesmo sendo o
+// Mestre, o gasto ainda assim precisa passar pela fila de Ações
+// Pendentes (direto: false). Regra (manual/pedido do Mestre da mesa):
+// SÓ rolagens de ataque corpo a corpo/arma branca (resolverAtaque com
+// ehFogo === false) gastam ação automaticamente. Qualquer outra
+// rolagem — tiro de arma de fogo, perícia solta, atributo (Percepção,
+// Constituição etc.) — precisa sempre ir pro gerenciador de Ações
+// Pendentes, mesmo quando é o próprio Mestre controlando o NPC que
+// rolou, pra ele decidir se quer mesmo gastar a ação.
+function checarConsumoDeAcao(permiteDireto = true) {
     if (!combateComIniciativaAtivo()) return { participanteId: null, direto: false };
 
     if (!isMestre) {
@@ -4982,7 +5004,7 @@ function checarConsumoDeAcao() {
             toast("Esse NPC não tem ações restantes neste turno.", "erro");
             return null;
         }
-        return { participanteId: npcPid, direto: true };
+        return { participanteId: npcPid, direto: !!permiteDireto };
     }
 
     return { participanteId: null, direto: false };
