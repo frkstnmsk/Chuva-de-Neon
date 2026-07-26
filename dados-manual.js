@@ -251,7 +251,7 @@ export const TAGS_ITEM = [
     { key: "arma", label: "Arma", temNivel: true },
     { key: "carregador", label: "Carregador", temNivel: false },
     { key: "projetil", label: "Projétil / munição", temNivel: false },
-    { key: "colete", label: "Colete / proteção balística", temNivel: true },
+    { key: "colete", label: "Proteção", temNivel: true },
     { key: "destrave", label: "Destrave", temNivel: true },
     { key: "ferramenta_criacao", label: "Ferramenta de criação (geral)", temNivel: true },
     { key: "ferramenta_criacao_quimica", label: "Ferramenta de criação química", temNivel: true },
@@ -675,29 +675,70 @@ export const TIPOS_DANO = [
 ];
 
 // ---------------------------------------------------------------------
-// Golpes Mirados (manual): local do corpo escolhido pra mirar o
-// ataque, cada um com seu próprio agravante de dificuldade. A Cabeça só
-// pode ser mirada com arma de fogo de verdade ("Atirar com arma de
-// fogo especificamente na cabeça...", manual) — golpes corpo a
-// corpo/arma branca não têm essa opção. Mirar na Cabeça também aumenta
-// o dano em 1/3 (bonusDanoFracao).
+// Golpes Mirados (manual): todo golpe pode ser mirado num local do
+// corpo, cada um com seu próprio agravante de dificuldade — mas só
+// alguns têm efeitos extras (sangramento, amputação, desmaio). Não
+// mirar (golpe "Padrão") é narrado aleatoriamente, sem nenhum efeito
+// extra, e é sempre reduzido pelo equipamento de TORSO.
 //
-// reduzArmadura: false significa que a redução de dano de colete/placa
-// NÃO vale pra esse local — regra de mesa adotada enquanto a ficha só
-// tem UM valor de redução por item (cobrindo o torso); Cabeça, Membro e
-// Extremidade ficam sem essa proteção até a ficha ganhar armadura
-// detalhada por parte do corpo.
+// localArmadura: qual "slot" de Proteção (ver LOCAIS_PROTECAO) reduz o
+// dano recebido nesse local — cada item de Proteção só reduz dano de
+// golpes mirados (ou não mirados) na MESMA parte do corpo que ele
+// protege (ver localProtegido no item, dados-manual.js).
+//
+// sangramento: regra de Golpes Perfurantes (manual) — null quando o
+// local não tem regra própria (Padrão). difExtra soma em cima da
+// dificuldade base do teste de Constituição (10 + nível da arma, ver
+// dificuldadeSangramento em regras.js); turnos e fracaoDano definem a
+// duração e o dano fixo por turno (fração do dano causado pelo golpe
+// que sangrou — SEM rolar dado, valor fixo).
 // ---------------------------------------------------------------------
 export const LOCAIS_MIRA = [
-    { key: "padrao", label: "Padrão (sem mirar)", difMod: 0, reduzArmadura: true, soArmaFogo: false, bonusDanoFracao: 0 },
-    { key: "torso", label: "Torso", difMod: 1, reduzArmadura: true, soArmaFogo: false, bonusDanoFracao: 0 },
-    { key: "membro", label: "Membro (braço/perna)", difMod: 2, reduzArmadura: false, soArmaFogo: false, bonusDanoFracao: 0 },
-    { key: "extremidade", label: "Extremidade (mão/pé)", difMod: 3, reduzArmadura: false, soArmaFogo: false, bonusDanoFracao: 0 },
-    { key: "cabeca", label: "Cabeça (só arma de fogo)", difMod: 4, reduzArmadura: false, soArmaFogo: true, bonusDanoFracao: 1 / 3 }
+    { key: "padrao", label: "Padrão (sem mirar)", difMod: 0, localArmadura: "torso", sangramento: null },
+    { key: "torso", label: "Torso", difMod: 1, localArmadura: "torso", sangramento: { difExtra: 1, turnos: 3, fracaoDano: 1 / 4 } },
+    { key: "membro", label: "Membro (braço ou perna)", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "extremidade", label: "Extremidade (mão ou pé)", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    // Cabeça: dificuldade normal +2 (corpo a corpo/arma branca); só um
+    // TIRO de arma de fogo especificamente na cabeça usa +4 — e é o
+    // único caso que aumenta o dano em 1/3 (ver difModLocalMira e
+    // bonusDanoFracaoLocalMira abaixo).
+    { key: "cabeca", label: "Cabeça", difMod: 2, difModArmaFogo: 4, localArmadura: "cabeca", sangramento: { difExtra: 2, turnos: 3, fracaoDano: 1 / 3 } }
 ];
 
 export function localMiraPorKey(key) {
     return LOCAIS_MIRA.find(l => l.key === key) || LOCAIS_MIRA[0];
+}
+
+// Dificuldade efetiva de mirar num local: só a Cabeça muda conforme o
+// tipo de ataque (manual: "Atirar com arma de fogo especificamente na
+// cabeça tem dificuldade aumentada em +4"); os demais locais (e a
+// própria Cabeça em golpe corpo a corpo/arma branca) usam o difMod normal.
+export function difModLocalMira(local, ehFogo) {
+    if (ehFogo && local.difModArmaFogo != null) return local.difModArmaFogo;
+    return local.difMod;
+}
+
+// Bônus de dano (manual): só dispara quando o golpe é um TIRO de arma
+// de fogo especificamente na Cabeça.
+export function bonusDanoFracaoLocalMira(local, ehFogo) {
+    return (local.key === "cabeca" && ehFogo) ? 1 / 3 : 0;
+}
+
+// ---------------------------------------------------------------------
+// Tipos de dano com efeitos obrigatórios de Golpe Mirado (manual):
+// perfurante sangra, cortante amputa, contundente (na Cabeça) agrava o
+// teste de desmaio.
+// ---------------------------------------------------------------------
+export function ehDanoPerfurante(tipoDanoKey) {
+    return tipoDanoKey === "perfuracao_comum" || tipoDanoKey === "perfuracao_especial";
+}
+
+export function ehDanoCortante(tipoDanoKey) {
+    return tipoDanoKey === "corte";
+}
+
+export function ehDanoContundente(tipoDanoKey) {
+    return tipoDanoKey === "contusao";
 }
 
 // Tags cujo item pode ter redução de dano configurada (coletes, placas
@@ -706,6 +747,28 @@ export function localMiraPorKey(key) {
 export const TAGS_REDUCAO_DANO = ["colete"];
 export function tagPodeReduzirDano(tagKey) {
     return TAGS_REDUCAO_DANO.includes(tagKey);
+}
+
+// Parte do corpo que um item de Proteção cobre — escolhida na criação
+// do item. Reaproveita as mesmas 4 regiões dos Golpes Mirados (ver
+// LOCAIS_MIRA acima), sem o local "Padrão" (que não é uma parte
+// específica do corpo).
+export const LOCAIS_PROTECAO = [
+    { key: "cabeca", label: "Cabeça" },
+    { key: "torso", label: "Torso" },
+    { key: "membro", label: "Membros (braços ou pernas)" },
+    { key: "extremidade", label: "Extremidades (pés ou mãos)" }
+];
+
+export function rotuloLocalProtecao(key) {
+    const l = LOCAIS_PROTECAO.find(l => l.key === key);
+    return l ? l.label : key;
+}
+
+// Tags que exigem escolher a parte do corpo protegida — hoje, as mesmas
+// que podem ter redução de dano configurada.
+export function tagExigeLocalProtegido(tagKey) {
+    return tagPodeReduzirDano(tagKey);
 }
 
 // Escalas de arma corpo a corpo (bônus sobre o atributo).

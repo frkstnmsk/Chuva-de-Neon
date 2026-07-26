@@ -16,8 +16,10 @@
 //     nivelTag: 2,                 // nível 1–5, só se a tag tiver nível
 //     peso: 1.1,
 //     periciaUso: "Armas de Fogo de Pequeno Porte",
-//     classeProtecao: "II",        // só armas de fogo / coletes
-//     reducoesDano: [],            // só tags que reduzem dano (colete)
+//     classeProtecao: "II",        // só armas de fogo / proteção
+//     reducoesDano: [],            // só tags que reduzem dano (proteção)
+//     localProtegido: "torso",     // só tag "colete" (Proteção) — cabeça,
+//                                  // torso, membro ou extremidade
 //     arma: {                      // só tag "arma"
 //       danoBase: 12,
 //       dano: "12 + Destreza D",   // texto livre, igual ao item de ficha

@@ -437,16 +437,17 @@ export function rolarTesteReanimacao() {
 }
 
 // ---------------------------------------------------------------------
-// Teste de Constituição contra Sangramento (Disparo de Arma de Fogo) —
-// decide SE o ferimento sangra (a rolagem em mestre.js só entra em
+// Teste de Constituição contra Sangramento (Golpe Perfurante) — decide
+// SE o ferimento sangra (a rolagem em mestre.js só entra em
 // aplicarSangramento se este teste FALHAR). dificuldade = 10 + nível da
-// arma que disparou. Continua sendo a rolagem "d20 + Constituição do
-// alvo" comparada contra essa dificuldade — ver testarSangramento em
-// mestre.js, que faz a rolagem de verdade e decide se chama
-// aplicarSangramento.
+// arma + agravante do local mirado (difExtra — manual: Torso +1,
+// Cabeça +2, Membro/Extremidade sem agravante extra). Continua sendo a
+// rolagem "d20 + Constituição do alvo" comparada contra essa
+// dificuldade — ver testarSangramento em mestre.js, que faz a rolagem
+// de verdade e decide se chama aplicarSangramento.
 // ---------------------------------------------------------------------
-export function dificuldadeSangramento(nivelArma) {
-    return 10 + (Number(nivelArma) || 0);
+export function dificuldadeSangramento(nivelArma, difExtra = 0) {
+    return 10 + (Number(nivelArma) || 0) + (Number(difExtra) || 0);
 }
 
 // ---------------------------------------------------------------------

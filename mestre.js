@@ -17,7 +17,7 @@ import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calenda
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente } from "./dados-manual.js";
 
 // ---------------------------------------------------------------------
 // Padrão de vida — valores semanais fixos do manual (pg. 105-106).
@@ -101,7 +101,17 @@ export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mes
 // com o tipo de dano recebido — manual pg. 52-53). Retorna o resumo
 // completo pro Mestre/automação montarem a mensagem do Log de Dados.
 // ---------------------------------------------------------------------
-export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
+// ---------------------------------------------------------------------
+// Causar dano — resolve dano contra jogador ou NPC, já descontando a
+// redução de armadura equipada (manual pg. 52-53). Golpes Mirados
+// (manual): a redução só conta os itens de Proteção cujo localProtegido
+// bate com `localArmadura` (o local mirado do golpe — ver LOCAIS_MIRA
+// em dados-manual.js). `localArmadura` null/omitido = comportamento
+// antigo, sem filtrar por local (usado por ferramentas manuais do
+// Mestre que não têm noção de golpe mirado). Retorna o resumo completo
+// pro Mestre/automação montarem a mensagem do Log de Dados.
+// ---------------------------------------------------------------------
+export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null) {
     const brutoNum = Number(danoBruto) || 0;
 
     if (alvoTipo === "ficha") {
@@ -112,7 +122,8 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
         const pvAtual = (raw.dados && raw.dados.pvAtual !== null && raw.dados.pvAtual !== undefined) ? Number(raw.dados.pvAtual) : 0;
         const inventario = raw.inventario || {};
         const reducao = tipoDanoKey ? Object.values(inventario)
-            .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano))
+            .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano)
+                && (localArmadura == null || it.localProtegido === localArmadura))
             .reduce((acc, it) => {
                 const entrada = it.reducoesDano.find(r => r.tipo === tipoDanoKey);
                 return acc + (entrada ? Number(entrada.valor) || 0 : 0);
@@ -128,10 +139,9 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey) {
     const npc = snap.val();
     const nomeAlvo = npc.nome || "NPC";
     const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : 0;
-    // NPCs agora usam o mesmo modelo multi-tipo dos itens de jogador
-    // (array reducoesDano, várias reduções ao mesmo tempo). NPCs antigos
-    // (criados antes dessa mudança) ainda só têm protecaoTipo/Valor (um
-    // tipo só) — mantido como fallback pra não perder proteção já salva.
+    // NPCs não têm armadura detalhada por parte do corpo — reducoesDano
+    // deles continua valendo pra qualquer local mirado (simplificação;
+    // só a ficha de jogador tem localProtegido por item).
     const reducoesNpc = (npc.reducoesDano && npc.reducoesDano.length)
         ? npc.reducoesDano
         : (npc.protecaoTipo ? [{ tipo: npc.protecaoTipo, valor: npc.protecaoValor || 0 }] : []);
@@ -164,56 +174,56 @@ export async function causarDanoNpc(npcId, valor) {
 // avancarTurnoCombate() logo abaixo.
 // ---------------------------------------------------------------------
 
-// Sangramento por Disparo de Arma de Fogo (manual): dura 3 turnos. O
-// dano por turno é 1d(metade do dano do ataque, arredondado pra baixo)
-// — mas SÓ ROLADO UMA VEZ, no momento do tiro: o mesmo valor se repete
-// nos três turnos (exemplo do manual: 20 de dano → 1d10 → rolou 7 →
-// recebe 7 de dano em cada um dos três turnos, não um novo 1d10 a cada
-// vez). Cada tiro que causa Sangramento entra como uma entrada NOVA e
-// independente (não sobrescreve/renova a anterior) — vários tiros
-// seguidos empilham vários sangramentos simultâneos, cada um com sua
-// própria contagem e seu próprio dano fixo, todos tickando juntos a
-// cada turno (ver processarStatusInicioTurno abaixo).
-export async function aplicarSangramento(participanteId, danoOriginalBruto) {
+// Sangramento por Golpe Perfurante (manual): dura 2 ou 3 turnos
+// conforme o local mirado, com dano fixo por turno igual a uma fração
+// do dano causado pelo golpe que sangrou (1/4 em Torso/Membro/
+// Extremidade, 1/3 na Cabeça — SEM rolar dado, o mesmo valor se repete
+// em cada turno). Cada golpe que causa Sangramento entra como uma
+// entrada NOVA e independente (não sobrescreve/renova a anterior) —
+// vários golpes seguidos empilham vários sangramentos simultâneos,
+// cada um com sua própria contagem e seu próprio dano fixo, todos
+// tickando juntos a cada turno (ver processarStatusInicioTurno abaixo).
+export async function aplicarSangramento(participanteId, danoPorTurno, turnos, origem) {
     if (!participanteId) return;
-    const faces = Math.max(1, Math.floor((Number(danoOriginalBruto) || 0) / 2));
-    const danoPorTurno = rolarDado(faces);
     const novaRef = push(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos`)));
     await set(novaRef, {
         tipo: "sangramento",
         label: "Sangramento",
-        turnosRestantes: 3,
-        faces,
+        turnosRestantes: turnos,
         danoPorTurno,
-        origem: "Disparo de arma de fogo"
+        origem
     });
-    return { faces, danoPorTurno };
+    return { danoPorTurno, turnos };
 }
 
 // Teste de Constituição contra Sangramento (manual): rolado uma vez por
-// tiro que causa dano de verdade, ANTES de decidir se aplicarSangramento
-// entra em ação. dificuldade = 10 + nível da arma (dificuldadeSangramento
-// em regras.js). Sucesso (d20 + Constituição do alvo >= dificuldade)
-// resiste — o ferimento não sangra, sem nenhum efeito mecânico. Falha
-// entra como uma entrada nova de Sangramento (mesma regra de
-// empilhamento de sempre: cada tiro que sangra é independente dos
-// outros). Retorna o detalhe da rolagem pro chamador registrar no Log.
-export async function testarSangramento(participanteId, constituicaoAlvo, nivelArma, danoOriginalBruto) {
-    if (!participanteId) return null;
-    const dificuldade = dificuldadeSangramento(nivelArma);
+// Golpe Mirado PERFURANTE que causou dano de verdade (golpe "Padrão",
+// sem mirar, nunca sangra — manual: "sem efeitos extras"), ANTES de
+// decidir se aplicarSangramento entra em ação. dificuldade = 10 +
+// nível da arma + agravante do local (regraLocal.difExtra —
+// dificuldadeSangramento em regras.js). Sucesso (d20 + Constituição do
+// alvo >= dificuldade) resiste — o ferimento não sangra, sem nenhum
+// efeito mecânico. Falha entra como uma entrada nova de Sangramento,
+// com duração e dano fixo definidos por regraLocal (ver LOCAIS_MIRA em
+// dados-manual.js — regraLocal é o campo `sangramento` do local
+// mirado). Retorna o detalhe da rolagem pro chamador registrar no Log.
+export async function testarSangramento(participanteId, constituicaoAlvo, nivelArma, danoOriginalBruto, regraLocal) {
+    if (!participanteId || !regraLocal) return null;
+    const dificuldade = dificuldadeSangramento(nivelArma, regraLocal.difExtra);
     const bruto = rolarD20();
     const modConstituicao = Number(constituicaoAlvo) || 0;
     const resultado = bruto + modConstituicao;
     const sucesso = resultado >= dificuldade;
     let sangramento = null;
     if (!sucesso) {
-        sangramento = await aplicarSangramento(participanteId, danoOriginalBruto);
+        const danoPorTurno = Math.max(0, Math.floor((Number(danoOriginalBruto) || 0) * regraLocal.fracaoDano));
+        sangramento = await aplicarSangramento(participanteId, danoPorTurno, regraLocal.turnos, "Golpe Mirado perfurante");
     }
     return {
         dificuldade, bruto, modConstituicao, resultado, sucesso, sangramento,
         detalhe: sucesso
             ? `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — RESISTIU, não sangrou.`
-            : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR.`
+            : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR (${sangramento.danoPorTurno} de dano fixo por turno, por ${sangramento.turnos} turnos).`
     };
 }
 
@@ -243,7 +253,7 @@ async function processarStatusInicioTurno(participanteId, participante) {
             const dano = Number(status.danoPorTurno) || 0;
             const resultado = await aplicarDano(participante.tipo, participante.refId, dano, null);
             totalDanoTurno += dano;
-            notas.push(`${resultado.nomeAlvo} sangrou (${status.turnosRestantes} turno(s) restante(s)): ${dano} de dano fixo (era 1d${status.faces}). PV restante: ${resultado.novoPv}.`);
+            notas.push(`${resultado.nomeAlvo} sangrou (${status.turnosRestantes} turno(s) restante(s)): ${dano} de dano fixo. PV restante: ${resultado.novoPv}.`);
         }
 
         const restante = (Number(status.turnosRestantes) || 0) - 1;
@@ -953,20 +963,43 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
         notaEscolha = `${r.nomeAlvo} não usou Esquiva/Bloqueio/Aparar e recebeu o golpe cheio.`;
     }
 
-    // Golpes Mirados (manual): a redução de armadura do alvo só vale se
-    // o local mirado tiver essa cobertura (r.reduzArmaduraLocal — ver
-    // LOCAIS_MIRA em dados-manual.js/resolverAtaque em ficha.js).
-    // Ausente (reação antiga, de antes dessa mudança) cai no padrão
-    // `true`, preservando o comportamento de sempre.
-    const reduzArmaduraLocal = r.reduzArmaduraLocal !== false;
-    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, reduzArmaduraLocal ? r.tipoDanoKey : null);
+    // Golpes Mirados (manual): a redução de armadura do alvo só conta
+    // itens de Proteção cujo localProtegido bate com o local mirado
+    // (r.localArmaduraAtual — ver LOCAIS_MIRA em dados-manual.js/
+    // resolverAtaque em ficha.js). Ausente (reação antiga, de antes
+    // dessa mudança) cai em `null`, preservando o comportamento antigo
+    // de não filtrar por local.
+    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null);
 
-    // Nenhum tratamento de Sangramento aqui: disparo de arma de fogo não
-    // pode mais ser esquivado, aparado NEM bloqueado (manual) — por isso
-    // resolverAtaque (ficha.js) nunca abre esta reação pendente pra um
-    // tiro (r.ehArmaFogo nunca chega true neste ponto). O teste de
-    // Constituição/Sangramento do tiro acontece direto no caminho sem
-    // reação, logo depois de aplicarDano — ver testarSangramento acima.
+    // Golpes Mirados (manual): Golpe Perfurante testa Sangramento, Golpe
+    // Cortante aplica obrigatoriamente a regra de Amputação, e Golpe
+    // Contundente na Cabeça agrava o teste de Desmaio — só quando o
+    // golpe teve um local mirado de verdade (não "Padrão", que o manual
+    // define como "sem efeitos extras") e causou dano de verdade. Tiro
+    // de arma de fogo nunca passa por aqui (ver comentário abaixo), só
+    // golpes corpo a corpo/arma branca que atravessaram a reação.
+    let notaSangramento = "";
+    let notaEfeitoLocal = "";
+    if (danoParaAplicar > 0 && r.localMiraKey && r.localMiraKey !== "padrao") {
+        if (ehDanoPerfurante(r.tipoDanoKey) && r.regraSangramentoLocal) {
+            const resultadoSangramento = await testarSangramento(r.participanteId, r.constituicaoAlvo, r.nivelArma, danoParaAplicar, r.regraSangramentoLocal);
+            if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+        }
+        if (ehDanoCortante(r.tipoDanoKey)) {
+            notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${r.localMiraLabel || "local específico"}: aplica-se a regra de Amputação (resolva com o Mestre).`;
+        }
+        if (ehDanoContundente(r.tipoDanoKey) && r.localMiraKey === "cabeca") {
+            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo (resolva com o Mestre).`;
+        }
+    }
+
+    // Nenhum tratamento de Sangramento/Amputação/Desmaio de tiro aqui:
+    // disparo de arma de fogo não pode ser esquivado, aparado NEM
+    // bloqueado (manual) — por isso resolverAtaque (ficha.js) nunca abre
+    // esta reação pendente pra um tiro (r.ehArmaFogo nunca chega true
+    // neste ponto). O teste de Sangramento de um tiro na Cabeça
+    // acontece direto no caminho sem reação, logo depois de aplicarDano
+    // — ver testarSangramento acima.
 
     // r.danoTotal já chega dobrado do Acerto Crítico (ver resolverAtaque
     // em ficha.js, que dobra ANTES de abrir a reação pendente) — aqui só
@@ -978,8 +1011,8 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
     const notaLocalMira = r.notaLocalMira || "";
     const detalheRolagemTexto = r.detalheRolagem ? `\n${r.detalheRolagem}` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`
-        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${detalheRolagemTexto}`;
+        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}${detalheRolagemTexto}`
+        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}${detalheRolagemTexto}`;
 
     await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: r.criticoPositivo ? "acerto" : null });
     await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));

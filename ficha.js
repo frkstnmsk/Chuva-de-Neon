@@ -25,11 +25,13 @@ import {
     ehCalibreEscopeta,
     tagExigeCapacidadeCarregador, tagExigeQuantidadeProjetil,
     tagPodeReduzirDano,
+    LOCAIS_PROTECAO, rotuloLocalProtecao, tagExigeLocalProtegido,
     ALCANCES_ARMA_FOGO, PADROES_RECUO, rotuloAlcanceArmaFogo, rotuloPadraoRecuo,
     modificadorRecuo, ESCALA_MULT_DESARMADO, ehGolpeDesarmadoComDano,
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
     atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
-    LOCAIS_MIRA, localMiraPorKey
+    LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
+    ehDanoPerfurante, ehDanoCortante, ehDanoContundente
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -273,6 +275,8 @@ const el = {
     modalCampoClasseProtecao: document.getElementById("modal-campo-classe-protecao"),
     modalLabelClasseProtecao: document.getElementById("modal-label-classe-protecao"),
     modalClasseProtecao: document.getElementById("modal-classe-protecao"),
+    modalCampoLocalProtegido: document.getElementById("modal-campo-local-protegido"),
+    modalLocalProtegido: document.getElementById("modal-local-protegido"),
     modalCampoCalibre: document.getElementById("modal-campo-calibre"),
     modalCalibre: document.getElementById("modal-calibre"),
     modalCampoCarregadorCapacidade: document.getElementById("modal-campo-carregador-capacidade"),
@@ -786,6 +790,15 @@ function montarSelectsFixos() {
         opt.value = t.key;
         opt.innerText = t.label;
         el.modalTag.appendChild(opt);
+    });
+
+    // ---- Local protegido (modal — só pra itens de Proteção) ----
+    el.modalLocalProtegido.innerHTML = '<option value="">-- escolha o que este item protege --</option>';
+    LOCAIS_PROTECAO.forEach(l => {
+        const opt = document.createElement("option");
+        opt.value = l.key;
+        opt.innerText = l.label;
+        el.modalLocalProtegido.appendChild(opt);
     });
 
     // ---- Nível de tag (modal) ----
@@ -1954,18 +1967,19 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
         el.alvoSelect.appendChild(opt);
     });
 
-    // Golpes Mirados (manual): escolher onde vai acertar aumenta a
-    // dificuldade de acordo com o local (e o dano, no caso da Cabeça) —
-    // ver LOCAIS_MIRA em dados-manual.js. Cabeça só aparece pra arma de
-    // fogo de verdade (golpe desarmado nunca é "arma de fogo" mesmo com
-    // perícia de tiro vinculada, mesma checagem de sempre).
+    // Golpes Mirados (manual): todo golpe pode ser mirado — a Cabeça
+    // muda de dificuldade conforme o tipo de golpe (arma de fogo x
+    // corpo a corpo/arma branca), mas continua disponível pros dois —
+    // ver LOCAIS_MIRA/difModLocalMira em dados-manual.js.
     const ehFogoItem = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso) && !(it.arma && it.arma.desarmado);
-    const locaisDisponiveis = LOCAIS_MIRA.filter(l => !l.soArmaFogo || ehFogoItem);
     el.alvoCampoExtra.style.display = "block";
     el.alvoCampoExtra.innerHTML = `
         <label for="alvo-local-mira-select">Mirar em</label>
         <select id="alvo-local-mira-select">
-            ${locaisDisponiveis.map(l => `<option value="${l.key}">${escapeHtml(l.label)}${l.difMod ? ` (dificuldade +${l.difMod})` : ""}</option>`).join("")}
+            ${LOCAIS_MIRA.map(l => {
+                const dif = difModLocalMira(l, ehFogoItem);
+                return `<option value="${l.key}">${escapeHtml(l.label)}${dif ? ` (dificuldade +${dif})` : ""}</option>`;
+            }).join("")}
         </select>
     `;
     el.modalSelecionarAlvo.classList.add("active");
@@ -2231,15 +2245,15 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const ehFogo = ehArmaDeFogo(nomePericia) && !armaConfig.desarmado;
 
     // Golpes Mirados (manual): local do corpo escolhido pra mirar —
-    // aumenta a dificuldade (todo mundo, ver LOCAIS_MIRA em
-    // dados-manual.js) e, no caso da Cabeça, também o dano. Cabeça é
-    // exclusiva de arma de fogo de verdade — revalida aqui (além da UI
-    // já filtrar a opção) pra não dar pra burlar chamando a função
-    // direto com um localMira inválido pro tipo de golpe.
+    // todo golpe pode ser mirado (a Cabeça muda de dificuldade e ganha
+    // bônus de dano só quando o golpe é especificamente um tiro de arma
+    // de fogo — ver LOCAIS_MIRA/difModLocalMira/bonusDanoFracaoLocalMira
+    // em dados-manual.js).
     let localMira = localMiraPorKey(opcoes.localMira);
-    if (localMira.soArmaFogo && !ehFogo) localMira = localMiraPorKey("padrao");
+    const difMiraAtual = difModLocalMira(localMira, ehFogo);
+    const bonusDanoMiraAtual = bonusDanoFracaoLocalMira(localMira, ehFogo);
     const notaLocalMira = localMira.key !== "padrao"
-        ? ` Mirando: ${localMira.label} (dificuldade +${localMira.difMod}${localMira.bonusDanoFracao ? `, dano +${Math.round(localMira.bonusDanoFracao * 100)}%` : ""}).`
+        ? ` Mirando: ${localMira.label} (dificuldade +${difMiraAtual}${bonusDanoMiraAtual ? `, dano +${Math.round(bonusDanoMiraAtual * 100)}%` : ""}).`
         : "";
 
     // Recuo — só disparos de arma de fogo de verdade contam (golpe
@@ -2281,9 +2295,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
     const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, criticoPositivo, criticoNegativo });
 
-    // constituicaoAlvo só é preenchida quando ehFogo (usada mais abaixo,
-    // depois do dano aplicado, pro teste de Constituição que decide SE o
-    // sangramento acontece — ver comentário lá embaixo).
+    // constituicaoAlvo agora é sempre preenchida (usada mais abaixo,
+    // depois do dano aplicado, pro teste de Constituição que decide SE
+    // o sangramento acontece — golpes mirados perfurantes sangram tanto
+    // no tiro quanto no corpo a corpo/arma branca, ver comentário lá
+    // embaixo).
     let dificuldade, nomeAlvo, constituicaoAlvo = 0;
     try {
         if (participante.tipo === "ficha") {
@@ -2291,18 +2307,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
+            const modsAlvo = coletarModificadores(fichaAlvo);
+            // Constituição é atributo primário (não um secundário
+            // calculado) — reaproveita calcularDificuldadeDefesaJogador
+            // com base 0 só pra somar valor bruto + modificadores
+            // estruturados ("atributo:constituicao").
+            constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
-                const modsAlvo = coletarModificadores(fichaAlvo);
-                // Constituição é atributo primário (não um secundário
-                // calculado) — reaproveita calcularDificuldadeDefesaJogador
-                // com base 0 só pra somar valor bruto + modificadores
-                // estruturados ("atributo:constituicao").
-                constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
-                const modsAlvo = coletarModificadores(fichaAlvo);
                 const baseDif = baseDificuldadeAtaque(it.nome, nomePericia);
                 dificuldade = calcularDificuldadeDefesaJogador(fichaAlvo.dados, atributoDefesaChave, modsAlvo, baseDif);
             }
@@ -2311,10 +2326,10 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
             const npc = snap.val();
             nomeAlvo = npc.nome || participante.nome;
+            constituicaoAlvo = Number(npc.constituicao) || 0;
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
-                constituicaoAlvo = Number(npc.constituicao) || 0;
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
                 const valorAtributo = atributoDefesaChave === "constituicao" ? (Number(npc.constituicao) || 0) : (Number(npc.agilidade) || 0);
@@ -2331,7 +2346,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // Golpes Mirados: agravante de dificuldade do local escolhido soma
     // em cima da dificuldade normal (de acerto da arma de fogo, ou de
     // defesa do alvo pra corpo a corpo/desarmado).
-    dificuldade += localMira.difMod;
+    dificuldade += difMiraAtual;
 
     const acertou = resultadoAtaque >= dificuldade;
 
@@ -2401,11 +2416,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     }
     const tipoDanoLabel = TIPOS_DANO.find(t => t.key === tipoDanoKey)?.label || tipoDanoKey || "—";
 
-    // Golpes Mirados (manual): Cabeça aumenta o dano em 1/3 — aplicado
-    // sobre o dano "base" do golpe, ANTES do Acerto Crítico (que dobra
-    // o valor já com esse bônus embutido).
-    if (localMira.bonusDanoFracao > 0) {
-        const bonusMira = Math.floor(danoTotal * localMira.bonusDanoFracao);
+    // Golpes Mirados (manual): Cabeça a tiro de arma de fogo aumenta o
+    // dano em 1/3 — aplicado sobre o dano "base" do golpe, ANTES do
+    // Acerto Crítico (que dobra o valor já com esse bônus embutido).
+    if (bonusDanoMiraAtual > 0) {
+        const bonusMira = Math.floor(danoTotal * bonusDanoMiraAtual);
         danoTotal += bonusMira;
         danoDadoTexto += ` [+${bonusMira} por mirar ${localMira.label}]`;
     }
@@ -2475,9 +2490,18 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             // tela de reação em mestre.js/ficha.js ainda espera receber.
             ehArmaFogo: false,
             // Golpes Mirados (manual): local escolhido, só pra exibir a
-            // nota no Log final, e se a redução de armadura do alvo vale
-            // pra esse local — ver LOCAIS_MIRA em dados-manual.js.
-            notaLocalMira, reduzArmaduraLocal: localMira.reduzArmadura,
+            // nota no Log final, e os dados que responderReacaoPendente
+            // (mestre.js) precisa pra aplicar a redução de armadura por
+            // local e testar Sangramento de golpes perfurantes que
+            // atravessaram a reação (esquiva/bloqueio/aparar não anulam
+            // o golpe sempre — ver LOCAIS_MIRA em dados-manual.js).
+            notaLocalMira,
+            localMiraKey: localMira.key,
+            localMiraLabel: localMira.label,
+            localArmaduraAtual: localMira.localArmadura,
+            regraSangramentoLocal: localMira.sangramento,
+            constituicaoAlvo,
+            nivelArma: it.nivelTag ?? 0,
             // Manual do Aparar: "não é possível aparar ataques de arma
             // branca estando desarmado" — a tela de reação usa isso pra
             // só oferecer perícias de arma branca (não as desarmadas)
@@ -2498,30 +2522,40 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     let resultadoDano;
     try {
-        // Golpes Mirados: a redução de armadura do alvo só vale pro
-        // local escolhido (localMira.reduzArmadura) — pra locais sem
-        // essa cobertura (Cabeça/Membro/Extremidade), manda
-        // tipoDanoKey null pra aplicarDano não descontar nada (mesmo
-        // truque usado em mestre.js/responderReacaoPendente).
-        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, localMira.reduzArmadura ? tipoDanoKey : null);
+        // Golpes Mirados: a redução de armadura do alvo só conta itens
+        // de Proteção cujo localProtegido bate com o local mirado (ver
+        // LOCAIS_MIRA em dados-manual.js e aplicarDano em mestre.js).
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura);
     } catch (err) {
         console.error(err);
         toast("Ataque acertou, mas falhou ao aplicar o dano no alvo.", "erro");
         return;
     }
 
-    // Sangramento por Disparo de Arma de Fogo (manual): só entra em jogo
-    // se o tiro causou dano de verdade e só faz sentido dentro do
-    // Gerenciador de Combate com iniciativa (é lá que existe a noção de
-    // "turno" pra decrementar — ver processarStatusInicioTurno em
-    // mestre.js, chamada de avancarTurnoCombate). O ferimento só sangra
-    // de fato se o teste de Constituição (dif. 10 + nível da arma)
-    // falhar — ver testarSangramento em mestre.js, que já decide isso e
-    // só chama aplicarSangramento internamente quando o teste falha.
+    // Golpes Mirados (manual): Golpe Perfurante testa Sangramento,
+    // Golpe Cortante aplica obrigatoriamente a regra de Amputação, e
+    // Golpe Contundente na Cabeça agrava o teste de Desmaio — só quando
+    // o golpe teve um local mirado de verdade ("Padrão" é "sem efeitos
+    // extras", manual) e causou dano de verdade. O teste de Sangramento
+    // só faz sentido dentro do Gerenciador de Combate com iniciativa (é
+    // lá que existe a noção de "turno" pra decrementar — ver
+    // processarStatusInicioTurno em mestre.js) — o ferimento só sangra
+    // de fato se o teste de Constituição falhar (ver testarSangramento
+    // em mestre.js, que já decide isso e só chama aplicarSangramento
+    // internamente quando o teste falha).
     let notaSangramento = "";
-    if (ehFogo && danoTotal > 0 && participante._pid && combateComIniciativaAtivo()) {
-        const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal);
-        if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+    let notaEfeitoLocal = "";
+    if (danoTotal > 0 && localMira.key !== "padrao") {
+        if (ehDanoPerfurante(tipoDanoKey) && localMira.sangramento && participante._pid && combateComIniciativaAtivo()) {
+            const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, localMira.sangramento);
+            if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+        }
+        if (ehDanoCortante(tipoDanoKey)) {
+            notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${localMira.label}: aplica-se a regra de Amputação (resolva com o Mestre).`;
+        }
+        if (ehDanoContundente(tipoDanoKey) && localMira.key === "cabeca") {
+            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo (resolva com o Mestre).`;
+        }
     }
 
     // Tiro de arma de fogo não pode ser esquivado, aparado NEM bloqueado
@@ -2532,8 +2566,8 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
@@ -2786,6 +2820,7 @@ function renderizarInventario(modificadoresPlanos) {
             const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
                 ? ` · Reduz: ${it.reducoesDano.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")}`
                 : "";
+            const localProtegidoLabel = it.localProtegido ? ` · Protege: ${escapeHtml(rotuloLocalProtecao(it.localProtegido))}` : "";
             const carregadorLabel = it.carregador
                 ? ` · Munição: ${it.carregador.municaoAtual || 0}/${it.carregador.capacidadeMax || 0}`
                 : "";
@@ -2808,7 +2843,7 @@ function renderizarInventario(modificadoresPlanos) {
             li.innerHTML = `
                 <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
                     <span class="entity-nome">${escapeHtml(it.nome)}</span>
-                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${classeLabel}${calibreLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
+                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
                 </div>
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
@@ -3530,6 +3565,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoNivelTag.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
     el.modalCampoClasseProtecao.style.display = "none";
+    el.modalCampoLocalProtegido.style.display = "none";
     el.modalCampoPeso.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
     el.modalConfigArma.style.display = "none";
@@ -3719,13 +3755,13 @@ function prepararModalItem(existente, ehBanco) {
         el.modalTag.value = existente.tag || "";
         el.modalPeso.value = existente.peso ?? 0;
         if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido);
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
         if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null);
     }
 
     // Autocompletar pelo Banco Global — só ao CRIAR um item novo dentro
@@ -3760,7 +3796,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalPeso.value = it.peso ?? 0;
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido);
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
             });
@@ -3942,7 +3978,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual) {
     const temNivel = tagTemNivel(tagKey);
     el.modalCampoNivelTag.style.display = temNivel ? "flex" : "none";
     if (temNivel) el.modalNivelTag.value = nivelTag || 1;
@@ -3991,6 +4027,11 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     el.modalConfigReducaoDano.style.display = reduzDano ? "block" : "none";
     if (reduzDano) montarReducaoDanoChecklist(reducoesDanoAtuais);
 
+    // Parte do corpo protegida — obrigatória em itens de Proteção.
+    const exigeLocalProtegido = tagExigeLocalProtegido(tagKey);
+    el.modalCampoLocalProtegido.style.display = exigeLocalProtegido ? "flex" : "none";
+    if (exigeLocalProtegido) el.modalLocalProtegido.value = localProtegidoAtual || "";
+
     // Classe de Proteção (colete e arma de fogo) e, abaixo dela, o
     // Calibre específico (carregador/projétil/arma de fogo — é o que
     // casa os três entre si).
@@ -4002,7 +4043,7 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null);
 });
 
 // Trocar a perícia vinculada de uma arma (ex: de "CQC" pra "Armas de
@@ -4259,6 +4300,10 @@ async function salvarItemDoModal(id) {
     const calibre = exigeCalibre ? el.modalCalibre.value : null;
     if (exigeCalibre && !calibre) { toast("Escolha o calibre deste item.", "erro"); return; }
 
+    const exigeLocalProtegido = tagExigeLocalProtegido(tag);
+    const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
+    if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
+
     // Carregador — preserva a munição já carregada (se estiver editando um
     // carregador existente); só a capacidade máxima é editável aqui.
     let carregador = null;
@@ -4301,6 +4346,7 @@ async function salvarItemDoModal(id) {
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
+        localProtegido,
         arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null,
         carregador,
         projetil
@@ -4359,6 +4405,10 @@ async function salvarItemBancoDoModal(id) {
     const calibre = exigeCalibre ? el.modalCalibre.value : null;
     if (exigeCalibre && !calibre) { toast("Escolha o calibre deste item.", "erro"); return; }
 
+    const exigeLocalProtegido = tagExigeLocalProtegido(tag);
+    const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
+    if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
+
     // Molde do Banco Global: carregador/carregadorId nunca guardam estado
     // de munição de uma ficha específica — só a capacidade máxima serve
     // de template; o resto começa zerado/vazio.
@@ -4388,6 +4438,7 @@ async function salvarItemBancoDoModal(id) {
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
+        localProtegido,
         arma: armaConfig,
         carregador,
         projetil

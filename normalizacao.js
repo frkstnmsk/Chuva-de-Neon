@@ -157,6 +157,7 @@ export function normalizarInventario(lista) {
             classeProtecao: it.classeProtecao || null,
             calibre: it.calibre || null,
             reducoesDano: Array.isArray(it.reducoesDano) ? it.reducoesDano : [],
+            localProtegido: it.localProtegido || null,
             carregador: it.carregador || null,
             projetil: it.projetil || null
         };
