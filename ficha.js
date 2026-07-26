@@ -2550,22 +2550,31 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     // Golpes Mirados (manual): Golpe Perfurante testa Sangramento,
     // Golpe Cortante aplica obrigatoriamente a regra de Amputação, e
-    // Golpe Contundente na Cabeça agrava o teste de Desmaio — só quando
-    // o golpe teve um local mirado de verdade ("Padrão" é "sem efeitos
-    // extras", manual) e causou dano de verdade. O teste de Sangramento
-    // só faz sentido dentro do Gerenciador de Combate com iniciativa (é
-    // lá que existe a noção de "turno" pra decrementar — ver
+    // Golpe Contundente na Cabeça agrava o teste de Desmaio.
+    // Corpo a corpo/arma branca: só quando o golpe teve um local mirado
+    // de verdade ("Padrão" é "sem efeitos extras", manual). Arma de
+    // fogo: TODO tiro perfurante testa Sangramento, mirado ou não — um
+    // tiro sem mira ainda pode perfurar e sangrar, então cai na mesma
+    // regra do Torso (mesmo localArmadura do golpe "Padrão") quando não
+    // há um local mirado escolhido. O teste de Sangramento só faz
+    // sentido dentro do Gerenciador de Combate com iniciativa (é lá que
+    // existe a noção de "turno" pra decrementar — ver
     // processarStatusInicioTurno em mestre.js) — o ferimento só sangra
     // de fato se o teste de Constituição falhar (ver testarSangramento
     // em mestre.js, que já decide isso e só chama aplicarSangramento
     // internamente quando o teste falha).
     let notaSangramento = "";
     let notaEfeitoLocal = "";
-    if (danoTotal > 0 && localMira.key !== "padrao") {
-        if (ehDanoPerfurante(tipoDanoKey) && localMira.sangramento && participante._pid && combateComIniciativaAtivo()) {
-            const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, localMira.sangramento);
+    if (danoTotal > 0 && ehDanoPerfurante(tipoDanoKey) && participante._pid && combateComIniciativaAtivo()) {
+        const regraSangramentoAplicavel = ehFogo
+            ? (localMira.sangramento || localMiraPorKey("torso").sangramento)
+            : (localMira.key !== "padrao" ? localMira.sangramento : null);
+        if (regraSangramentoAplicavel) {
+            const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, regraSangramentoAplicavel);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
         }
+    }
+    if (danoTotal > 0 && localMira.key !== "padrao") {
         if (ehDanoCortante(tipoDanoKey)) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${localMira.label}: aplica-se a regra de Amputação (resolva com o Mestre).`;
         }
