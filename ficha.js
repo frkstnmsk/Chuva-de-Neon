@@ -1609,13 +1609,15 @@ async function rolarERegistrar(nomeAlvo, modificador) {
 
     const bruto = rolarD20();
     const resultado = bruto + Number(modificador || 0);
-    // Acerto Crítico (d20 natural 20 ou resultado final >= 20) / Falha
-    // Crítica (d20 natural 1 ou resultado final <= 1) — aqui é só
-    // sinalização pro Log de Dados e resolução manual do Mestre; não há
-    // "dano" pra dobrar numa rolagem genérica de perícia/atributo (isso
-    // é exclusivo de resolverAtaque, que também aplica a dobra de dano
-    // de verdade).
-    const criticoPositivo = bruto === 20 || resultado >= 20;
+    // Acerto Crítico: o RESULTADO FINAL (d20 + modificador) precisa ser
+    // exatamente 20 — d20 natural 20 sozinho NÃO garante crítico se o
+    // modificador derrubar o resultado (ex.: d20=20, modificador -1,
+    // resultado final 19 → não é crítico). Falha Crítica (d20 natural 1
+    // ou resultado final <= 1) — aqui é só sinalização pro Log de Dados
+    // e resolução manual do Mestre; não há "dano" pra dobrar numa
+    // rolagem genérica de perícia/atributo (isso é exclusivo de
+    // resolverAtaque, que também aplica a dobra de dano de verdade).
+    const criticoPositivo = resultado === 20;
     // Falha Crítica: d20 natural 1, OU resultado final <= 1 — este
     // segundo caso só é matematicamente possível com modificador
     // negativo (ex: d20=2, modificador -1, resultado final = 1),
@@ -2294,15 +2296,18 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra;
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
-    // Acerto Crítico (manual): d20 natural 20 OU resultado final >= 20
-    // dobra o dano do ataque (aplicado mais abaixo, sobre danoTotal,
+    // Acerto Crítico (manual): o RESULTADO FINAL (d20 + modificadores)
+    // precisa ser exatamente 20 — d20 natural 20 sozinho NÃO garante
+    // crítico se os modificadores derrubarem o resultado (ex.: d20=20,
+    // modificador -1, resultado final 19 → acerto normal, não crítico).
+    // Dobra o dano do ataque (aplicado mais abaixo, sobre danoTotal,
     // antes de reduções de armadura/agarrado/alcance). Falha Crítica:
     // d20 natural 1, OU resultado final <= 1 (possível com modificador
     // negativo, ex: d20=2, modificador -1, resultado final = 1) —
     // sempre sinalizada no Log como "Fogo Amigo/Desastre" pra resolução
     // rápida do Mestre, independente do resultado final ter batido a
     // dificuldade ou não.
-    const criticoPositivo = brutoAtaque === 20 || resultadoAtaque >= 20;
+    const criticoPositivo = resultadoAtaque === 20;
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
     const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, criticoPositivo, criticoNegativo });
 
