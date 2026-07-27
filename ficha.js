@@ -32,12 +32,12 @@ import {
     atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
-    bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga
+    bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
-    calcularCargaAtual, itemPodeUsar, listaArmasInventario,
+    calcularCargaAtual, itemPodeUsar, itemPodeEquipar, listaArmasInventario,
     listaCarregadoresInventario, listaProjeteisInventario
 } from "./inventario.js";
 import {
@@ -75,8 +75,10 @@ import {
     ouvirCombateAtivo, adicionarParticipanteCombate, removerParticipanteCombate, encerrarCombate,
     ouvirAcoesPendentes, criarAcaoPendente, rejeitarAcaoPendente, confirmarAcaoPendente,
     iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, resetarRecuoArma,
+    participantesElegiveisCQCIniciativa,
     abrirReacaoPendente, responderReacaoPendente, adicionarEsquivaExtra,
     consumirContraAtaquePendente, definirAgarrado, soltarAgarrado,
+    definirDerrubado, levantarDerrubado,
     definirAlcanceLimitado, soltarAlcanceLimitado
 } from "./mestre.js";
 import {
@@ -1122,6 +1124,19 @@ async function alternarAtivoEntidade(lista, id, novoValor) {
     }
 }
 
+// Equipar/desequipar uma arma do inventário — só arma equipada pode ser
+// usada em combate (ver itemPodeUsar em inventario.js) e é o que a
+// manobra "Desarmar" de fato retira do alvo (ver resolverDesarmar).
+async function alternarEquipadaItem(id, novoValor) {
+    if (!idAtivo()) return;
+    try {
+        await update(ref(db, `${caminhoBase()}/inventario/${id}`), { equipada: novoValor });
+        toast(novoValor ? "Arma equipada." : "Arma desequipada.");
+    } catch (e) {
+        toast("Não foi possível atualizar a arma. Tente de novo.", "erro");
+    }
+}
+
 function escapeHtml(str) {
     if (str === null || str === undefined) return "";
     return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -1953,6 +1968,8 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
 
 let contextoAtaque = null;
 let contextoAgarrar = null;
+let contextoDesarmar = null;
+let contextoDerrubar = null;
 let contextoDelimitar = null;
 let contextoRetomar = null;
 
@@ -2040,6 +2057,139 @@ function abrirModalSelecionarAlvoAgarrar(nomePericia, modificador) {
     el.modalSelecionarAlvo.classList.add("active");
 }
 
+// Mesma modal de seleção de alvo, reaproveitada pra manobra "Desarmar"
+// (contexto separado, igual Agarrar — sem campo extra, só escolhe o alvo).
+function abrirModalSelecionarAlvoDesarmar(nomePericia, modificador) {
+    contextoDesarmar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Desarmar com ${nomePericia}`;
+    el.alvoCampoExtra.style.display = "none";
+    el.alvoCampoExtra.innerHTML = "";
+    if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra desarmar.", "erro"); contextoDesarmar = null; return; }
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// Mesma modal de seleção de alvo, reaproveitada pra manobra "Derrubar"
+// (contexto separado, igual Agarrar/Desarmar). CQC nível 2 ("derrubar
+// uma vez. Causa dano contundente Destreza D") é condicional a estar
+// avançando contra um oponente armado pra derrubá-lo — não dá pra
+// detectar isso automaticamente, então aparece como checkbox no campo
+// extra da modal (mesma ideia de abrirModalBonusIniciativaCQC pra
+// iniciativa), só quando o personagem TEM o nível.
+function abrirModalSelecionarAlvoDerrubar(nomePericia, modificador, nivelCQC = 0) {
+    contextoDerrubar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Derrubar com ${nomePericia}`;
+    if (nivelCQC >= 2) {
+        el.alvoCampoExtra.style.display = "block";
+        el.alvoCampoExtra.innerHTML = `
+            <label style="display:flex;align-items:flex-start;gap:6px;">
+                <input type="checkbox" id="alvo-cqc-derrubar-check">
+                <span>Avançando contra oponente armado pra derrubá-lo (CQC nível ${nivelCQC}) — causa dano contundente extra (Destreza escala D) se acertar</span>
+            </label>
+        `;
+    } else {
+        el.alvoCampoExtra.style.display = "none";
+        el.alvoCampoExtra.innerHTML = "";
+    }
+    if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra derrubar.", "erro"); contextoDerrubar = null; return; }
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// CQC nível 2 (manual): checkbox pré-rolagem de iniciativa pra decidir
+// quem está avançando contra oponentes armados pra derrubá-los (+1 na
+// iniciativa). Só chamada quando participantesElegiveisCQCIniciativa()
+// já achou pelo menos 1 personagem com o nível — devolve uma Promise
+// que resolve com o mapa {participanteId: true} dos marcados, ou `null`
+// se o Mestre fechar/cancelar sem confirmar (o botão então não rola a
+// iniciativa de ninguém, pra não perder a chance de aplicar o bônus).
+function abrirModalBonusIniciativaCQC(elegiveis) {
+    return new Promise((resolve) => {
+        let modal = document.getElementById("modal-bonus-cqc-iniciativa");
+        if (!modal) {
+            modal = document.createElement("div");
+            modal.id = "modal-bonus-cqc-iniciativa";
+            modal.className = "panel combate-painel-jogador";
+            document.body.appendChild(modal);
+        }
+        const linhas = elegiveis.map(e => `
+            <label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                <input type="checkbox" data-cqc-iniciativa="${e.id}">
+                <span>${escapeHtml(e.nome)} — CQC nível ${e.nivel}</span>
+            </label>
+        `).join("");
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">CQC nível 2</span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <h4>Bônus de iniciativa (+1)</h4>
+            <p class="hint">Marque quem está avançando contra oponentes armados pra derrubá-los antes de rolar a iniciativa.</p>
+            <div class="combate-lista">${linhas}</div>
+            <button type="button" class="btn-lime" id="btn-confirmar-bonus-cqc-iniciativa" style="margin-top:10px;width:100%;">Rolar iniciativa</button>
+        `;
+        const fechar = (resultado) => { modal.remove(); resolve(resultado); };
+        modal.querySelector(".combate-fechar").addEventListener("click", () => fechar(null));
+        modal.querySelector("#btn-confirmar-bonus-cqc-iniciativa").addEventListener("click", () => {
+            const bonusMap = {};
+            modal.querySelectorAll("[data-cqc-iniciativa]").forEach(chk => {
+                if (chk.checked) bonusMap[chk.dataset.cqcIniciativa] = true;
+            });
+            fechar(bonusMap);
+        });
+    });
+}
+
+// "Arremessar" (CQC nível 3+): escolhe de 1 a 3 alvos entre os
+// participantes do combate (exceto o próprio atacante) — diferente do
+// resto das manobras, que sempre miram um único alvo, por isso usa uma
+// modal própria em vez do modal compartilhado (el.modalSelecionarAlvo).
+// Devolve void — chama resolverArremessar direto ao confirmar.
+function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([, p]) =>
+        !(p.tipo === "ficha" && p.refId === fichaAtualId) &&
+        !(modoNpc && p.tipo === "npc" && p.refId === npcAtualId)
+    );
+    if (!opcoes.length) { toast("Não há outros participantes no combate pra arremessar.", "erro"); return; }
+
+    let modal = document.getElementById("modal-arremessar-cqc");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-arremessar-cqc";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const linhas = opcoes.map(([pid, p]) => `
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+            <input type="checkbox" data-arremessar-alvo="${pid}">
+            <span>${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</span>
+        </label>
+    `).join("");
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Arremessar — CQC nível 3+</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>Escolha até 3 alvos</h4>
+        <p class="hint">Arremessa "${escapeHtml(itemFaca.nome)}" em cada alvo marcado. Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
+        <div class="combate-lista">${linhas}</div>
+        <button type="button" class="btn-lime" id="btn-confirmar-arremessar" style="margin-top:10px;width:100%;">Arremessar</button>
+    `;
+    const checks = () => Array.from(modal.querySelectorAll("[data-arremessar-alvo]"));
+    checks().forEach(chk => {
+        chk.addEventListener("change", () => {
+            const marcados = checks().filter(c => c.checked);
+            if (marcados.length > 3) chk.checked = false; // trava em 3 alvos (manual)
+        });
+    });
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-arremessar").addEventListener("click", async () => {
+        const alvosIds = checks().filter(c => c.checked).map(c => c.dataset.arremessarAlvo);
+        if (!alvosIds.length) { toast("Marque pelo menos 1 alvo.", "erro"); return; }
+        modal.remove();
+        await resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds);
+    });
+}
+
 // Delimitar alcance (manual): além do alvo, escolhe QUAL alcance vai
 // ficar disponível pra vítima (Curto/Médio/Longo) — usa o campo extra
 // do modal compartilhado pra isso.
@@ -2088,6 +2238,8 @@ function configurarModalSelecionarAlvo() {
     const limparContextos = () => {
         contextoAtaque = null;
         contextoAgarrar = null;
+        contextoDesarmar = null;
+        contextoDerrubar = null;
         contextoDelimitar = null;
         contextoRetomar = null;
     };
@@ -2102,7 +2254,7 @@ function configurarModalSelecionarAlvo() {
         }
     });
     el.alvoConfirmar.addEventListener("click", async () => {
-        if (!contextoAtaque && !contextoAgarrar && !contextoDelimitar && !contextoRetomar) return;
+        if (!contextoAtaque && !contextoAgarrar && !contextoDesarmar && !contextoDerrubar && !contextoDelimitar && !contextoRetomar) return;
         const pid = el.alvoSelect.value;
         const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
@@ -2131,6 +2283,16 @@ function configurarModalSelecionarAlvo() {
             const { nomePericia, modificador } = contextoAgarrar;
             limparContextos();
             await resolverAgarrar(nomePericia, modificador, { ...participante, _pid: pid });
+        } else if (contextoDesarmar) {
+            const { nomePericia, modificador } = contextoDesarmar;
+            limparContextos();
+            await resolverDesarmar(nomePericia, modificador, { ...participante, _pid: pid });
+        } else if (contextoDerrubar) {
+            const { nomePericia, modificador } = contextoDerrubar;
+            const cqcCheck = document.getElementById("alvo-cqc-derrubar-check");
+            const usarBonusCQCDano = cqcCheck ? cqcCheck.checked : false;
+            limparContextos();
+            await resolverDerrubar(nomePericia, modificador, { ...participante, _pid: pid }, usarBonusCQCDano);
         } else if (contextoDelimitar) {
             const { nomePericia, modificador } = contextoDelimitar;
             const alcanceSelect = document.getElementById("alvo-alcance-select");
@@ -2348,8 +2510,6 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const bonusCQCFaca = (!armaConfig.desarmado && ehFacaOuAdaga(it.nome)) ? bonusCQCFacaAdaga(nivelCQC) : null;
     if (bonusCQCFaca) notasSituacionaisLista.push(`CQC nível ${nivelCQC} — faca/adaga (dificuldade ${bonusCQCFaca.difAjuste}, dano extra de Destreza)`);
 
-    const notaSituacional = notasSituacionaisLista.length ? ` Situacional: ${notasSituacionaisLista.join("; ")}.` : "";
-
     // Recuo — só disparos de arma de fogo de verdade contam (golpe
     // desarmado nunca é "arma de fogo" mesmo se a perícia usada fosse
     // uma perícia de tiro, o que nem é o caso aqui). idDisparoAtual/chave
@@ -2454,6 +2614,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     // CQC nível 3: faca/adaga golpeia com dificuldade -1.
     if (bonusCQCFaca) dificuldade += bonusCQCFaca.difAjuste;
+
+    // Derrubar (manual): alvo derrubado tem a dificuldade pra ser
+    // acertado diminuída em -3 até se levantar (gastando 1 ação — ver
+    // "Levantar" no Gerenciador de Combate).
+    const statusDerrubadoAlvo = participante.derrubado;
+    if (statusDerrubadoAlvo && statusDerrubadoAlvo.ativo) {
+        dificuldade -= 3;
+        notasSituacionaisLista.push(`${nomeAlvo} está DERRUBADO (-3 na dificuldade)`);
+    }
+
+    const notaSituacional = notasSituacionaisLista.length ? ` Situacional: ${notasSituacionaisLista.join("; ")}.` : "";
 
     const acertou = resultadoAtaque >= dificuldade;
 
@@ -2783,6 +2954,343 @@ async function resolverAgarrar(nomePericia, modificador, participante) {
     toast(detalhe);
 }
 
+// Desarmar (manual pg. 49-50): teste vs. "10 + perícia da vítima" (usa
+// a MELHOR das perícias corpo a corpo/arma branca do alvo, mesma lógica
+// de Delimitar alcance — o manual não especifica QUAL perícia). Sucesso
+// retira uma arma EQUIPADA do alvo (ver itemPodeEquipar/itemPodeUsar em
+// inventario.js — só arma equipada pode ser usada em combate, e é isso
+// que Desarmar de fato tira: desequipa o item, não some com ele). Se o
+// alvo não tiver nenhuma arma equipada, o teste ainda pode ser vencido,
+// mas não tem o que desarmar — o Log deixa isso claro.
+async function resolverDesarmar(nomePericia, modificador, participante) {
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo, caminhoInventarioAlvo;
+    try {
+        const melhorPericiaAlvo = await calcularMelhorModCorpoACorpoParticipante(participante.tipo, participante.refId);
+        dificuldade = 10 + melhorPericiaAlvo;
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
+            nomeAlvo = (snap.val().config && snap.val().config.nomeExibicao) || participante.nome;
+            caminhoInventarioAlvo = `fichas/${participante.refId}/inventario`;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
+            nomeAlvo = snap.val().nome || participante.nome;
+            caminhoInventarioAlvo = `npcs/${participante.refId}/inventario`;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Desarmar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Desarmar ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    // Acerto: procura a PRIMEIRA arma equipada do alvo pra desequipar.
+    // Não há critério de "melhor arma" no manual — se o alvo tiver mais
+    // de uma equipada (dupla empunhadura, por ex.), pega a primeira
+    // encontrada e deixa claro qual foi no Log.
+    let nomeArmaDesarmada = null;
+    try {
+        const snapInv = await get(ref(db, caminhoMesa(caminhoInventarioAlvo)));
+        if (snapInv.exists()) {
+            const inv = snapInv.val();
+            const entradaArma = Object.entries(inv).find(([, it]) => ehArma(it.tag) && it.categoria === "levando" && it.equipada);
+            if (entradaArma) {
+                const [itemId, item] = entradaArma;
+                await update(ref(db, caminhoMesa(`${caminhoInventarioAlvo}/${itemId}`)), { equipada: false });
+                nomeArmaDesarmada = item.nome;
+            }
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Teste de Desarmar venceu, mas falhou ao atualizar o inventário do alvo — resolva manualmente.", "erro");
+    }
+
+    const efeitoTexto = nomeArmaDesarmada
+        ? ` ${nomeAlvo} ficou desarmado — "${nomeArmaDesarmada}" foi desequipada e precisa ser reequipada (ou pega do chão) antes de voltar a ser usada.`
+        : ` ${nomeAlvo} não tinha nenhuma arma equipada pra desarmar — teste vencido sem efeito.`;
+    const detalhe = `${nomeAtacante} DESARMOU ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}.${efeitoTexto}\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// Derrubar (manual pg. 49-50): teste vs. "10 + Constituição do alvo".
+// Sucesso derruba a vítima — ver definirDerrubado em mestre.js: enquanto
+// durar, a dificuldade pra acertá-la cai -3 (aplicado em resolverAtaque
+// via participante.derrubado) e ela precisa gastar 1 ação do turno pra
+// se levantar (ver tentarLevantarDerrubado, chamado pelo botão
+// "Levantar" no Gerenciador de Combate).
+//
+// CQC nível 2 ("Avançar em direção a oponentes armados e derrubá-los
+// tem [...] e derrubar uma vez. Causa dano contundente Destreza D"):
+// `usarBonusCQCDano` vem do checkbox da modal de alvo (só aparece pra
+// quem TEM o nível — ver abrirModalSelecionarAlvoDerrubar), porque é
+// condicional a uma escolha narrativa que o sistema não consegue
+// detectar sozinho. O +1 de iniciativa do MESMO nível é oferecido em
+// outro momento (ao rolar iniciativa — ver participantesElegiveisCQCIniciativa
+// em mestre.js), não aqui; o manual não deixa claro se as duas partes
+// do bônus têm que ser usadas juntas na mesma ação, então ficam
+// desacopladas — cabe ao Mestre decidir quando cada uma se aplica.
+async function resolverDerrubar(nomePericia, modificador, participante, usarBonusCQCDano = false) {
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo;
+    try {
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
+            const fichaAlvo = normalizarFicha(snap.val());
+            nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
+            dificuldade = 10 + (Number(fichaAlvo.dados.constituicao) || 0);
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
+            const npc = snap.val();
+            nomeAlvo = npc.nome || participante.nome;
+            const constituicaoAlvo = npc.modoDetalhado ? (Number(npc.atributosPrimarios?.constituicao) || 0) : (Number(npc.constituicao) || 0);
+            dificuldade = 10 + constituicaoAlvo;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Derrubar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Derrubar ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    await definirDerrubado(participante._pid, meuPid, nomeAtacante);
+
+    let notaBonusCQC = "";
+    if (usarBonusCQCDano) {
+        try {
+            const destrezaAtacante = Number(fichaAtual.dados.destreza) || 0;
+            const danoBonus = calcularDanoTotalArma({ danoBase: 0, escalaMult: 1 }, destrezaAtacante);
+            const resultadoDanoBonus = await aplicarDano(participante.tipo, participante.refId, danoBonus, "contusao", null);
+            notaBonusCQC = ` CQC nível 2 (avançou pra derrubar): +${danoBonus} de dano contundente extra — ${resultadoDanoBonus.reducao} (redução) = ${resultadoDanoBonus.danoFinal} aplicado, PV restante: ${resultadoDanoBonus.novoPv}.`;
+        } catch (err) {
+            console.error(err);
+            notaBonusCQC = " Bônus de dano do CQC nível 2 marcado, mas falhou ao aplicar — resolva manualmente.";
+        }
+    }
+
+    const detalhe = `${nomeAtacante} DERRUBOU ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} está derrubado: dificuldade pra ser acertado cai -3 e precisa gastar 1 ação pra se levantar.${notaBonusCQC}\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// "Levantar" (efeito de Derrubar — manual: "gastar uma ação para se
+// levantar"). Igual ao resto do sistema de ações: o efeito (remover o
+// status Derrubado) acontece na hora — só o CONSUMO da ação em si segue
+// o Sistema de Aprovação do Mestre quando quem levanta é um jogador (ver
+// checarConsumoDeAcao/criarAcaoPendente). Só faz sentido no PRÓPRIO
+// turno de quem está derrubado (não dá pra "gastar a ação de alguém" —
+// por isso não usa checarConsumoDeAcao, que sempre resolve pra "eu" —
+// aqui o alvo é um participanteId explícito, vindo do botão "Levantar").
+async function tentarLevantarDerrubado(participanteId) {
+    if (!combateComIniciativaAtivo()) {
+        // Sem sistema de turnos ativo não há como controlar economia de
+        // ações — levanta direto.
+        await levantarDerrubado(participanteId);
+        toast("Levantou.");
+        return;
+    }
+    if (combateAtivoCache.turnoAtual !== participanteId) {
+        toast("Só é possível se levantar no próprio turno.", "erro");
+        return;
+    }
+    const p = combateAtivoCache.participantes[participanteId];
+    if (p && Number(p.acoes) <= 0) {
+        toast("Sem ações restantes neste turno pra se levantar.", "erro");
+        return;
+    }
+    await levantarDerrubado(participanteId);
+    if (isMestre) {
+        await consumirAcaoCombate(participanteId);
+        toast("Levantou — 1 ação consumida.");
+    } else {
+        const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador,
+            detalhe: `${nomeJogador} se levantou e quer gastar 1 ação do turno.`,
+            payload: { participanteId, ehArmaFogo: false }
+        });
+        toast("Levantou — gasto de ação enviado pro Mestre aprovar.");
+    }
+}
+
+// Arremessar (CQC nível 3+, manual pg. 20-21, dentro de "Esfaquear e
+// Arremessar"): joga a faca/adaga equipada em até 3 alvos numa única
+// ação. "Para cada inimigo a mais até um máximo de 3, você recebe
+// modificador +1 para arremessá-los ou derrubá-los" — interpretado como
+// bônus cumulativo aplicado à rolagem inteira (não escalonado alvo a
+// alvo), já que o manual não detalha outra forma de dividir isso.
+// Reaproveita a dificuldade -1 do "golpear com faca" (nível 3, já
+// embutida no "9 +" abaixo em vez de "10 +"), mas o dano aqui escala
+// com FORÇA [escala C] — diferente do golpe corpo a corpo, que escala
+// com Destreza [D] (ver bonusCQCFacaAdaga). Cada acerto ainda testa
+// Derrubar contra aquele alvo específico, com dificuldade +2 (mais
+// difícil que o Derrubar corpo a corpo comum), usando a mesma
+// infraestrutura de definirDerrubado/resolverDerrubar.
+async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds) {
+    const consumo = checarConsumoDeAcao();
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const bonusPorAlvoExtra = Math.max(0, alvosIds.length - 1);
+    const modificadorAtaque = modificadorBase + bonusPorAlvoExtra;
+    const forcaAtacante = Number(fichaAtual.dados.forca) || 0;
+    const danoArremesso = calcularDanoTotalArma({ danoBase: 0, escalaMult: 2 }, forcaAtacante); // escala C = 2x Força
+    const tipoDanoKey = (itemFaca.arma && itemFaca.arma.tipoDano) || "corte";
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} arremessou ${itemFaca.nome} em ${alvosIds.length} alvo(s) e quer gastar 1 ação do turno.`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    const linhasLog = [];
+    for (const pid of alvosIds) {
+        const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
+        if (!participante) { linhasLog.push("Alvo inválido (saiu do combate)."); continue; }
+
+        let dificuldade, nomeAlvo, constituicaoAlvo = 0;
+        try {
+            if (participante.tipo === "ficha") {
+                const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+                if (!snap.exists()) { linhasLog.push(`${participante.nome}: ficha não encontrada.`); continue; }
+                const fichaAlvo = normalizarFicha(snap.val());
+                nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
+                const modsAlvo = coletarModificadores(fichaAlvo);
+                const agilidadeAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "agilidade", modsAlvo, 0);
+                constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
+                dificuldade = 9 + agilidadeAlvo; // 10 base -1 (CQC nível 3)
+            } else {
+                const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+                if (!snap.exists()) { linhasLog.push(`${participante.nome}: NPC não encontrado.`); continue; }
+                const npc = snap.val();
+                nomeAlvo = npc.nome || participante.nome;
+                dificuldade = 9 + (Number(npc.agilidade) || 0);
+                constituicaoAlvo = Number(npc.constituicao) || 0;
+            }
+        } catch (err) {
+            console.error(err);
+            linhasLog.push(`${participante.nome}: falha ao buscar dados do alvo.`);
+            continue;
+        }
+
+        const brutoAtaque = rolarD20();
+        const resultadoAtaque = brutoAtaque + modificadorAtaque;
+        if (resultadoAtaque < dificuldade) {
+            linhasLog.push(`${nomeAlvo}: ERRO (${brutoAtaque}+${modificadorAtaque}=${resultadoAtaque} vs. dificuldade ${dificuldade}).`);
+            continue;
+        }
+
+        let resultadoDano;
+        try {
+            resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoArremesso, tipoDanoKey, null);
+        } catch (err) {
+            console.error(err);
+            linhasLog.push(`${nomeAlvo}: ACERTO (${resultadoAtaque} vs. ${dificuldade}), mas falhou ao aplicar o dano — resolva manualmente.`);
+            continue;
+        }
+
+        // Teste de Derrubar embutido (dificuldade +2) — só em quem foi
+        // de fato acertado pelo arremesso.
+        const dificuldadeDerrubar = 10 + constituicaoAlvo + 2;
+        const brutoDerrubar = rolarD20();
+        const resultadoDerrubar = brutoDerrubar + modificadorAtaque;
+        let notaDerrubar;
+        if (resultadoDerrubar >= dificuldadeDerrubar) {
+            await definirDerrubado(pid, meuPid, nomeAtacante);
+            notaDerrubar = ` DERRUBADO (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+        } else {
+            notaDerrubar = ` não derrubou (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+        }
+
+        linhasLog.push(`${nomeAlvo}: ACERTO (${resultadoAtaque} vs. ${dificuldade}) — dano ${danoArremesso}, ${resultadoDano.reducao} de redução = ${resultadoDano.danoFinal} aplicado, PV restante ${resultadoDano.novoPv}.${notaDerrubar}`);
+    }
+
+    const notaBonus = bonusPorAlvoExtra ? ` (base ${modificadorBase >= 0 ? "+" : ""}${modificadorBase} +${bonusPorAlvoExtra} por alvo extra)` : "";
+    const detalhe = `${nomeAtacante} ARREMESSOU ${itemFaca.nome} (CQC nível 3+) em ${alvosIds.length} alvo(s) — modificador ${modificadorAtaque >= 0 ? "+" : ""}${modificadorAtaque}${notaBonus}:\n${linhasLog.map(l => `• ${l}`).join("\n")}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador: modificadorAtaque, resultado: `${alvosIds.length} alvo(s)`, detalhe });
+    toast(detalhe);
+}
+
 // Delimitar alcance (manual): teste vs. "11 + perícia corpo a corpo do
 // alvo" (usa a MELHOR das perícias corpo a corpo/arma branca do alvo —
 // ver calcularMelhorModCorpoACorpoParticipante). Sucesso trava a vítima
@@ -2948,6 +3456,9 @@ function renderizarInventario(modificadoresPlanos) {
             const podeUsar = itemPodeUsar(it) && !!it.periciaUso;
             const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
             const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
+            const ehArmaItem = ehArma(it.tag);
+            const equipadaItem = !!it.equipada;
+            const podeEquipar = itemPodeEquipar(it);
             const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
             const periciaLabel = it.periciaUso ? ` · Usa: ${escapeHtml(it.periciaUso)}` : "";
             const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
@@ -2982,7 +3493,8 @@ function renderizarInventario(modificadoresPlanos) {
                 </div>
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${it.periciaUso}` : "Sem perícia vinculada"}">Usar</button>
+                    ${ehArmaItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? "🗡️ Equipada" : "○ Desequipada"}</button>` : ""}
+                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${it.periciaUso}` : (ehArmaItem && !equipadaItem ? "Equipe a arma pra poder usá-la" : "Sem perícia vinculada")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
                     ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
@@ -2993,6 +3505,14 @@ function renderizarInventario(modificadoresPlanos) {
                 li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
                     e.stopPropagation();
                     alternarAtivoEntidade("inventario", id, !ativoItem);
+                });
+            }
+            const btnToggleEquipada = li.querySelector(".btn-toggle-equipada");
+            if (btnToggleEquipada) {
+                btnToggleEquipada.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    if (!podeEquipar) return;
+                    alternarEquipadaItem(id, !equipadaItem);
                 });
             }
             const selectTransferir = li.querySelector(".select-transferir");
@@ -3016,7 +3536,9 @@ function renderizarInventario(modificadoresPlanos) {
                 const novaCategoria = e.target.value;
                 if (!novaCategoria) return;
                 if (isMestre) {
-                    await update(ref(db, `${caminhoBase()}/inventario/${id}`), { categoria: novaCategoria });
+                    const dados = { categoria: novaCategoria };
+                    if (novaCategoria !== "levando" && ehArmaItem && equipadaItem) dados.equipada = false;
+                    await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
                     toast(`${it.nome} movido.`);
                 } else {
                     const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
@@ -3088,6 +3610,8 @@ function renderizarCombate() {
             const escala = ESCALAS_ARMA.find(e => e.key === cfg.escala);
             const mods = (cfg.modificacoesArma || []).join(", ");
             const podeUsar = itemPodeUsar(arma) && !!arma.periciaUso;
+            const equipadaArma = !!arma.equipada;
+            const podeEquiparArma = itemPodeEquipar(arma);
             const periciaLabel = arma.periciaUso ? ` · Perícia: ${escapeHtml(arma.periciaUso)}` : " · Sem perícia vinculada";
             const classeLabel = arma.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(arma.classeProtecao))}` : "";
             const calibreLabel = arma.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(arma.calibre))}` : "";
@@ -3112,10 +3636,16 @@ function renderizarCombate() {
                     ${cfg.efeitoExtra ? `<span class="entity-sub">Efeito extra: ${escapeHtml(cfg.efeitoExtra)}</span>` : ""}
                 </div>
                 <div class="entity-badges">
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : "Precisa estar em 'Levando consigo' e ter perícia vinculada"}">Usar</button>
+                    <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${podeEquiparArma ? (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
+                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                 </div>
             `;
+            li.querySelector(".btn-toggle-equipada").addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (!podeEquiparArma) return;
+                alternarEquipadaItem(arma.id, !equipadaArma);
+            });
             li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
                 e.stopPropagation();
                 if (!podeUsar) return;
@@ -3145,7 +3675,15 @@ function renderizarManobrasCombate() {
     const modificadoresPlanos = coletarModificadores(fichaAtual);
     el.listaManobrasCombate.innerHTML = "";
 
-    MANOBRAS_COMBATE.forEach(m => {
+    // "Arremessar" (CQC nível 3+) não é uma manobra "de qualquer
+    // perícia" do manual — é exclusiva de quem tem o nível, por isso só
+    // entra na lista quando o personagem atende o requisito (ver
+    // MANOBRA_ARREMESSAR_CQC em dados-manual.js).
+    const entradaCQCLista = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
+    const nivelCQCLista = entradaCQCLista ? (Number(entradaCQCLista[1].nivel) || 0) : 0;
+    const manobrasParaExibir = nivelCQCLista >= 3 ? [...MANOBRAS_COMBATE, MANOBRA_ARREMESSAR_CQC] : MANOBRAS_COMBATE;
+
+    manobrasParaExibir.forEach(m => {
         const li = document.createElement("li");
 
         // "Esquivar" não usa uma perícia treinável — é Agilidade (o
@@ -3156,8 +3694,13 @@ function renderizarManobrasCombate() {
         // cadastrada) e sem o fallback "Sem Perícia" (não existe
         // "Agilidade destreinada" — todo personagem tem o atributo).
         const ehEsquivar = m.nome === "Esquivar";
+        // "Arremessar" também não tem fallback "Sem Perícia" — é
+        // exclusiva de CQC nível 3+, não existe "versão destreinada".
+        const ehArremessar = m.nome === "Arremessar";
         const periciasHtml = ehEsquivar
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
+            : ehArremessar
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="CQC" title="Rolar d20 + CQC">CQC 🎲</button>`
             : m.pericias.map(nomePericia => {
                 const entrada = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === nomePericia);
                 if (!entrada) return `<span class="manobra-pericia-texto">${escapeHtml(nomePericia)}</span>`;
@@ -3176,6 +3719,14 @@ function renderizarManobrasCombate() {
             const bonus = entradaBoxe ? bonusEsquivaBoxe(entradaBoxe[1].nivel) : null;
             if (bonus) {
                 efeitoTexto += ` · Bônus de Boxe: +${bonus.desarmado} vs. golpe desarmado, +${bonus.armaBranca} vs. arma branca`;
+            }
+        }
+        if (m.nome === "Desarmar") {
+            const entradaCQC = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
+            const nivelCQC = entradaCQC ? (Number(entradaCQC[1].nivel) || 0) : 0;
+            const bonusCQC = bonusCQCDesarmar(nivelCQC);
+            if (bonusCQC) {
+                efeitoTexto += ` · CQC nível ${nivelCQC}: +${bonusCQC} rolando com CQC`;
             }
         }
 
@@ -3213,6 +3764,64 @@ function renderizarManobrasCombate() {
                     }
                     const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
                     abrirModalSelecionarAlvoAgarrar(nomePericia, modificador);
+                    return;
+                }
+
+                // Desarmar (manual): mesma ideia do Agarrar — resolve num
+                // fluxo próprio (resolverDesarmar), sem dano direto.
+                // CQC nível 1 dá +1 quando a perícia rolada é CQC de
+                // verdade (ver bonusCQCDesarmar em dados-manual.js).
+                if (m.nome === "Desarmar") {
+                    if (!combateTemParticipantes()) {
+                        toast("Desarmar precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    let modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
+                    if (nomePericia === "CQC") {
+                        const entradaCQC = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
+                        const nivelCQC = entradaCQC ? (Number(entradaCQC[1].nivel) || 0) : 0;
+                        modificador += bonusCQCDesarmar(nivelCQC);
+                    }
+                    abrirModalSelecionarAlvoDesarmar(nomePericia, modificador);
+                    return;
+                }
+
+                // Derrubar (manual): mesma ideia do Agarrar/Desarmar —
+                // resolve num fluxo próprio (resolverDerrubar), sem dano
+                // direto (a menos que o Mestre confirme o bônus de CQC
+                // nível 2, marcado como checkbox na modal de alvo — ver
+                // abrirModalSelecionarAlvoDerrubar). O +1 de iniciativa
+                // do mesmo nível é oferecido em outro momento (ao rolar
+                // iniciativa — ver abrirModalBonusIniciativaCQC), não aqui.
+                if (m.nome === "Derrubar") {
+                    if (!combateTemParticipantes()) {
+                        toast("Derrubar precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
+                    const entradaCQCDerrubar = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
+                    const nivelCQCDerrubar = entradaCQCDerrubar ? (Number(entradaCQCDerrubar[1].nivel) || 0) : 0;
+                    abrirModalSelecionarAlvoDerrubar(nomePericia, modificador, nivelCQCDerrubar);
+                    return;
+                }
+
+                // Arremessar (CQC nível 3+, exclusiva — ver
+                // MANOBRA_ARREMESSAR_CQC em dados-manual.js): precisa de
+                // uma faca/adaga EQUIPADA (ver itemPodeEquipar em
+                // inventario.js) e escolhe até 3 alvos numa modal própria
+                // (resolve tudo em resolverArremessar).
+                if (m.nome === "Arremessar") {
+                    if (!combateTemParticipantes()) {
+                        toast("Arremessar precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const itemFaca = Object.values(fichaAtual.inventario || {}).find(it => ehFacaOuAdaga(it.nome) && it.categoria === "levando" && it.equipada);
+                    if (!itemFaca) {
+                        toast("Equipe uma faca ou adaga (Levando consigo + Equipada) pra poder arremessar.", "erro");
+                        return;
+                    }
+                    const modificador = calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
+                    abrirModalArremessar(nomePericia, modificador, itemFaca);
                     return;
                 }
 
@@ -5215,6 +5824,9 @@ function montarPainelIniciativaJogador() {
         const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
             ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
             : "";
+        const badgeDerrubado = (p.derrubado && p.derrubado.ativo)
+            ? ` <span class="mod-pill negativo" title="Derrubado por ${escapeHtml(p.derrubado.porNome)} — dificuldade pra ser acertado cai -3; gasta 1 ação pra se levantar">🔻 Derrubado</span>${pid === meuId ? ` <button type="button" class="btn-ghost btn-levantar-derrubado" data-levantar-derrubado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Levantar</button>` : ""}`
+            : "";
         const badgeSaude = badgeEstadoSaudeCombate(p);
         const badgeEnergia = badgeEstadoEnergiaCombate(p);
         const badgeStatus = badgeStatusAtivosCombate(p);
@@ -5225,8 +5837,8 @@ function montarPainelIniciativaJogador() {
         const pvTexto = p.tipo === "npc" ? "" : `<span>${p.pv}/${p.pvMax} PV</span>`;
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
-                <span>Iniciativa ${p.iniciativa}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações</span>
             </div>`;
@@ -5245,6 +5857,13 @@ function montarPainelIniciativaJogador() {
         btn.addEventListener("click", async (e) => {
             e.stopPropagation();
             await soltarAgarrado(btn.dataset.soltarAgarrado);
+        });
+    });
+
+    modal.querySelectorAll("[data-levantar-derrubado]").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await tentarLevantarDerrubado(btn.dataset.levantarDerrubado);
         });
     });
 
@@ -6277,12 +6896,15 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeAlcance = (p.alcanceLimitado && p.alcanceLimitado.ativo)
                 ? ` <span class="mod-pill negativo" title="Alcance limitado a ${p.alcanceLimitado.valor} por ${escapeHtml(p.alcanceLimitado.porNome)} — use Retomar alcance pra tirar">📏 Alcance: ${p.alcanceLimitado.valor}</span>`
                 : "";
+            const badgeDerrubado = (p.derrubado && p.derrubado.ativo)
+                ? ` <span class="mod-pill negativo" title="Derrubado por ${escapeHtml(p.derrubado.porNome)} — dificuldade pra ser acertado cai -3; gasta 1 ação pra se levantar">🔻 Derrubado</span> <button type="button" class="btn-ghost btn-levantar-derrubado" data-levantar-derrubado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Levantar</button>`
+                : "";
             const badgeSaude = badgeEstadoSaudeCombate(p);
             const badgeEnergia = badgeEstadoEnergiaCombate(p);
             const badgeStatus = badgeStatusAtivosCombate(p);
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
-                <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade})</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações</span>
             `;
@@ -6291,6 +6913,13 @@ function montarGerenciadorCombate(corpoOriginal) {
                 btnSoltar.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     await soltarAgarrado(pid);
+                });
+            }
+            const btnLevantar = linha.querySelector("[data-levantar-derrubado]");
+            if (btnLevantar) {
+                btnLevantar.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await tentarLevantarDerrubado(pid);
                 });
             }
             listaIniciativa.appendChild(linha);
@@ -6303,7 +6932,19 @@ function montarGerenciadorCombate(corpoOriginal) {
     btnIniciarIniciativa.innerText = "Iniciar Combate (rolar iniciativa)";
     btnIniciarIniciativa.addEventListener("click", async () => {
         try {
-            await iniciarIniciativaCombate();
+            // CQC nível 2: antes de rolar, oferece o +1 de iniciativa pra
+            // quem tem o nível — é condicional a uma escolha narrativa
+            // (avançar contra oponente armado pra derrubá-lo), então
+            // pergunta via checkbox em vez de aplicar sozinho (ver
+            // participantesElegiveisCQCIniciativa em mestre.js).
+            const elegiveis = await participantesElegiveisCQCIniciativa();
+            let bonusMap = {};
+            if (elegiveis.length) {
+                const resultado = await abrirModalBonusIniciativaCQC(elegiveis);
+                if (resultado === null) return; // Mestre cancelou
+                bonusMap = resultado;
+            }
+            await iniciarIniciativaCombate(bonusMap);
             toast("Combate iniciado! Iniciativa rolada para todos.");
         } catch (e) {
             toast(e.message || "Falha ao iniciar o combate.", "erro");

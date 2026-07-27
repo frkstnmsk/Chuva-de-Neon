@@ -388,6 +388,27 @@
     color: var(--text-dim);
 }
 .btn-toggle-ativo.desligado:hover { background: rgba(255,255,255,0.06); }
+.btn-toggle-equipada {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    padding: 3px 9px;
+    border-radius: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    background: transparent;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.btn-toggle-equipada.ligado {
+    border: 1px solid var(--neon-lime);
+    color: var(--neon-lime);
+}
+.btn-toggle-equipada.ligado:hover { background: rgba(163, 255, 18, 0.12); }
+.btn-toggle-equipada.desligado {
+    border: 1px solid rgba(255,255,255,0.2);
+    color: var(--text-dim);
+}
+.btn-toggle-equipada.desligado:hover { background: rgba(255,255,255,0.06); }
+.btn-toggle-equipada:disabled { opacity: 0.4; cursor: not-allowed; }
 .entity-list li.entidade-desativada { border-left-color: rgba(255,255,255,0.15); opacity: 0.6; }
 .entity-list li.entidade-desativada .entity-nome { color: var(--text-dim); }
 .entity-list li.entidade-desativada:hover { opacity: 0.85; }

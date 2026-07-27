@@ -892,6 +892,23 @@ export const MANOBRAS_COMBATE = [
     }
 ];
 
+// ---------------------------------------------------------------------
+// "Arremessar" (manual pg. 20-21, dentro da descrição de CQC nível 3) é
+// uma manobra EXCLUSIVA de quem tem CQC nível 3+ — por isso não mora na
+// tabela MANOBRAS_COMBATE (que é a lista "aberta pra qualquer perícia"
+// do manual, pg. 49-50): só aparece na lista de manobras de ficha.js
+// quando o personagem tem o nível (ver renderizarManobrasCombate).
+// Guardada separada só pra reaproveitar o mesmo formato de exibição
+// (nome/alcance/perícias/dificuldade/efeito) das outras linhas.
+// ---------------------------------------------------------------------
+export const MANOBRA_ARREMESSAR_CQC = {
+    nome: "Arremessar",
+    alcance: "Longo",
+    pericias: ["CQC"],
+    dificuldade: "9 + agilidade do alvo (dificuldade -1 já embutida do nível 3)",
+    efeito: "Exclusiva de CQC nível 3+, com faca/adaga equipada. Arremessa em até 3 alvos (+1 no ataque por alvo extra); dano Força [escala C]; cada acerto testa Derrubar (dificuldade +2)"
+};
+
 export function listaManobrasCombate() {
     return MANOBRAS_COMBATE;
 }
@@ -901,22 +918,31 @@ export function listaManobrasCombate() {
 // nível. Implementados por enquanto:
 //
 // Nível 1 (Desarmado): +1 em rolagens de CQC quando o combate é 1x1
-// (só o atacante e mais um participante no Gerenciador de Combate).
-// O outro bônus do nível 1 ("+1 pra desarmar oponentes") e os bônus do
-// nível 2 (Derrubar/+1 iniciativa) ainda dependem de manobras
-// ("Desarmar"/"Derrubar") que hoje só rolam o dado solto, sem resolver
-// o efeito de verdade contra o alvo — ficam pendentes até essas
-// manobras terem uma resolução própria (nos moldes de resolverAgarrar).
+// (só o atacante e mais um participante no Gerenciador de Combate), e
+// +1 na manobra "Desarmar" quando rolada com CQC de verdade (ver
+// resolverDesarmar em ficha.js).
 //
 // Nível 3 (Esfaquear e Arremessar): golpear com faca ou adaga tem
 // dificuldade -1 e ganha +Destreza [escala D, 1x o atributo] de dano
 // extra — vale mesmo rolando a perícia Lâminas Curtas em vez de CQC
 // (é o NÍVEL de CQC que concede o bônus, não exige rolar com ele). A
-// parte de arremessar/afetar múltiplos inimigos (+1 por inimigo extra,
-// até 3) ainda não está implementada — é um golpe à distância separado
-// que precisa de um fluxo próprio.
+// parte de arremessar (MANOBRA_ARREMESSAR_CQC acima) só aparece pra
+// quem tem o nível — ver resolverArremessar em ficha.js.
+//
+// Pendente: Nível 2 ("Avançar em direção a oponentes armados e
+// derrubá-los tem modificador +1 em sua iniciativa e derrubar uma vez.
+// Causa dano contundente Destreza D"). O +1 de iniciativa e a variante
+// de dano de Derrubar já têm resolução própria (checkbox condicional —
+// ver participantesElegiveisCQCIniciativa em mestre.js e o checkbox da
+// modal de Derrubar em ficha.js).
 // ---------------------------------------------------------------------
 export function bonusCQC1x1(nivelCQC) {
+    return Number(nivelCQC) >= 1 ? 1 : 0;
+}
+
+// Nível 1: +1 pra desarmar oponentes — só quando a perícia usada pra
+// rolar a manobra Desarmar é CQC de verdade (igual ao bônus 1x1 acima).
+export function bonusCQCDesarmar(nivelCQC) {
     return Number(nivelCQC) >= 1 ? 1 : 0;
 }
 

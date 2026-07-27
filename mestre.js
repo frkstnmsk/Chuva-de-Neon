@@ -594,7 +594,50 @@ function ordenarPorIniciativa(participantes) {
 // cadastrado em combateAtivo/participantes, calcula ações do turno e
 // grava a ordem de iniciativa. Chamar DEPOIS de montar a lista de
 // participantes pelo painel existente (adicionarParticipanteCombate).
-export async function iniciarIniciativaCombate() {
+// ---------------------------------------------------------------------
+// CQC nível 2 (manual): "Avançar em direção a oponentes armados e
+// derrubá-los tem modificador +1 em sua iniciativa [...]" — é
+// condicional a uma escolha narrativa (nem todo personagem com CQC
+// nível 2 está necessariamente fazendo esse avanço quando a iniciativa
+// é rolada), então não dá pra aplicar automático feito o resto dos
+// bônus de CQC. Em vez disso, ficha.js pergunta ao Mestre via checkbox
+// ANTES de rolar (ver abrirModalBonusIniciativaCQC/iniciarIniciativaCombate
+// mais abaixo). Esta função varre os participantes cadastrados no
+// combate e devolve só quem TEM o nível pra oferecer a escolha —
+// funciona pra ficha de jogador e NPC detalhado (NPC "rápido" não tem
+// perícias cadastradas, então nunca aparece na lista).
+// ---------------------------------------------------------------------
+export async function participantesElegiveisCQCIniciativa() {
+    const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
+    const participantesBase = snap.exists() ? snap.val() : {};
+    const elegiveis = [];
+    for (const [id, base] of Object.entries(participantesBase)) {
+        let pericias = null;
+        let nome = base.nome;
+        if (base.tipo === "ficha") {
+            const s = await get(ref(db, caminhoMesa(`fichas/${base.refId}`)));
+            if (s.exists()) {
+                const f = s.val();
+                pericias = f.pericias || null;
+                nome = (f.config && f.config.nomeExibicao) || nome;
+            }
+        } else {
+            const s = await get(ref(db, caminhoMesa(`npcs/${base.refId}`)));
+            if (s.exists()) {
+                const n = s.val();
+                if (n.modoDetalhado) pericias = n.pericias || null;
+                nome = n.nome || nome;
+            }
+        }
+        if (!pericias) continue;
+        const entradaCQC = Object.values(pericias).find(p => p.nome === "CQC");
+        const nivel = entradaCQC ? (Number(entradaCQC.nivel) || 0) : 0;
+        if (nivel >= 2) elegiveis.push({ id, nome, nivel });
+    }
+    return elegiveis;
+}
+
+export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}) {
     const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
     const participantesBase = snap.exists() ? snap.val() : {};
     const ids = Object.keys(participantesBase);
@@ -619,11 +662,18 @@ export async function iniciarIniciativaCombate() {
         const stats = await calcularStatsCombateParticipante(base, ignorarPenalidadeSaude);
         const rolagemBruta = rolarD20();
         const acoesMax = calcularAcoesMax(stats.velocidade);
+        // CQC nível 2: +1 na iniciativa, só pra quem o Mestre marcou no
+        // checkbox de abrirModalBonusIniciativaCQC (ver comentário em
+        // participantesElegiveisCQCIniciativa acima) — bonusCQCIniciativa
+        // fica salvo no participante só pra exibir a origem do +1 na UI
+        // (badge "🥋 +1 CQC" no Gerenciador de Combate).
+        const bonusCQC = bonusIniciativaCQC[id] ? 1 : 0;
         participantesAtualizados[id] = {
             ...base,
             ...stats,
             rolagemBruta,
-            iniciativa: rolagemBruta + stats.modAgilidade,
+            iniciativa: rolagemBruta + stats.modAgilidade + bonusCQC,
+            bonusCQCIniciativa: !!bonusCQC,
             acoesMax,
             acoes: acoesMax,
             // Ações de Esquiva/Bloqueio guardadas (manual pg. ~48): só
@@ -853,6 +903,23 @@ export async function definirAgarrado(participanteId, porPid, porNome) {
 
 export async function soltarAgarrado(participanteId) {
     await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/agarrado`)));
+}
+
+// ---------------------------------------------------------------------
+// Derrubar (manual: "derruba; dificuldade pra ser acertado diminuída em
+// -3 e tem de gastar uma ação para se levantar"). Fica guardado no
+// próprio participante derrubado — resolverAtaque desconta -3 da
+// dificuldade de quem tenta acertá-lo enquanto durar, e "Levantar" (ver
+// consumirAcaoCombate em ficha.js) gasta 1 ação do turno da vítima pra
+// remover o status. `porPid`/`porNome` só ficam registrados pra
+// referência no Log/badge, igual Agarrar.
+// ---------------------------------------------------------------------
+export async function definirDerrubado(participanteId, porPid, porNome) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/derrubado`)), { ativo: true, porPid, porNome });
+}
+
+export async function levantarDerrubado(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/derrubado`)));
 }
 
 // ---------------------------------------------------------------------
@@ -1128,7 +1195,11 @@ export async function confirmarAcaoPendente(acao) {
         await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
 
     } else if (tipo === "mover_item") {
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), { categoria: payload.categoriaNova });
+        const dadosMover = { categoria: payload.categoriaNova };
+        // Arma que sai de "Levando consigo" não pode continuar equipada
+        // (ver itemPodeUsar/itemPodeEquipar em inventario.js).
+        if (payload.categoriaNova !== "levando") dadosMover.equipada = false;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosMover);
 
     } else if (tipo === "gastar_dinheiro") {
         const saldoId = payload.saldoId;

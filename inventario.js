@@ -69,8 +69,22 @@ export function calcularCargaAtual(fichaAtual, modificadoresPlanos = []) {
 
 export function itemPodeUsar(item) {
     // Regra de ouro do inventário: só dá pra "usar" item/arma que está
-    // na categoria "levando consigo".
-    return item.categoria === "levando";
+    // na categoria "levando consigo". Armas (ehArma(tag)) têm uma trava
+    // a mais: precisam estar EQUIPADAS (item.equipada) — carregar uma
+    // arma na mochila não é o mesmo que estar empunhando ela pronta pra
+    // golpear. É o que permite a manobra "Desarmar" ter algo de verdade
+    // pra tirar do alvo (ver resolverDesarmar em ficha.js). Itens que
+    // não são arma (kit médico, gadgets, etc.) não passam por essa
+    // trava — só precisam estar "levando consigo".
+    if (item.categoria !== "levando") return false;
+    if (ehArma(item.tag) && !item.equipada) return false;
+    return true;
+}
+
+// Só faz sentido equipar/desequipar uma arma que está "levando
+// consigo" (não dá pra empunhar algo que ficou em casa).
+export function itemPodeEquipar(item) {
+    return ehArma(item.tag) && item.categoria === "levando";
 }
 
 export function listaArmasInventario(fichaAtual) {

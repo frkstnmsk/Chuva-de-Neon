@@ -152,6 +152,11 @@ export function normalizarInventario(lista) {
             nivelTag: it.nivelTag ?? null,
             peso: it.peso ?? 0,
             categoria: it.categoria || "levando",
+            // Armas precisam estar equipadas (empunhadas) pra serem
+            // usadas em combate — ver itemPodeUsar em inventario.js.
+            // Itens que já existiam antes dessa trava nascem desequipados
+            // (padrão seguro: o jogador precisa equipar explicitamente).
+            equipada: it.equipada ?? false,
             arma: it.arma || null,
             periciaUso: it.periciaUso || null,
             classeProtecao: it.classeProtecao || null,
