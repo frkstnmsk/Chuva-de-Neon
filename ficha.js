@@ -31,7 +31,8 @@ import {
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
     atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
-    ehDanoPerfurante, ehDanoCortante, ehDanoContundente
+    ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
+    bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -1495,7 +1496,7 @@ function estadoSaudeLabelAtual() {
 // Lista, em texto, cada penalidade/bônus não-zero que entrou na rolagem
 // de ataque (estado de saúde, recuo, precisão) — ex: "-4 muito machucado,
 // -1 recuo, -1 precisão". Devolve "—" quando não há nenhuma.
-function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra = 0) {
+function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra = 0, modMovimento = 0, modCQC = 0) {
     const partes = [];
     if (penalidadeSaude) {
         const rotulo = estadoSaudeLabelAtual().toLowerCase() || "estado de saúde";
@@ -1504,6 +1505,8 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
     if (modRecuo) partes.push(`${modRecuo >= 0 ? "+" : ""}${modRecuo} recuo`);
     if (modPrecisao) partes.push(`${modPrecisao >= 0 ? "+" : ""}${modPrecisao} precisão`);
     if (modificadorExtra) partes.push(`${modificadorExtra >= 0 ? "+" : ""}${modificadorExtra} contra-ataque (Aparar)`);
+    if (modMovimento) partes.push(`${modMovimento >= 0 ? "+" : ""}${modMovimento} movimento`);
+    if (modCQC) partes.push(`${modCQC >= 0 ? "+" : ""}${modCQC} CQC (1x1)`);
     return partes.length ? partes.join(", ") : "—";
 }
 
@@ -1511,14 +1514,14 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
 // ataque (ver resolverAtaque): rolagem bruta do d20, modificador de
 // perícia isolado (perícia + ajustes estruturados, ou -1 se destreinada
 // — SEM o estado de saúde embutido), penalidades separadas (estado de
-// saúde/recuo/precisão) e o resultado final. Falha crítica (nat 1 OU
-// resultado final <= 1) mostra "CRÍTICO NEGATIVO" no lugar do número;
-// acerto crítico (nat 20 ou resultado final >= 20 — dobra o dano, ver
-// resolverAtaque) mostra "CRÍTICO POSITIVO" — só destaques visuais;
+// saúde/recuo/precisão/movimento) e o resultado final. Falha crítica
+// (nat 1 OU resultado final <= 1) mostra "CRÍTICO NEGATIVO" no lugar do
+// número; acerto crítico (resultado final exatamente 20 — dobra o dano,
+// ver resolverAtaque) mostra "CRÍTICO POSITIVO" — só destaques visuais;
 // não mudam se o ataque acerta ou erra, que continua comparando
 // resultadoAtaque com a dificuldade.
-function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0, criticoPositivo = false, criticoNegativo = false }) {
-    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra);
+function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0, modMovimento = 0, modCQC = 0, criticoPositivo = false, criticoNegativo = false }) {
+    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra, modMovimento, modCQC);
     const resultadoTexto = criticoNegativo
         ? "CRÍTICO NEGATIVO"
         : (criticoPositivo ? `${resultadoAtaque} — CRÍTICO POSITIVO` : `${resultadoAtaque}`);
@@ -1987,6 +1990,23 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
                 return `<option value="${l.key}">${escapeHtml(l.label)}${dif ? ` (dificuldade +${dif})` : ""}</option>`;
             }).join("")}
         </select>
+        ${ehFogoItem ? `
+        <label for="alvo-movimento-select" style="margin-top:10px;">Movimento (combate à distância)</label>
+        <select id="alvo-movimento-select">
+            <option value="nenhum">Nenhum</option>
+            <option value="alvoMovimento">Alvo em movimento (-2)</option>
+            <option value="alvoCarro">Alvo dentro de carro em movimento (-3)</option>
+            <option value="ambosMovimento">Ambos em movimento (-4)</option>
+        </select>
+        <label class="checkbox-inline" style="margin-top:10px;">
+            <input type="checkbox" id="alvo-escuro-check"> Escuro (-5 na dificuldade)
+        </label>
+        <label class="checkbox-inline" style="margin-top:6px;">
+            <input type="checkbox" id="alvo-queima-roupa-check"> Tiro à queima-roupa em alvo dominado/agarrado (dano quadruplicado)
+        </label>
+        <label for="alvo-combatentes-input" style="margin-top:10px;">Combatentes adicionais na linha de tiro (+1 dificuldade cada)</label>
+        <input type="number" id="alvo-combatentes-input" min="0" step="1" value="0">
+        ` : ""}
     `;
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -2091,8 +2111,22 @@ function configurarModalSelecionarAlvo() {
             const { item, modificadoresPlanos } = contextoAtaque;
             const localMiraSelect = document.getElementById("alvo-local-mira-select");
             const localMira = localMiraSelect ? localMiraSelect.value : "padrao";
+            // Modificadores Situacionais Rápidos de Combate à Distância —
+            // só existem no modal quando a arma é de fogo (ver
+            // abrirModalSelecionarAlvo). Ausentes (arma corpo a corpo/arma
+            // branca) caem nos padrões neutros abaixo.
+            const movimentoSelect = document.getElementById("alvo-movimento-select");
+            const escuroCheck = document.getElementById("alvo-escuro-check");
+            const queimaRoupaCheck = document.getElementById("alvo-queima-roupa-check");
+            const combatentesInput = document.getElementById("alvo-combatentes-input");
+            const situacional = {
+                movimento: movimentoSelect ? movimentoSelect.value : "nenhum",
+                escuro: escuroCheck ? escuroCheck.checked : false,
+                queimaRoupa: queimaRoupaCheck ? queimaRoupaCheck.checked : false,
+                combatentesAdicionais: combatentesInput ? Math.max(0, Number(combatentesInput.value) || 0) : 0
+            };
             limparContextos();
-            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira });
+            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira, situacional });
         } else if (contextoAgarrar) {
             const { nomePericia, modificador } = contextoAgarrar;
             limparContextos();
@@ -2269,6 +2303,53 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         ? ` Mirando: ${localMira.label} (dificuldade +${difMiraAtual}${bonusDanoMiraAtual ? `, dano +${Math.round(bonusDanoMiraAtual * 100)}%` : ""}).`
         : "";
 
+    // Modificadores Situacionais Rápidos de Combate à Distância — só
+    // fazem sentido (e só aparecem no modal) pra disparo de arma de
+    // fogo de verdade. "Movimento" é um modificador direto no ATAQUE
+    // (some com modPrecisao/modRecuo/modificadorExtra, igual qualquer
+    // outra penalidade de pontaria); Escuro e Combatentes adicionais
+    // mexem na DIFICULDADE em vez do ataque (aplicados mais abaixo,
+    // depois que a dificuldade base/do local mirado é calculada);
+    // Tiro à queima-roupa em alvo dominado/agarrado quadruplica o dano
+    // (aplicado lá embaixo, junto do resto do pipeline de dano). A lista
+    // notasSituacionaisLista/notaSituacional é reaproveitada mais abaixo
+    // pros bônus de CQC também (nem todo item dela é "de arma de fogo").
+    const situacional = ehFogo ? (opcoes.situacional || {}) : {};
+    const MOD_MOVIMENTO = { alvoMovimento: -2, alvoCarro: -3, ambosMovimento: -4 };
+    const modMovimentoAtaque = MOD_MOVIMENTO[situacional.movimento] || 0;
+    const difEscuro = situacional.escuro ? -5 : 0;
+    const combatentesAdicionais = Math.max(0, Number(situacional.combatentesAdicionais) || 0);
+    const difCombatentes = combatentesAdicionais * 1;
+    const queimaRoupaAgarrado = !!situacional.queimaRoupa;
+    const notasSituacionaisLista = [];
+    if (situacional.movimento === "alvoMovimento") notasSituacionaisLista.push(`alvo em movimento (${modMovimentoAtaque})`);
+    if (situacional.movimento === "alvoCarro") notasSituacionaisLista.push(`alvo em carro em movimento (${modMovimentoAtaque})`);
+    if (situacional.movimento === "ambosMovimento") notasSituacionaisLista.push(`ambos em movimento (${modMovimentoAtaque})`);
+    if (situacional.escuro) notasSituacionaisLista.push(`escuro (${difEscuro} na dificuldade)`);
+    if (combatentesAdicionais > 0) notasSituacionaisLista.push(`+${difCombatentes} na dificuldade (${combatentesAdicionais} combatente${combatentesAdicionais > 1 ? "s" : ""} indesejado${combatentesAdicionais > 1 ? "s" : ""} na linha de tiro)`);
+    if (queimaRoupaAgarrado) notasSituacionaisLista.push("queima-roupa em alvo dominado/agarrado: dano quadruplicado");
+
+    // CQC (manual pg. 20-21): nível da perícia do atacante, usado pros
+    // bônus abaixo — independe de qual perícia está sendo rolada NESTE
+    // golpe (ver bonusCQCFacaAdaga, que vale mesmo golpeando de Lâminas
+    // Curtas). "1x1" = só o atacante e mais um participante cadastrados
+    // no Gerenciador de Combate com iniciativa ativa.
+    const entradaCQC = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
+    const nivelCQC = entradaCQC ? (Number(entradaCQC[1].nivel) || 0) : 0;
+    const numParticipantesCombate = (combateAtivoCache && combateAtivoCache.participantes) ? Object.keys(combateAtivoCache.participantes).length : 0;
+    const ehCombate1x1 = combateComIniciativaAtivo() && numParticipantesCombate === 2;
+    // Nível 1: +1 EM ROLAGENS DE CQC (só quando a perícia usada pra
+    // rolar ESTE golpe é CQC de verdade) contra alvo único 1x1.
+    const modCQC1x1 = (nomePericia === "CQC" && ehCombate1x1) ? bonusCQC1x1(nivelCQC) : 0;
+    if (modCQC1x1) notasSituacionaisLista.push(`CQC nível ${nivelCQC} — combate 1x1 (+${modCQC1x1})`);
+    // Nível 3: faca/adaga golpeia com dificuldade -1 e ganha dano extra
+    // de Destreza [escala D] — detectado pelo NOME do item (ver
+    // ehFacaOuAdaga), não pela perícia usada pra rolar.
+    const bonusCQCFaca = (!armaConfig.desarmado && ehFacaOuAdaga(it.nome)) ? bonusCQCFacaAdaga(nivelCQC) : null;
+    if (bonusCQCFaca) notasSituacionaisLista.push(`CQC nível ${nivelCQC} — faca/adaga (dificuldade ${bonusCQCFaca.difAjuste}, dano extra de Destreza)`);
+
+    const notaSituacional = notasSituacionaisLista.length ? ` Situacional: ${notasSituacionaisLista.join("; ")}.` : "";
+
     // Recuo — só disparos de arma de fogo de verdade contam (golpe
     // desarmado nunca é "arma de fogo" mesmo se a perícia usada fosse
     // uma perícia de tiro, o que nem é o caso aqui). idDisparoAtual/chave
@@ -2293,7 +2374,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const penalidadeSaude = penalidadeTestesAtual();
     const periciaBase = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanosAtacante, 0);
     const modPericia = periciaBase + penalidadeSaude;
-    const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra;
+    const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra + modMovimentoAtaque + modCQC1x1;
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
     // Acerto Crítico (manual): o RESULTADO FINAL (d20 + modificadores)
@@ -2309,7 +2390,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // dificuldade ou não.
     const criticoPositivo = resultadoAtaque === 20;
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
-    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, criticoPositivo, criticoNegativo });
+    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
 
     // constituicaoAlvo agora é sempre preenchida (usada mais abaixo,
     // depois do dano aplicado, pro teste de Constituição que decide SE
@@ -2364,6 +2445,16 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // defesa do alvo pra corpo a corpo/desarmado).
     dificuldade += difMiraAtual;
 
+    // Modificadores Situacionais Rápidos de Combate à Distância: Escuro
+    // reduz a dificuldade em 5 (favorece o atacante — ambush/mira às
+    // cegas em ambiente escuro, ver ficha.html modal de ataque);
+    // Combatentes adicionais indesejados na linha de tiro aumentam a
+    // dificuldade em 1 por combatente.
+    dificuldade += difEscuro + difCombatentes;
+
+    // CQC nível 3: faca/adaga golpeia com dificuldade -1.
+    if (bonusCQCFaca) dificuldade += bonusCQCFaca.difAjuste;
+
     const acertou = resultadoAtaque >= dificuldade;
 
     // A rolagem do ataque já aconteceu e vai ser registrada de qualquer
@@ -2398,7 +2489,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     if (!acertou) {
         const notaFalhaCritica = criticoNegativo ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre." : "";
-        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.${notaLocalMira}${notaFalhaCritica}\n${detalheRolagem}`;
+        const detalhe = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaFalhaCritica}\n${detalheRolagem}`;
         await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoAtaque, detalhe, critico: criticoNegativo ? "falha" : null });
         toast(detalhe, criticoNegativo ? "critico-falha" : "erro");
         return;
@@ -2439,6 +2530,25 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         const bonusMira = Math.floor(danoTotal * bonusDanoMiraAtual);
         danoTotal += bonusMira;
         danoDadoTexto += ` [+${bonusMira} por mirar ${localMira.label}]`;
+    }
+
+    // CQC nível 3: golpe com faca/adaga ganha +Destreza [escala D] de
+    // dano extra, em cima do dano base da arma.
+    if (bonusCQCFaca) {
+        const destrezaAtacante = Number(fichaAtual.dados.destreza) || 0;
+        const bonusCQCDano = calcularDanoTotalArma({ danoBase: 0, escalaMult: bonusCQCFaca.escalaMultDano }, destrezaAtacante);
+        danoTotal += bonusCQCDano;
+        danoDadoTexto += ` [+${bonusCQCDano} CQC nível ${nivelCQC} — faca/adaga]`;
+    }
+
+    // Modificador Situacional: tiro à queima-roupa contra alvo
+    // dominado/agarrado quadruplica o dano do disparo (efeito bruto,
+    // aplicado sobre o dano já com bônus de mira embutido, ANTES do
+    // Acerto Crítico — se também for crítico, dobra em cima do valor já
+    // quadruplicado).
+    if (queimaRoupaAgarrado) {
+        danoTotal *= 4;
+        danoDadoTexto += ` [×4 queima-roupa em alvo dominado/agarrado]`;
     }
 
     // Acerto Crítico (manual): dobra o dano do ataque. Aplicado ANTES
@@ -2531,7 +2641,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             detalheRolagem, efeitoTexto:
                 (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : ""
         });
-        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
+        const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
         toast(detalheAguardando, criticoPositivo ? "critico-acerto" : "ok");
         return;
     }
@@ -2591,8 +2701,8 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");

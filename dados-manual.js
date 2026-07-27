@@ -895,3 +895,39 @@ export const MANOBRAS_COMBATE = [
 export function listaManobrasCombate() {
     return MANOBRAS_COMBATE;
 }
+
+// ---------------------------------------------------------------------
+// CQC (manual pg. 20-21): tática militar com bônus progressivos por
+// nível. Implementados por enquanto:
+//
+// Nível 1 (Desarmado): +1 em rolagens de CQC quando o combate é 1x1
+// (só o atacante e mais um participante no Gerenciador de Combate).
+// O outro bônus do nível 1 ("+1 pra desarmar oponentes") e os bônus do
+// nível 2 (Derrubar/+1 iniciativa) ainda dependem de manobras
+// ("Desarmar"/"Derrubar") que hoje só rolam o dado solto, sem resolver
+// o efeito de verdade contra o alvo — ficam pendentes até essas
+// manobras terem uma resolução própria (nos moldes de resolverAgarrar).
+//
+// Nível 3 (Esfaquear e Arremessar): golpear com faca ou adaga tem
+// dificuldade -1 e ganha +Destreza [escala D, 1x o atributo] de dano
+// extra — vale mesmo rolando a perícia Lâminas Curtas em vez de CQC
+// (é o NÍVEL de CQC que concede o bônus, não exige rolar com ele). A
+// parte de arremessar/afetar múltiplos inimigos (+1 por inimigo extra,
+// até 3) ainda não está implementada — é um golpe à distância separado
+// que precisa de um fluxo próprio.
+// ---------------------------------------------------------------------
+export function bonusCQC1x1(nivelCQC) {
+    return Number(nivelCQC) >= 1 ? 1 : 0;
+}
+
+// Detecção simples por nome do item — cobre "Faca", "Faca de combate",
+// "Adaga ritual" etc. Itens de faca/adaga customizados que fujam desse
+// padrão de nome não são detectados automaticamente.
+export function ehFacaOuAdaga(nomeItem) {
+    return /\bfacas?\b|\badagas?\b/i.test(String(nomeItem || ""));
+}
+
+export function bonusCQCFacaAdaga(nivelCQC) {
+    if (Number(nivelCQC) < 3) return null;
+    return { difAjuste: -1, escalaMultDano: 1 }; // escala D = 1x Destreza
+}
