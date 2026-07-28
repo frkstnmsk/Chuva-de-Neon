@@ -298,6 +298,8 @@ const el = {
     modalConfigArma: document.getElementById("modal-config-arma"),
     modalArmaDanoBase: document.getElementById("modal-arma-dano-base"),
     modalArmaTipoDano: document.getElementById("modal-arma-tipo-dano"),
+    modalCampoTipoDanoExtra: document.getElementById("modal-campo-tipo-dano-extra"),
+    modalArmaTipoDanoExtra: document.getElementById("modal-arma-tipo-dano-extra"),
     modalCampoEscala: document.getElementById("modal-campo-escala"),
     modalArmaEscala: document.getElementById("modal-arma-escala"),
     modalConfigArmaFogo: document.getElementById("modal-config-arma-fogo"),
@@ -825,6 +827,17 @@ function montarSelectsFixos() {
         opt.value = t.key;
         opt.innerText = t.label;
         el.modalArmaTipoDano.appendChild(opt);
+    });
+
+    // ---- Tipo de dano EXTRA (modal — arma branca com dois tipos de
+    // dano, ex.: machadinha corte+perfurante): "Nenhum" some o campo de
+    // escolha na hora de atacar (ver abrirModalSelecionarAlvo).
+    el.modalArmaTipoDanoExtra.innerHTML = '<option value="">-- nenhum --</option>';
+    TIPOS_DANO.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t.key;
+        opt.innerText = t.label;
+        el.modalArmaTipoDanoExtra.appendChild(opt);
     });
 
     // ---- Escala de arma (modal) ----
@@ -2008,8 +2021,22 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     // corpo a corpo/arma branca), mas continua disponível pros dois —
     // ver LOCAIS_MIRA/difModLocalMira em dados-manual.js.
     const ehFogoItem = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso) && !(it.arma && it.arma.desarmado);
+    // Dano extra (arma branca — ver campo "Tipo de dano extra" no modal
+    // de criação de item): se o item tem os dois tipos cadastrados,
+    // oferece a escolha AQUI, junto do resto das opções do golpe — o
+    // valor do dano não muda, só o tipo (afeta redução de armadura e
+    // regras específicas por tipo).
+    const tipoDanoExtraItem = (it.arma && it.arma.tipoDanoExtra) || null;
+    const seletorTipoDanoHtml = tipoDanoExtraItem ? `
+        <label for="alvo-tipo-dano-select">Tipo de dano</label>
+        <select id="alvo-tipo-dano-select">
+            <option value="padrao">${escapeHtml(TIPOS_DANO.find(t => t.key === it.arma.tipoDano)?.label || it.arma.tipoDano)} (padrão)</option>
+            <option value="extra">${escapeHtml(TIPOS_DANO.find(t => t.key === tipoDanoExtraItem)?.label || tipoDanoExtraItem)}</option>
+        </select>
+    ` : "";
     el.alvoCampoExtra.style.display = "block";
     el.alvoCampoExtra.innerHTML = `
+        ${seletorTipoDanoHtml}
         <label for="alvo-local-mira-select">Mirar em</label>
         <select id="alvo-local-mira-select">
             ${LOCAIS_MIRA.map(l => {
@@ -2357,6 +2384,16 @@ function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
             <span>${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</span>
         </label>
     `).join("");
+    const tipoDanoExtraItem = (itemFaca.arma && itemFaca.arma.tipoDanoExtra) || null;
+    const seletorTipoDanoHtml = tipoDanoExtraItem ? `
+        <div class="modal-field" style="margin-top:6px;">
+            <label for="arremessar-tipo-dano-select">Tipo de dano</label>
+            <select id="arremessar-tipo-dano-select">
+                <option value="padrao">${escapeHtml(TIPOS_DANO.find(t => t.key === itemFaca.arma.tipoDano)?.label || itemFaca.arma.tipoDano)} (padrão)</option>
+                <option value="extra">${escapeHtml(TIPOS_DANO.find(t => t.key === tipoDanoExtraItem)?.label || tipoDanoExtraItem)}</option>
+            </select>
+        </div>
+    ` : "";
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Arremessar — CQC nível 3+</span>
@@ -2364,6 +2401,7 @@ function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
         </div>
         <h4>Escolha até 3 alvos</h4>
         <p class="hint">Arremessa "${escapeHtml(itemFaca.nome)}" em cada alvo marcado. Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
+        ${seletorTipoDanoHtml}
         <div class="combate-lista">${linhas}</div>
         <button type="button" class="btn-lime" id="btn-confirmar-arremessar" style="margin-top:10px;width:100%;">Arremessar</button>
     `;
@@ -2378,8 +2416,10 @@ function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
     modal.querySelector("#btn-confirmar-arremessar").addEventListener("click", async () => {
         const alvosIds = checks().filter(c => c.checked).map(c => c.dataset.arremessarAlvo);
         if (!alvosIds.length) { toast("Marque pelo menos 1 alvo.", "erro"); return; }
+        const tipoDanoSelect = document.getElementById("arremessar-tipo-dano-select");
+        const tipoDanoEscolhido = tipoDanoSelect ? tipoDanoSelect.value : "padrao";
         modal.remove();
-        await resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds);
+        await resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds, tipoDanoEscolhido);
     });
 }
 
@@ -2457,6 +2497,8 @@ function configurarModalSelecionarAlvo() {
         el.modalSelecionarAlvo.classList.remove("active");
         if (contextoAtaque) {
             const { item, modificadoresPlanos } = contextoAtaque;
+            const tipoDanoSelect = document.getElementById("alvo-tipo-dano-select");
+            const tipoDanoEscolhido = tipoDanoSelect ? tipoDanoSelect.value : "padrao";
             const localMiraSelect = document.getElementById("alvo-local-mira-select");
             const localMira = localMiraSelect ? localMiraSelect.value : "padrao";
             // Modificadores Situacionais Rápidos de Combate à Distância —
@@ -2474,7 +2516,7 @@ function configurarModalSelecionarAlvo() {
                 combatentesAdicionais: combatentesInput ? Math.max(0, Number(combatentesInput.value) || 0) : 0
             };
             limparContextos();
-            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira, situacional });
+            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira, situacional, tipoDanoEscolhido });
         } else if (contextoAgarrar) {
             const { nomePericia, modificador } = contextoAgarrar;
             limparContextos();
@@ -2928,7 +2970,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             bonusEscala = calcularDanoTotalArma({ danoBase: 0, escalaMult: escalaInfo?.mult }, valorAtributo);
         }
         danoTotal = (Number(armaConfig.danoBase) || 0) + bonusEscala;
-        tipoDanoKey = armaConfig.tipoDano;
+        // Dano extra (arma branca — ver montarReducaoDanoChecklist... não,
+        // ver campo "Tipo de dano extra" no modal de item): quando o item
+        // tem um segundo tipo de dano cadastrado, o jogador escolhe na
+        // hora do ataque (select "Tipo de dano" na modal de alvo, ver
+        // abrirModalSelecionarAlvo) qual dos dois usar nesse golpe — o
+        // valor do dano continua o mesmo, só muda o TIPO (afeta redução
+        // de armadura e regras específicas por tipo, ex.: Amputação em
+        // corte, Sangramento em perfurante).
+        tipoDanoKey = (opcoes.tipoDanoEscolhido === "extra" && armaConfig.tipoDanoExtra)
+            ? armaConfig.tipoDanoExtra
+            : armaConfig.tipoDano;
     }
     const tipoDanoLabel = TIPOS_DANO.find(t => t.key === tipoDanoKey)?.label || tipoDanoKey || "—";
 
@@ -3784,7 +3836,7 @@ async function tentarLibertarImobilizado(participanteId) {
 // Derrubar contra aquele alvo específico, com dificuldade +2 (mais
 // difícil que o Derrubar corpo a corpo comum), usando a mesma
 // infraestrutura de definirDerrubado/resolverDerrubar.
-async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds) {
+async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds, tipoDanoEscolhido = "padrao") {
     const consumo = checarConsumoDeAcao(true, true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
@@ -3795,7 +3847,13 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
     const modificadorAtaque = modificadorBase + bonusPorAlvoExtra;
     const forcaAtacante = Number(fichaAtual.dados.forca) || 0;
     const danoArremesso = calcularDanoTotalArma({ danoBase: 0, escalaMult: 2 }, forcaAtacante); // escala C = 2x Força
-    const tipoDanoKey = (itemFaca.arma && itemFaca.arma.tipoDano) || "corte";
+    // Dano extra (arma branca — ver "Tipo de dano extra" no modal de
+    // item, e o seletor equivalente na modal de Arremessar): mesma ideia
+    // do ataque comum (ver resolverAtaque) — a escolha só troca o TIPO,
+    // não o valor do dano.
+    const tipoDanoKey = (tipoDanoEscolhido === "extra" && itemFaca.arma && itemFaca.arma.tipoDanoExtra)
+        ? itemFaca.arma.tipoDanoExtra
+        : ((itemFaca.arma && itemFaca.arma.tipoDano) || "corte");
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
@@ -4196,6 +4254,7 @@ function renderizarCombate() {
             const li = document.createElement("li");
             const cfg = arma.arma || {};
             const tipoDano = TIPOS_DANO.find(t => t.key === cfg.tipoDano);
+            const tipoDanoExtraInfo = cfg.tipoDanoExtra ? TIPOS_DANO.find(t => t.key === cfg.tipoDanoExtra) : null;
             const escala = ESCALAS_ARMA.find(e => e.key === cfg.escala);
             const mods = (cfg.modificacoesArma || []).join(", ");
             const podeUsar = itemPodeUsar(arma) && !!arma.periciaUso;
@@ -4220,7 +4279,7 @@ function renderizarCombate() {
             li.innerHTML = `
                 <div class="entity-main">
                     <span class="entity-nome">${escapeHtml(arma.nome)} <span class="mod-pill tag">nível ${arma.nivelTag || "?"}</span></span>
-                    <span class="entity-sub">Dano base: ${cfg.danoBase ?? 0}${tipoDano ? " · " + tipoDano.label : ""}${escala ? " · " + escala.label : ""}${periciaLabel}${classeLabel}${calibreLabel}${fogoLabel}</span>
+                    <span class="entity-sub">Dano base: ${cfg.danoBase ?? 0}${tipoDano ? " · " + tipoDano.label : ""}${escala ? " · " + escala.label : ""}${tipoDanoExtraInfo ? ` · ou ${tipoDanoExtraInfo.label} (escolhido no ataque)` : ""}${periciaLabel}${classeLabel}${calibreLabel}${fogoLabel}</span>
                     ${mods ? `<span class="entity-sub">Modificações: ${escapeHtml(mods)}</span>` : ""}
                     ${cfg.efeitoExtra ? `<span class="entity-sub">Efeito extra: ${escapeHtml(cfg.efeitoExtra)}</span>` : ""}
                 </div>
@@ -5430,6 +5489,14 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         el.modalArmaEscala.value = (armaConfig && armaConfig.escala) || "";
         montarModificacoesArma((armaConfig && armaConfig.modificacoesArma) || []);
     }
+    // Tipo de dano extra — só faz sentido em arma branca (corpo a corpo,
+    // não-fogo); arma de fogo dispara sempre o mesmo tipo de projétil.
+    // Usa o valor JÁ POPULADO do select de perícia (acima) em vez do
+    // parâmetro cru — assim fica certo mesmo quando a tag acabou de
+    // mudar e a perícia caiu no primeiro item da lista por padrão.
+    const ehArmaBranca = arma && exigePericia && !ehArmaDeFogo(el.modalPericiaUso.value);
+    el.modalCampoTipoDanoExtra.style.display = ehArmaBranca ? "flex" : "none";
+    if (ehArmaBranca) el.modalArmaTipoDanoExtra.value = (armaConfig && armaConfig.tipoDanoExtra) || "";
 
     // Redução de dano — só pra tags do tipo "colete/placa".
     const reduzDano = tagPodeReduzirDano(tagKey);
@@ -5459,10 +5526,14 @@ document.getElementById("modal-tag")?.addEventListener("change", (e) => {
 // Fogo de Pequeno Porte") pode ligar/desligar a exigência de Classe de
 // Proteção, Calibre e o bloco de Arma de Fogo sem precisar trocar a tag
 // — reavalia os três na hora.
-document.getElementById("modal-pericia-uso")?.addEventListener("change", () => {
+document.getElementById("modal-pericia-uso")?.addEventListener("change", (e) => {
     atualizarVisibilidadeClasseProtecao(null);
     atualizarVisibilidadeCalibre(null);
     atualizarVisibilidadeArmaFogo(null);
+    // Tipo de dano extra só aparece pra arma branca (ver atualizarCamposPorTag).
+    const ehArmaBrancaAgora = ehArma(el.modalTag.value) && !ehArmaDeFogo(e.target.value);
+    el.modalCampoTipoDanoExtra.style.display = ehArmaBrancaAgora ? "flex" : "none";
+    if (!ehArmaBrancaAgora) el.modalArmaTipoDanoExtra.value = "";
 });
 
 // ---------------------------------------------------------------------
@@ -5678,6 +5749,11 @@ function lerConfigArmaDoModal(periciaUso, calibre) {
     return {
         danoBase: Number(el.modalArmaDanoBase.value) || 0,
         tipoDano: el.modalArmaTipoDano.value,
+        // Tipo de dano extra — só se salva em arma branca (não-fogo) e só
+        // se algo de fato foi escolhido (select vazio = "-- nenhum --").
+        // Ver escolha na hora de atacar em abrirModalSelecionarAlvo/
+        // resolverAtaque e em abrirModalArremessar/resolverArremessar.
+        tipoDanoExtra: (!ehFogo && el.modalArmaTipoDanoExtra.value) ? el.modalArmaTipoDanoExtra.value : null,
         escala: ehFogo ? null : (el.modalArmaEscala.value || null),
         modificacoesArma: lerModificacoesArmaDoModal(),
         capacidade: ehFogo ? (Number(el.modalArmaCapacidade.value) || 0) : null,
