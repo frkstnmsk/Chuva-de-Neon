@@ -52,6 +52,15 @@ export function normalizarFicha(raw) {
         desvantagens: raw.desvantagens || {},
         especializacoes: raw.especializacoes || {},
         fatosUniversais: raw.fatosUniversais || {},
+        // Receitas que este personagem CONHECE (diferente do Banco Global de
+        // Receitas em si, que é compartilhado entre todas as mesas — ver
+        // receitas-globais.js). Cada entrada aqui só guarda a referência
+        // (receitaGlobalId) + a perícia/nível daquele slot + a origem:
+        // "livre" (a receita gratuita de um nível da perícia, escolhida
+        // pelo próprio jogador) ou "mestre" (adicionada pelo Mestre,
+        // representando uma receita adquirida durante o jogo). Ver
+        // renderizarReceitas em ficha.js.
+        receitasConhecidas: raw.receitasConhecidas || {},
         criacao: normalizarCriacao(raw.criacao, dados),
         treinamento: normalizarTreinamento(raw.treinamento),
         levelUpPendente: raw.levelUpPendente || null,
@@ -200,6 +209,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         desvantagens: {},
         especializacoes: {},
         fatosUniversais: {},
+        receitasConhecidas: {},
         criacao: {
             etapa: 1, funcaoEscolhida: "", escolhaAtributoFuncao: "", etapa1JaConfirmadaAntes: false,
             pontosAtributosRestantes: 7, pontosPericiasRestantes: 5,
@@ -289,6 +299,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
         // igual, sem exigir nenhum campo novo no motor de regras).
         especializacoes: deltas.length ? { _overrideNpc: { nome: "Ajuste manual do NPC", modificadores: deltas } } : {},
         fatosUniversais: {},
+        receitasConhecidas: {},
         criacao: {
             etapa: 1, funcaoEscolhida: "", escolhaAtributoFuncao: "", etapa1JaConfirmadaAntes: false,
             pontosAtributosRestantes: 0, pontosPericiasRestantes: 0,

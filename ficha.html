@@ -117,6 +117,7 @@
                 <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
                 <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
                 <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
+                <button class="tab-btn" data-tab="receitas" type="button">Receitas</button>
                 <button class="tab-btn" data-tab="darknet" type="button">Dark Net</button>
                 <button class="tab-btn" data-tab="notas" type="button">Determinações / Notas</button>
             </nav>
@@ -309,6 +310,13 @@
                     <div class="treino-grid" id="treino-grid"></div>
                 </section>
 
+                <!-- ===================== RECEITAS ===================== -->
+                <section class="tab-panel panel" data-tab="receitas">
+                    <div class="section-header">Receitas <span class="hint-inline">de cada perícia de criação de item que o personagem tiver</span></div>
+                    <div class="hint">Aparece aqui uma seção pra cada perícia de criação (Ferramenta de Criação geral: Mecânica Automotiva, Armeiro, Ofícios Utilitários, Explosivos, Eletrônica; ou Ferramenta de Criação Química: Química) que estiver cadastrada nesta ficha, com a lista de receitas conhecidas logo abaixo.</div>
+                    <div id="receitas-lista"></div>
+                </section>
+
                 <!-- ===================== DARK NET ===================== -->
                 <section class="tab-panel panel" data-tab="darknet">
                     <div class="section-header">Dark Net</div>
@@ -449,6 +457,7 @@
             <label for="modal-pericia-uso">Perícia vinculada (obrigatória)</label>
             <select id="modal-pericia-uso"></select>
         </div>
+        <div class="hint" id="hint-ferramenta-criacao-geral" style="display:none;">Ferramenta de Criação (geral): o mesmo kit serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários e Eletrônica — não precisa escolher uma perícia aqui, quem usa o item escolhe na hora de "Usar".</div>
         <div class="modal-field" id="modal-campo-classe-protecao" style="display:none;">
             <label for="modal-classe-protecao" id="modal-label-classe-protecao">Classe de Proteção (obrigatória)</label>
             <select id="modal-classe-protecao"></select>
@@ -581,6 +590,7 @@
             <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
             <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
             <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
+            <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
             <button class="btn-red mestre-acao" data-acao="pendentes" type="button">Ações Pendentes</button>
             <label class="godmode-toggle">
                 <input type="checkbox" id="chk-godmode">

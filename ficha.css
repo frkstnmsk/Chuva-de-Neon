@@ -322,6 +322,18 @@
     transition: background 0.15s ease;
 }
 .entity-list li:hover { background: rgba(255, 255, 255, 0.06); }
+.entity-list li.entity-list-subheader {
+    background: none;
+    border: none;
+    padding: 4px 2px 2px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    cursor: default;
+}
+.entity-list li.entity-list-subheader:hover { background: none; }
 .entity-list .entity-main {
     display: flex;
     flex-direction: column;
@@ -412,6 +424,29 @@
 .entity-list li.entidade-desativada { border-left-color: rgba(255,255,255,0.15); opacity: 0.6; }
 .entity-list li.entidade-desativada .entity-nome { color: var(--text-dim); }
 .entity-list li.entidade-desativada:hover { opacity: 0.85; }
+.entity-list li.receita-slot-vazio,
+.entity-list li.receita-extra-form {
+    flex-direction: column;
+    align-items: stretch;
+    cursor: default;
+    gap: 8px;
+    border-left-color: var(--neon-lime, var(--neon-purple));
+}
+.entity-list li.receita-slot-vazio:hover,
+.entity-list li.receita-extra-form:hover { background: rgba(255, 255, 255, 0.03); }
+.entity-list li.receita-slot-vazio label,
+.entity-list li.receita-extra-form label {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+.entity-list li.receita-slot-vazio select,
+.entity-list li.receita-extra-form select {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: inherit;
+}
 .entity-list-empty {
     color: var(--text-dim);
     font-size: 0.8rem;

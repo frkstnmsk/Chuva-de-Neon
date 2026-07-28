@@ -35,7 +35,9 @@ import {
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
     MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC,
     danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
-    danoQuebrarOssosJiuJitsu
+    danoQuebrarOssosJiuJitsu,
+    PERICIAS_CRIACAO_ITEM,
+    ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -90,6 +92,9 @@ import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
     atualizarItemBanco, excluirItemBanco, autopreencherItemDoBanco
 } from "./itens-globais.js";
+import {
+    ouvirReceitasGlobais, salvarReceitaNoBanco, atualizarReceitaBanco, excluirReceitaBanco
+} from "./receitas-globais.js";
 import {
     estadoInicialNpcDetalhado, calcularSecundariosNpc,
     adicionarPericiaNpc, removerPericiaNpc
@@ -154,6 +159,7 @@ let todasAsFichasCache = {};
 // e Mestre), já que o autocompletar do modal de item precisa dele em
 // qualquer ficha, não só na Biblioteca do Painel do Mestre.
 let itensGlobaisCache = [];
+let receitasGlobaisCache = [];
 let categoriaInventarioAtiva = "levando";
 let ultimoAvisoCustoVida = null; // último valor visto de `avisoCustoVida` no Firebase
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
@@ -257,6 +263,7 @@ const el = {
     listaArmasCombate: document.getElementById("lista-armas-combate"),
     listaManobrasCombate: document.getElementById("lista-manobras-combate"),
     treinoGrid: document.getElementById("treino-grid"),
+    receitasLista: document.getElementById("receitas-lista"),
     hintNivelXp: document.getElementById("hint-nivel-xp"),
     avisoCriacaoPendente: document.getElementById("aviso-criacao-pendente"),
     btnContinuarCriacao: document.getElementById("btn-continuar-criacao"),
@@ -279,6 +286,7 @@ const el = {
     modalCampoNivelTag: document.getElementById("modal-campo-nivel-tag"),
     modalNivelTag: document.getElementById("modal-nivel-tag"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
+    hintFerramentaCriacaoGeral: document.getElementById("hint-ferramenta-criacao-geral"),
     modalPericiaUso: document.getElementById("modal-pericia-uso"),
     modalCampoClasseProtecao: document.getElementById("modal-campo-classe-protecao"),
     modalLabelClasseProtecao: document.getElementById("modal-label-classe-protecao"),
@@ -491,6 +499,19 @@ async function init() {
             // pelo Gerenciador de Combate e Ações Pendentes).
             if (isMestre && el.mestreCorpo && el.mestreCorpo.dataset.acaoAberta === "biblioteca") {
                 abrirAcaoMestre("biblioteca");
+            }
+        });
+    });
+
+    // Banco Global de Receitas (receitas-globais.js) — mesma ideia do de
+    // itens acima, só que pra receitas de criação. Alimenta tanto a aba
+    // "Receitas" da ficha quanto a "Biblioteca de Receitas" do Mestre.
+    tentarOuAvisar("banco global de receitas", () => {
+        ouvirReceitasGlobais((receitas) => {
+            receitasGlobaisCache = receitas || [];
+            if (fichaAtual) renderizarReceitas();
+            if (isMestre && el.mestreCorpo && el.mestreCorpo.dataset.acaoAberta === "biblioteca-receitas") {
+                abrirAcaoMestre("biblioteca-receitas");
             }
         });
     });
@@ -909,6 +930,66 @@ function podeEditarCaracteristicaNarrativa() {
     return !fichaAtual.criacao.concluida;
 }
 
+// ---------------------------------------------------------------------
+// Receitas CONHECIDAS pelo personagem (diferente do Banco Global de
+// Receitas em si — ver receitas-globais.js): cada perícia de criação de
+// item dá direito a exatamente 1 receita GRÁTIS por nível, do nível 1
+// até o nível atual da perícia (perícia nível 3 → 1 receita nível 1, 1
+// nível 2, 1 nível 3). O jogador escolhe livremente entre as receitas já
+// cadastradas no Banco Global pra aquele nível — mas, uma vez escolhida,
+// o slot fica travado: nem o próprio jogador pode trocar ou remover essa
+// escolha depois (só o Mestre). Qualquer receita ALÉM dessas gratuitas
+// só entra na ficha se o Mestre adicionar (representando algo achado,
+// comprado ou ensinado durante o jogo) — ver renderizarReceitas.
+function receitaLivreDoSlot(periciaNome, nivel) {
+    const entrada = Object.entries(fichaAtual.receitasConhecidas || {})
+        .find(([, c]) => c.periciaVinculada === periciaNome && Number(c.nivel) === nivel && c.origem === "livre");
+    return entrada ? { id: entrada[0], ...entrada[1] } : null;
+}
+
+function receitasExtrasDaPericia(periciaNome) {
+    return Object.entries(fichaAtual.receitasConhecidas || {})
+        .filter(([, c]) => c.periciaVinculada === periciaNome && c.origem === "mestre")
+        .map(([id, c]) => ({ id, ...c }))
+        .sort((a, b) => (Number(a.nivel) || 0) - (Number(b.nivel) || 0));
+}
+
+// Concede uma receita já existente no Banco Global ao personagem atual.
+// origem "livre" só deve ser chamado quando o slot daquele nível ainda
+// estiver vazio (ver renderizarReceitas, que só mostra o controle de
+// escolha nesse caso) — mas revalida aqui também, pra não dar pra burlar
+// clicando duas vezes rápido ou com duas abas abertas.
+async function concederReceitaConhecida(periciaNome, nivel, receitaGlobalId, origem) {
+    if (!fichaAtual.receitasConhecidas) fichaAtual.receitasConhecidas = {};
+    if (origem === "livre" && receitaLivreDoSlot(periciaNome, nivel)) {
+        toast(`Esse personagem já tem a receita gratuita de nível ${nivel} dessa perícia.`, "erro");
+        return;
+    }
+    const nomeAutor = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
+    const id = gerarIdLocal();
+    fichaAtual.receitasConhecidas[id] = {
+        receitaGlobalId,
+        periciaVinculada: periciaNome,
+        nivel,
+        origem,
+        adicionadoPorNome: nomeAutor,
+        adicionadoEm: Date.now()
+    };
+    await update(ref(db, `${caminhoBase()}/receitasConhecidas`), fichaAtual.receitasConhecidas);
+    toast(origem === "livre" ? "Receita gratuita adicionada à ficha." : "Receita adicionada à ficha pelo Mestre.");
+}
+
+// Remover uma receita conhecida (gratuita ou extra) — travado pro
+// jogador: depois de escolhida, só o Mestre pode desfazer.
+async function removerReceitaConhecida(id) {
+    if (!isMestre) { toast("Só o Mestre pode remover uma receita já adquirida.", "erro"); return; }
+    if (!confirm("Remover essa receita da ficha do personagem?")) return;
+    delete fichaAtual.receitasConhecidas[id];
+    await remove(ref(db, `${caminhoBase()}/receitasConhecidas/${id}`));
+    toast("Receita removida da ficha.");
+}
+
+
 function renderizarTudo() {
     if (!fichaAtual) return;
     const modificadoresPlanos = coletarModificadores(fichaAtual);
@@ -923,6 +1004,7 @@ function renderizarTudo() {
     renderizarVantagensDesvantagens();
     renderizarEspecializacoes();
     renderizarTreinamento();
+    renderizarReceitas();
     renderizarDarknetENotas();
 }
 
@@ -1945,11 +2027,64 @@ async function recarregarArma(armaId, armaItem) {
 // essa perícia). Regra global: por ser um teste de perícia, se o
 // personagem estiver no nível 0 naquela perícia (ou nem tiver o
 // registro dela), o modificador aplicado é -1, não o total calculado.
-async function rolarUsoItem(it, modificadoresPlanos) {
-    const nomePericia = it.periciaUso;
-    if (!nomePericia) { toast("Este item não tem perícia vinculada.", "erro"); return; }
+// Rola de fato a perícia vinculada ao uso de um item — extraído de
+// rolarUsoItem pra poder ser chamado tanto direto (item com periciaUso
+// fixo) quanto depois de escolher qual perícia usar (Kit de Ferramentas
+// de Criação geral — ver abrirModalEscolherPericiaFerramentaGeral).
+async function rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos) {
     const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
     await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+}
+
+async function rolarUsoItem(it, modificadoresPlanos) {
+    // Kit de Ferramentas de Criação (geral — manual pg. 71): o mesmo kit
+    // serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios
+    // Utilitários e Eletrônica (ver ehFerramentaCriacaoGeral em
+    // dados-manual.js) — por isso não fica travado numa perícia só na
+    // criação do item; a escolha é feita aqui, na hora de usar.
+    if (ehFerramentaCriacaoGeral(it.tag) && !it.periciaUso) {
+        abrirModalEscolherPericiaFerramentaGeral(it, modificadoresPlanos);
+        return;
+    }
+    const nomePericia = it.periciaUso;
+    if (!nomePericia) { toast("Este item não tem perícia vinculada.", "erro"); return; }
+    await rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos);
+}
+
+// Escolha de qual das 5 perícias rolar com um Kit de Ferramentas de
+// Criação (geral) — ver rolarUsoItem acima.
+function abrirModalEscolherPericiaFerramentaGeral(it, modificadoresPlanos) {
+    let modal = document.getElementById("modal-escolher-pericia-kit");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-escolher-pericia-kit";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Usar ${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>Escolha a perícia</h4>
+        <p class="hint">Kit de Ferramentas de Criação (geral) — serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários e Eletrônica. Escolha qual perícia rolar agora.</p>
+        <div class="combate-lista" id="kit-pericia-opcoes"></div>
+    `;
+    const opcoesDiv = modal.querySelector("#kit-pericia-opcoes");
+    PERICIAS_FERRAMENTA_CRIACAO.forEach(nome => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn-lime";
+        btn.style.width = "100%";
+        btn.style.marginBottom = "6px";
+        btn.innerText = nome;
+        btn.addEventListener("click", async () => {
+            modal.remove();
+            await rolarComPericiaDoItem(it, nome, modificadoresPlanos);
+        });
+        opcoesDiv.appendChild(btn);
+    });
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
 }
 
 // Ponto de entrada único do botão "Usar" em armas: se houver combate
@@ -4100,14 +4235,17 @@ function renderizarInventario(modificadoresPlanos) {
             const temEfeitoItem = !!(it.modificadores && it.modificadores.length);
             const ativoItem = it.ativo !== false;
             if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
-            const podeUsar = itemPodeUsar(it) && !!it.periciaUso;
+            const kitGeral = ehFerramentaCriacaoGeral(it.tag);
+            const podeUsar = itemPodeUsar(it) && (!!it.periciaUso || kitGeral);
             const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
             const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
             const ehArmaItem = ehArma(it.tag);
             const equipadaItem = !!it.equipada;
             const podeEquipar = itemPodeEquipar(it);
             const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
-            const periciaLabel = it.periciaUso ? ` · Usa: ${escapeHtml(it.periciaUso)}` : "";
+            const periciaLabel = it.periciaUso
+                ? ` · Usa: ${escapeHtml(it.periciaUso)}`
+                : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
             const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
             const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
             const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
@@ -4141,7 +4279,7 @@ function renderizarInventario(modificadoresPlanos) {
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
                     ${ehArmaItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? "🗡️ Equipada" : "○ Desequipada"}</button>` : ""}
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${it.periciaUso}` : (ehArmaItem && !equipadaItem ? "Equipe a arma pra poder usá-la" : "Sem perícia vinculada")}">Usar</button>
+                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : `Rolar d20 + ${it.periciaUso}`) : (ehArmaItem && !equipadaItem ? "Equipe a arma pra poder usá-la" : "Sem perícia vinculada")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
                     ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
@@ -4774,6 +4912,352 @@ async function salvarTreinamento() {
 }
 
 // ---------------------------------------------------------------------
+// RECEITAS — uma seção pra cada perícia de criação de item (Ferramenta
+// de Criação geral ou química, ver PERICIAS_CRIACAO_ITEM em
+// dados-manual.js) que estiver cadastrada na ficha, com a lista de
+// receitas daquela perícia — vindas do Banco Global de Receitas
+// (receitas-globais.js), compartilhado entre TODAS as mesas, igual o
+// Banco Global de Itens. O botão "+ Criar receita" no fim da aba
+// funciona tanto pro jogador quanto pro Mestre (ver abrirModalCriarReceita).
+// ---------------------------------------------------------------------
+function renderizarReceitas() {
+    if (!el.receitasLista) return;
+    const entradasCriacao = Object.values(fichaAtual.pericias || {})
+        .filter(p => PERICIAS_CRIACAO_ITEM.includes(p.nome));
+
+    const corpoHtml = !entradasCriacao.length
+        ? `<p class="entity-list-empty" style="cursor:default;">Nenhuma perícia de criação de item (Mecânica Automotiva, Armeiro, Ofícios Utilitários, Explosivos, Eletrônica ou Química) cadastrada nesta ficha ainda.</p>`
+        : entradasCriacao.map(p => {
+            const nivelPericia = Number(p.nivel) || 0;
+
+            // Um "slot" por nível de 1 até o nível atual da perícia — cada
+            // um comporta exatamente 1 receita gratuita (origem "livre").
+            const slotsHtml = [];
+            for (let nivel = 1; nivel <= nivelPericia; nivel++) {
+                const livre = receitaLivreDoSlot(p.nome, nivel);
+                if (livre) {
+                    const r = receitasGlobaisCache.find(g => g.id === livre.receitaGlobalId);
+                    const detalhes = r ? [
+                        (r.dificuldade || r.dificuldade === 0) ? `Dificuldade ${r.dificuldade}` : null,
+                        r.tempoCriacao ? `Tempo: ${escapeHtml(r.tempoCriacao)}` : null,
+                        r.materiais ? `Materiais: ${escapeHtml(r.materiais)}` : null,
+                        (r.custo || r.custo === 0) ? `Custo: CN$ ${r.custo}` : null
+                    ].filter(Boolean).join(" · ") : null;
+                    slotsHtml.push(`
+                        <li class="receita-slot receita-slot-preenchido" style="cursor:default;">
+                            <div class="entity-main">
+                                <span class="entity-nome">Nível ${nivel} · ${escapeHtml(r ? (r.nome || "(receita sem nome)") : "(receita removida do Banco Global)")}</span>
+                                ${detalhes ? `<span class="entity-sub">${detalhes}</span>` : ""}
+                                ${r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : ""}
+                            </div>
+                            <span class="hint-inline">Gratuita — travada${isMestre ? "" : " (só o Mestre pode trocar)"}</span>
+                            ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${livre.id}">Remover</button>` : ""}
+                        </li>
+                    `);
+                } else {
+                    const opcoes = receitasGlobaisCache.filter(r => r.periciaVinculada === p.nome && (Number(r.nivel) || 1) === nivel);
+                    if (opcoes.length) {
+                        slotsHtml.push(`
+                            <li class="receita-slot receita-slot-vazio" data-pericia="${escapeHtml(p.nome)}" data-nivel="${nivel}">
+                                <label>Nível ${nivel} — escolha sua receita gratuita</label>
+                                <select class="receita-slot-select">
+                                    ${opcoes.map(r => `<option value="${r.id}">${escapeHtml(r.nome || "(sem nome)")}</option>`).join("")}
+                                </select>
+                                <button type="button" class="btn-lime receita-slot-confirmar">Adquirir</button>
+                            </li>
+                        `);
+                    } else {
+                        slotsHtml.push(`
+                            <li class="receita-slot receita-slot-vazio" data-pericia="${escapeHtml(p.nome)}" data-nivel="${nivel}">
+                                <p class="hint">Nenhuma receita de nível ${nivel} cadastrada ainda no Banco Global pra ${escapeHtml(p.nome)}.</p>
+                                <button type="button" class="btn-ghost receita-slot-criar">+ Criar receita nível ${nivel}</button>
+                            </li>
+                        `);
+                    }
+                }
+            }
+
+            // Se o nível da perícia CAIU depois de uma receita gratuita já
+            // ter sido concedida num nível mais alto (ex: penalidade,
+            // ajuste do Mestre), essa receita não é apagada — só some da
+            // lista de slots ativos (o for acima só vai até nivelPericia).
+            // Mostra ela aqui, marcada como "guardada", pra não parecer que
+            // sumiu: se a perícia voltar a esse nível, ela reaparece no
+            // slot normalmente (mesmo registro, mesmo id).
+            const guardadas = Object.entries(fichaAtual.receitasConhecidas || {})
+                .filter(([, c]) => c.periciaVinculada === p.nome && c.origem === "livre" && Number(c.nivel) > nivelPericia)
+                .map(([id, c]) => ({ id, ...c }))
+                .sort((a, b) => a.nivel - b.nivel);
+            const guardadasHtml = guardadas.length
+                ? `<div class="hint-inline" style="margin-top:10px;">Guardadas (nível acima do atual da perícia — voltam a ficar disponíveis se a perícia subir de novo)</div>
+                   <ul class="entity-list">${guardadas.map(x => {
+                       const r = receitasGlobaisCache.find(g => g.id === x.receitaGlobalId);
+                       return `
+                        <li class="entidade-desativada" style="cursor:default;">
+                            <div class="entity-main">
+                                <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}</span>
+                            </div>
+                            ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
+                        </li>`;
+                   }).join("")}</ul>`
+                : "";
+
+            const extras = receitasExtrasDaPericia(p.nome);
+            const extrasHtml = extras.length
+                ? `<div class="hint-inline" style="margin-top:10px;">Receitas adquiridas em jogo (adicionadas pelo Mestre)</div>
+                   <ul class="entity-list">${extras.map(x => {
+                       const r = receitasGlobaisCache.find(g => g.id === x.receitaGlobalId);
+                       return `
+                        <li style="cursor:default;">
+                            <div class="entity-main">
+                                <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}</span>
+                                ${r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : ""}
+                            </div>
+                            <span class="hint-inline">adicionada por ${escapeHtml(x.adicionadoPorNome || "—")}</span>
+                            ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
+                        </li>`;
+                   }).join("")}</ul>`
+                : "";
+
+            // Mestre pode adicionar qualquer receita já cadastrada no Banco
+            // Global a este personagem específico, fora dos slots gratuitos
+            // (representa algo adquirido/ensinado durante a sessão).
+            const todasDaPericia = receitasGlobaisCache.filter(r => r.periciaVinculada === p.nome);
+            const formExtraMestre = isMestre && todasDaPericia.length
+                ? `
+                    <li class="receita-slot receita-extra-form" data-pericia="${escapeHtml(p.nome)}">
+                        <label>Adicionar receita extra a este personagem (Mestre)</label>
+                        <select class="receita-extra-select">
+                            ${todasDaPericia.map(r => `<option value="${r.id}" data-nivel="${Number(r.nivel) || 1}">Nível ${Number(r.nivel) || 1} — ${escapeHtml(r.nome || "(sem nome)")}</option>`).join("")}
+                        </select>
+                        <button type="button" class="btn-ghost receita-extra-confirmar">+ Adicionar ao personagem</button>
+                    </li>
+                `
+                : "";
+
+            return `
+                <div class="section-header">${escapeHtml(p.nome)} <span class="hint-inline">nível ${nivelPericia}</span></div>
+                ${nivelPericia < 1 ? `<p class="hint">Perícia ainda em nível 0 — nenhuma receita gratuita disponível.</p>` : `<ul class="entity-list">${slotsHtml.join("")}${formExtraMestre}</ul>`}
+                ${extrasHtml}
+                ${guardadasHtml}
+            `;
+        }).join("");
+
+    el.receitasLista.innerHTML = `${corpoHtml}<button type="button" class="btn-lime" id="btn-add-receita" style="margin-top:12px;">+ Cadastrar nova receita no Banco Global</button>`;
+    document.getElementById("btn-add-receita")?.addEventListener("click", () => abrirModalCriarReceita());
+
+    // Escolher a receita gratuita de um slot vazio (dentre as já
+    // cadastradas no Banco Global pra aquele nível/perícia).
+    el.receitasLista.querySelectorAll(".receita-slot-confirmar").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const li = btn.closest(".receita-slot");
+            const periciaNome = li.dataset.pericia;
+            const nivel = Number(li.dataset.nivel);
+            const select = li.querySelector(".receita-slot-select");
+            if (!select || !select.value) return;
+            await concederReceitaConhecida(periciaNome, nivel, select.value, "livre");
+        });
+    });
+
+    // Nenhuma receita cadastrada ainda nesse nível: cria uma nova no
+    // Banco Global já pré-preenchida com perícia/nível, e ao salvar ela
+    // já vira automaticamente a receita gratuita desse slot.
+    el.receitasLista.querySelectorAll(".receita-slot-criar").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const li = btn.closest(".receita-slot");
+            abrirModalCriarReceita(null, {
+                periciaVinculada: li.dataset.pericia,
+                nivel: Number(li.dataset.nivel),
+                origem: "livre"
+            });
+        });
+    });
+
+    // Mestre: adicionar receita extra (fora do slot gratuito) a este personagem.
+    el.receitasLista.querySelectorAll(".receita-extra-confirmar").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const li = btn.closest(".receita-slot");
+            const periciaNome = li.dataset.pericia;
+            const select = li.querySelector(".receita-extra-select");
+            if (!select || !select.value) return;
+            const nivel = Number(select.selectedOptions[0]?.dataset.nivel) || 1;
+            await concederReceitaConhecida(periciaNome, nivel, select.value, "mestre");
+        });
+    });
+
+    // Mestre: remover uma receita conhecida (gratuita ou extra).
+    el.receitasLista.querySelectorAll(".receita-remover").forEach(btn => {
+        btn.addEventListener("click", () => removerReceitaConhecida(btn.dataset.id));
+    });
+}
+
+// Modal própria (fora do sistema genérico modal-item, que já é
+// complexo demais pra emprestar campos de receita sem confundir tudo)
+// pra cadastrar uma nova receita no Banco Global — usável tanto pelo
+// jogador (de dentro da ficha) quanto pelo Mestre (de dentro de
+// qualquer ficha ou da "Biblioteca de Receitas" no Painel do Mestre,
+// ver montarPainelBibliotecaReceitas). "O item a ser criado" é
+// representado pelo nome + (opcional) vínculo com um item já existente
+// no Banco Global de Itens, via autocompletar — se não achar nada,
+// segue como texto livre mesmo (a receita não depende de o item já
+// estar cadastrado lá).
+// opcoesSlot (opcional): { periciaVinculada, nivel, origem } — quando a
+// modal é aberta a partir de um slot vazio na aba Receitas (nenhuma
+// receita daquele nível cadastrada ainda no Banco Global), pra já
+// pré-preencher e travar perícia/nível, e, ao salvar, conceder
+// automaticamente essa receita recém-criada ao personagem que estava
+// com o slot aberto (ver concederReceitaConhecida).
+function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
+    let modal = document.getElementById("modal-criar-receita");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-criar-receita";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const r = receitaExistente || {};
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">${receitaExistente ? "Editar receita" : "Nova receita"} — Banco Global</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <div class="modal-field">
+            <label for="receita-nome">Nome do item a ser criado</label>
+            <input type="text" id="receita-nome" value="${escapeHtml(r.nome || "")}" autocomplete="off">
+            <div id="receita-item-opcoes" class="searchable-options" style="display:none;"></div>
+            <span class="hint-inline" id="receita-item-vinculo-hint">${r.itemGlobalId ? "Vinculada a um item do Banco Global de Itens." : "Digite pra buscar um item já cadastrado no Banco Global de Itens (opcional)."}</span>
+        </div>
+        <div class="modal-field">
+            <label for="receita-pericia">Perícia de criação vinculada</label>
+            <select id="receita-pericia"></select>
+        </div>
+        <div class="modal-field">
+            <label for="receita-nivel">Nível do item (nível mínimo da perícia pra criar)</label>
+            <select id="receita-nivel"></select>
+        </div>
+        <div class="modal-field">
+            <label for="receita-dificuldade">Dificuldade (opcional)</label>
+            <input type="number" id="receita-dificuldade" min="0" step="1" value="${r.dificuldade ?? ""}">
+        </div>
+        <div class="modal-field">
+            <label for="receita-tempo">Tempo de criação (opcional)</label>
+            <input type="text" id="receita-tempo" placeholder="ex.: 2 horas, 1 dia..." value="${escapeHtml(r.tempoCriacao || "")}">
+        </div>
+        <div class="modal-field">
+            <label for="receita-materiais">Materiais necessários (opcional)</label>
+            <textarea id="receita-materiais" rows="2">${escapeHtml(r.materiais || "")}</textarea>
+        </div>
+        <div class="modal-field">
+            <label for="receita-custo">Custo em CN$ (opcional)</label>
+            <input type="number" id="receita-custo" min="0" step="1" value="${r.custo ?? ""}">
+        </div>
+        <div class="modal-field">
+            <label for="receita-descricao">Descrição / efeito (opcional)</label>
+            <textarea id="receita-descricao" rows="3">${escapeHtml(r.descricao || "")}</textarea>
+        </div>
+        <div class="modal-btns">
+            <button type="button" class="btn-lime" id="btn-confirmar-receita">${receitaExistente ? "Salvar alterações" : "Criar receita"}</button>
+        </div>
+    `;
+
+    const selectPericia = modal.querySelector("#receita-pericia");
+    PERICIAS_CRIACAO_ITEM.forEach(nome => {
+        const opt = document.createElement("option");
+        opt.value = nome;
+        opt.innerText = nome;
+        selectPericia.appendChild(opt);
+    });
+    selectPericia.value = opcoesSlot?.periciaVinculada
+        ? opcoesSlot.periciaVinculada
+        : (PERICIAS_CRIACAO_ITEM.includes(r.periciaVinculada) ? r.periciaVinculada : PERICIAS_CRIACAO_ITEM[0]);
+    selectPericia.disabled = !!opcoesSlot?.periciaVinculada;
+
+    // Nível do item = nível mínimo que a perícia de criação precisa ter
+    // pra essa receita poder ser usada (perícia vai de 0 a 5, mas nível
+    // 0 não cria nada — por isso a receita começa em 1). É esse campo
+    // que permite a aba "Receitas" da ficha organizar/filtrar as
+    // receitas de cada perícia por nível (ver renderizarReceitas).
+    const selectNivel = modal.querySelector("#receita-nivel");
+    for (let n = 1; n <= 5; n++) {
+        const opt = document.createElement("option");
+        opt.value = String(n);
+        opt.innerText = `Nível ${n}`;
+        selectNivel.appendChild(opt);
+    }
+    selectNivel.value = String(opcoesSlot?.nivel || (r.nivel && r.nivel >= 1 && r.nivel <= 5 ? r.nivel : 1));
+    selectNivel.disabled = !!opcoesSlot?.nivel;
+
+    // Autocompletar pelo nome, contra o Banco Global de Itens já
+    // carregado (itensGlobaisCache) — mesmo padrão usado no modal de
+    // item (configurarAutocompleteItemBanco), simplificado pra só
+    // guardar o vínculo (itemGlobalId), sem preencher outros campos.
+    let itemGlobalIdVinculado = r.itemGlobalId || null;
+    const inputNome = modal.querySelector("#receita-nome");
+    const opcoesDiv = modal.querySelector("#receita-item-opcoes");
+    const vinculoHint = modal.querySelector("#receita-item-vinculo-hint");
+    inputNome.addEventListener("input", () => {
+        itemGlobalIdVinculado = null;
+        vinculoHint.innerText = "Digite pra buscar um item já cadastrado no Banco Global de Itens (opcional).";
+        const texto = inputNome.value.trim().toLowerCase();
+        if (!texto) { opcoesDiv.style.display = "none"; return; }
+        const encontrados = itensGlobaisCache.filter(it => (it.nome || "").toLowerCase().includes(texto)).slice(0, 8);
+        if (!encontrados.length) { opcoesDiv.style.display = "none"; return; }
+        opcoesDiv.innerHTML = "";
+        encontrados.forEach(it => {
+            const div = document.createElement("div");
+            div.className = "opcao";
+            div.innerText = `${it.nome} — ${rotuloTag(it.tag)}`;
+            div.addEventListener("click", () => {
+                inputNome.value = it.nome;
+                itemGlobalIdVinculado = it.id;
+                vinculoHint.innerText = "Vinculada a um item do Banco Global de Itens.";
+                opcoesDiv.style.display = "none";
+            });
+            opcoesDiv.appendChild(div);
+        });
+        opcoesDiv.style.display = "block";
+    });
+
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-receita").addEventListener("click", async () => {
+        const nome = inputNome.value.trim();
+        if (!nome) { toast("Dê um nome ao item a ser criado.", "erro"); return; }
+        const nomeCriador = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
+        const receita = {
+            nome,
+            periciaVinculada: selectPericia.value,
+            nivel: Number(selectNivel.value) || 1,
+            dificuldade: modal.querySelector("#receita-dificuldade").value !== "" ? Number(modal.querySelector("#receita-dificuldade").value) || 0 : null,
+            tempoCriacao: modal.querySelector("#receita-tempo").value.trim(),
+            materiais: modal.querySelector("#receita-materiais").value.trim(),
+            custo: modal.querySelector("#receita-custo").value !== "" ? Number(modal.querySelector("#receita-custo").value) || 0 : null,
+            descricao: modal.querySelector("#receita-descricao").value.trim(),
+            itemGlobalId: itemGlobalIdVinculado,
+            criadoPorNome: nomeCriador,
+            criadoPorTipo: isMestre ? "mestre" : "jogador"
+        };
+        try {
+            if (receitaExistente) {
+                await atualizarReceitaBanco(receitaExistente.id, receita);
+                toast(`Receita "${nome}" atualizada no Banco Global.`);
+            } else {
+                const novoId = await salvarReceitaNoBanco(receita);
+                toast(`Receita "${nome}" criada no Banco Global.`);
+                if (opcoesSlot?.periciaVinculada && fichaAtual) {
+                    await concederReceitaConhecida(receita.periciaVinculada, receita.nivel, novoId, opcoesSlot.origem || "livre");
+                }
+            }
+            modal.remove();
+        } catch (err) {
+            console.error(err);
+            toast("Falha ao salvar a receita.", "erro");
+        }
+    });
+
+    document.body.appendChild(modal);
+}
+
+// ---------------------------------------------------------------------
 // DARK NET / NOTAS
 // ---------------------------------------------------------------------
 function renderizarDarknetENotas() {
@@ -5032,6 +5516,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoTag.style.display = "none";
     el.modalCampoNivelTag.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
+    el.hintFerramentaCriacaoGeral.style.display = "none";
     el.modalCampoClasseProtecao.style.display = "none";
     el.modalCampoLocalProtegido.style.display = "none";
     el.modalCampoPeso.style.display = "none";
@@ -5480,6 +5965,10 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         });
         el.modalPericiaUso.value = (periciaUsoAtual && opcoes.includes(periciaUsoAtual)) ? periciaUsoAtual : opcoes[0];
     }
+    // Ferramenta de Criação (geral) — ver ehFerramentaCriacaoGeral em
+    // dados-manual.js: não tem select de perícia (não fica travada numa
+    // só), só um aviso explicando que a escolha é feita ao usar o item.
+    el.hintFerramentaCriacaoGeral.style.display = ehFerramentaCriacaoGeral(tagKey) ? "block" : "none";
 
     const arma = ehArma(tagKey);
     el.modalConfigArma.style.display = arma ? "block" : "none";
@@ -6952,6 +7441,9 @@ function abrirAcaoMestre(acao) {
     } else if (acao === "biblioteca") {
         montarPainelBibliotecaItens(corpo);
 
+    } else if (acao === "biblioteca-receitas") {
+        montarPainelBibliotecaReceitas(corpo);
+
     } else if (acao === "dashboard") {
         montarDashboardFichas(corpo);
 
@@ -7484,6 +7976,68 @@ function montarPainelBibliotecaItens(corpo) {
     btnNovo.className = "btn-lime"; btnNovo.type = "button"; btnNovo.innerText = "+ Criar Novo Item";
     btnNovo.style.marginTop = "12px";
     btnNovo.addEventListener("click", () => abrirModalNovo("itensGlobais"));
+    corpo.appendChild(btnNovo);
+}
+
+// ---------------------------------------------------------------------
+// Painel do Mestre — "Biblioteca de Receitas" (Banco Global de
+// Receitas). Mesma ideia da Biblioteca de Itens acima, mas usando o
+// modal próprio de receita (abrirModalCriarReceita) em vez do modal
+// genérico de item — deixa o Mestre criar/editar/excluir qualquer
+// receita sem precisar estar dentro de nenhuma ficha específica.
+// ---------------------------------------------------------------------
+function montarPainelBibliotecaReceitas(corpo) {
+    const busca = criarInput("text", "Buscar por nome...");
+    busca.style.marginBottom = "10px";
+    corpo.appendChild(busca);
+
+    const lista = document.createElement("div");
+    lista.style.display = "flex";
+    lista.style.flexDirection = "column";
+    lista.style.gap = "8px";
+    corpo.appendChild(lista);
+
+    const renderLista = () => {
+        const filtro = busca.value.trim().toLowerCase();
+        const receitas = receitasGlobaisCache
+            .filter(r => !filtro || (r.nome || "").toLowerCase().includes(filtro))
+            .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+        lista.innerHTML = "";
+        if (!receitas.length) {
+            lista.innerHTML = `<p class="hint">Nenhuma receita no Banco Global ainda.</p>`;
+        }
+        receitas.forEach(r => {
+            const card = document.createElement("div");
+            card.className = "npc-card";
+            card.innerHTML = `
+                <strong>${escapeHtml(r.nome)}</strong>
+                <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}</span>
+                <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
+            `;
+            const linhaBtns = document.createElement("div");
+            linhaBtns.className = "modal-btns";
+            const btnEditar = document.createElement("button");
+            btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar";
+            btnEditar.addEventListener("click", () => abrirModalCriarReceita(r));
+            const btnExcluir = document.createElement("button");
+            btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir";
+            btnExcluir.addEventListener("click", async () => {
+                if (!confirm(`Excluir a receita "${r.nome}" do Banco Global?`)) return;
+                await excluirReceitaBanco(r.id);
+                toast("Receita removida do Banco Global.");
+            });
+            linhaBtns.append(btnEditar, btnExcluir);
+            card.appendChild(linhaBtns);
+            lista.appendChild(card);
+        });
+    };
+    busca.addEventListener("input", renderLista);
+    renderLista();
+
+    const btnNovo = document.createElement("button");
+    btnNovo.className = "btn-lime"; btnNovo.type = "button"; btnNovo.innerText = "+ Criar Nova Receita";
+    btnNovo.style.marginTop = "12px";
+    btnNovo.addEventListener("click", () => abrirModalCriarReceita());
     corpo.appendChild(btnNovo);
 }
 

@@ -255,6 +255,7 @@ export const TAGS_ITEM = [
     { key: "destrave", label: "Destrave", temNivel: true },
     { key: "ferramenta_criacao", label: "Ferramenta de criação (geral)", temNivel: true },
     { key: "ferramenta_criacao_quimica", label: "Ferramenta de criação química", temNivel: true },
+    { key: "ferramenta_criacao_biomecanica", label: "Ferramenta de criação biomecânica", temNivel: true },
     { key: "eletronico", label: "Eletrônico", temNivel: false },
     { key: "drone", label: "Drone", temNivel: false },
     { key: "veiculo", label: "Veículo", temNivel: true },
@@ -622,11 +623,34 @@ export function bonusEsquivaBoxe(nivelBoxe) {
 export const PERICIAS_ELETRONICO = ["Hacking"];
 // Ferramenta de Criação "geral" (manual pg. 71): usada nas perícias de
 // Ofícios Utilitários, Armeiro, Mecânica Automotiva, Explosivos e
-// Eletrônica. Química fica de fora de propósito — ela usa um item
-// próprio (Ferramentas de Criação Química, pg. 92), com receita igual
-// ao kit convencional mas item distinto no inventário.
+// Eletrônica — TODAS elas de uma vez, é o que torna o kit "geral" (o
+// mesmo kit físico serve pra qualquer uma das 5). Por isso o item NÃO
+// trava numa perícia só na criação (ver ehFerramentaCriacaoGeral abaixo
+// e tagExigePericiaUso/periciasVinculaveisPorTag logo a seguir) — quem
+// escolhe é o jogador na hora de "Usar" o kit (ver
+// abrirModalEscolherPericiaFerramentaGeral em ficha.js).
+// Química e Biomecânica ficam de fora de propósito — cada uma usa um
+// kit próprio (Ferramentas de Criação Química, pg. 92; e Ferramenta de
+// Criação Biomecânica), com receita igual mas item/perícia distintos.
 export const PERICIAS_FERRAMENTA_CRIACAO = ["Mecânica Automotiva", "Armeiro", "Ofícios Utilitários", "Explosivos", "Eletrônica"];
 export const PERICIAS_FERRAMENTA_CRIACAO_QUIMICA = ["Química"];
+export const PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA = ["Biomecânica"];
+
+// ---------------------------------------------------------------------
+// Receitas (aba "Receitas" da ficha): PERICIAS_CRIACAO_ITEM é a lista
+// de perícias de CRIAÇÃO DE ITEM (as mesmas que usam Ferramenta de
+// Criação geral, química ou biomecânica, ver PERICIAS_FERRAMENTA_CRIACAO/
+// PERICIAS_FERRAMENTA_CRIACAO_QUIMICA/PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA
+// acima) — usada tanto pra saber quais perícias mostrar seção na aba
+// quanto pra popular o select de "Perícia de criação vinculada" no
+// modal de criar receita. As receitas em si NÃO ficam numa lista
+// estática aqui — elas são cadastradas pelo jogador ou pelo Mestre e
+// guardadas no Banco Global de Receitas (receitas-globais.js),
+// compartilhado entre todas as mesas, igual o Banco Global de Itens —
+// ver renderizarReceitas/abrirModalCriarReceita em ficha.js.
+// ---------------------------------------------------------------------
+export const PERICIAS_CRIACAO_ITEM = [...PERICIAS_FERRAMENTA_CRIACAO, ...PERICIAS_FERRAMENTA_CRIACAO_QUIMICA, ...PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA];
+
 export const PERICIAS_DESTRAVE = ["Mão Leve", "Arrombamento"];
 export const PERICIAS_ARMA_FOGO = ["Armas de Fogo de Pequeno Porte", "Armas de Fogo de Médio Porte", "Armas de Fogo de Grande Porte"];
 export const PERICIAS_ARMA_COMBATE = [
@@ -634,13 +658,25 @@ export const PERICIAS_ARMA_COMBATE = [
     "Armas Brancas Exóticas", ...PERICIAS_ARMA_FOGO
 ];
 
+// Ferramenta de Criação "geral" — a única tag cujo item serve pra mais
+// de uma perícia ao mesmo tempo (as 5 de PERICIAS_FERRAMENTA_CRIACAO).
+// Usada em vários pontos pra tratar esse caso especial: não exigir (nem
+// mostrar) um select de perícia única na criação do item, e deixar a
+// escolha pra hora de "Usar" (ver ficha.js).
+export function ehFerramentaCriacaoGeral(tagKey) {
+    return tagKey === "ferramenta_criacao";
+}
+
 // Tags cujo item precisa de uma perícia vinculada pra ter ação de "Usar"
 // com rolagem automática (armas, eletrônicos, ferramentas de criação —
-// geral e química — e destraves — manual pg. 49-50 e regras de teste de
-// perícia).
+// química e biomecânica — e destraves — manual pg. 49-50 e regras de
+// teste de perícia). Ferramenta de Criação GERAL fica de fora desta
+// lista de propósito — ver ehFerramentaCriacaoGeral acima: ela não trava
+// numa perícia só na criação, então não "exige" escolher uma aqui.
 export function tagExigePericiaUso(tagKey) {
-    return tagKey === "arma" || tagKey === "eletronico" || tagKey === "ferramenta_criacao" ||
-        tagKey === "ferramenta_criacao_quimica" || tagKey === "destrave";
+    return tagKey === "arma" || tagKey === "eletronico" ||
+        tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
+        tagKey === "destrave";
 }
 
 export function periciasVinculaveisPorTag(tagKey) {
@@ -656,6 +692,7 @@ export function periciasVinculaveisPorTag(tagKey) {
         case "eletronico": return PERICIAS_ELETRONICO;
         case "ferramenta_criacao": return PERICIAS_FERRAMENTA_CRIACAO;
         case "ferramenta_criacao_quimica": return PERICIAS_FERRAMENTA_CRIACAO_QUIMICA;
+        case "ferramenta_criacao_biomecanica": return PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA;
         case "destrave": return PERICIAS_DESTRAVE;
         default: return [];
     }
