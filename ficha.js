@@ -32,7 +32,8 @@ import {
     atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
-    bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC
+    bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
+    MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -74,11 +75,12 @@ import {
     pagarCustoSemanal,
     ouvirCombateAtivo, adicionarParticipanteCombate, removerParticipanteCombate, encerrarCombate,
     ouvirAcoesPendentes, criarAcaoPendente, rejeitarAcaoPendente, confirmarAcaoPendente,
-    iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, resetarRecuoArma,
+    iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, consumirAcaoExtraCQC, resetarRecuoArma,
     participantesElegiveisCQCIniciativa,
     abrirReacaoPendente, responderReacaoPendente, adicionarEsquivaExtra,
     consumirContraAtaquePendente, definirAgarrado, soltarAgarrado,
     definirDerrubado, levantarDerrubado,
+    definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
     definirAlcanceLimitado, soltarAlcanceLimitado
 } from "./mestre.js";
 import {
@@ -1600,7 +1602,7 @@ function renderizarPericias(modificadoresPlanos) {
         `;
         li.querySelector(".btn-rolar").addEventListener("click", async (e) => {
             e.stopPropagation();
-            await rolarERegistrar(p.nome, calc.total);
+            await rolarERegistrar(p.nome, calc.total, p.nome === "CQC");
         });
         li.addEventListener("click", () => abrirModalEdicao("pericias", id));
         el.listaPericias.appendChild(li);
@@ -1609,7 +1611,9 @@ function renderizarPericias(modificadoresPlanos) {
 
 // Rola 1d20 + modificador e registra no Log de Dados, identificando quem
 // rolou pelo nome da ficha ativa (jogador) ou "Mestre".
-async function rolarERegistrar(nomeAlvo, modificador) {
+// ehCQC (default false): se esta rolagem usa especificamente a perícia
+// CQC — só importa pro CQC nível 5 (ver checarConsumoDeAcao/extraCQC).
+async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
     // Trava de ações: com combate com iniciativa ativo, uma rolagem só
     // acontece se for o turno de quem está agindo (jogador OU o NPC que
     // o Mestre estiver controlando) E ainda houver ação sobrando nesse
@@ -1621,7 +1625,7 @@ async function rolarERegistrar(nomeAlvo, modificador) {
     // fora do fluxo de ataque completo, e nenhuma dessas gasta ação
     // automaticamente (só golpe corpo a corpo/arma branca em
     // resolverAtaque faz isso — ver checarConsumoDeAcao).
-    const consumo = checarConsumoDeAcao(false);
+    const consumo = checarConsumoDeAcao(false, ehCQC);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -1654,14 +1658,14 @@ async function rolarERegistrar(nomeAlvo, modificador) {
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: quem,
-                detalhe: `${quem} rolou "${nomeAlvo}" (resultado ${resultado}) e quer gastar 1 ação do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao }
+                detalhe: `${quem} rolou "${nomeAlvo}" (resultado ${resultado}) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -1929,7 +1933,7 @@ async function rolarUsoItem(it, modificadoresPlanos) {
     const nomePericia = it.periciaUso;
     if (!nomePericia) { toast("Este item não tem perícia vinculada.", "erro"); return; }
     const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
-    await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal);
+    await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
 }
 
 // Ponto de entrada único do botão "Usar" em armas: se houver combate
@@ -1972,6 +1976,7 @@ let contextoDesarmar = null;
 let contextoDerrubar = null;
 let contextoDelimitar = null;
 let contextoRetomar = null;
+let contextoImobilizar = null;
 
 function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
@@ -2094,13 +2099,42 @@ function abrirModalSelecionarAlvoDerrubar(nomePericia, modificador, nivelCQC = 0
     el.modalSelecionarAlvo.classList.add("active");
 }
 
-// CQC nível 2 (manual): checkbox pré-rolagem de iniciativa pra decidir
-// quem está avançando contra oponentes armados pra derrubá-los (+1 na
-// iniciativa). Só chamada quando participantesElegiveisCQCIniciativa()
-// já achou pelo menos 1 personagem com o nível — devolve uma Promise
-// que resolve com o mapa {participanteId: true} dos marcados, ou `null`
-// se o Mestre fechar/cancelar sem confirmar (o botão então não rola a
-// iniciativa de ninguém, pra não perder a chance de aplicar o bônus).
+// "Imobilizar" (CQC nível 4, manual pg. 23 — ver MANOBRA_IMOBILIZAR_CQC
+// em dados-manual.js): só faz sentido contra quem JÁ está Derrubado
+// ("Após derrubar pode imobilizar o alvo"), então a lista de alvos é
+// filtrada aqui em vez de reaproveitar preencherOpcoesDeAlvo() (que
+// mostra todo mundo).
+function abrirModalSelecionarAlvoImobilizar(nomePericia, modificador) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([, p]) => p.derrubado && p.derrubado.ativo);
+    if (!opcoes.length) { toast("Ninguém no combate está Derrubado agora — Imobilizar só funciona depois de Derrubar o alvo.", "erro"); return; }
+
+    contextoImobilizar = { nomePericia, modificador };
+    el.alvoTitulo.innerText = `Imobilizar com ${nomePericia}`;
+    el.alvoCampoExtra.style.display = "none";
+    el.alvoCampoExtra.innerHTML = "";
+    el.alvoSelect.innerHTML = "";
+    opcoes.forEach(([pid, p]) => {
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.innerText = `${p.nome} (Derrubado)`;
+        el.alvoSelect.appendChild(opt);
+    });
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// CQC nível 2 e nível 4 (manual): checkbox pré-rolagem de iniciativa —
+// nível 2 pergunta quem está avançando contra oponentes armados pra
+// derrubá-los (+1 na iniciativa); nível 4 (Disparar e Avançar, filtra
+// `elegiveis` pra nivel >= 4) pergunta quem vai reservar 1 ação do
+// próprio 1º turno pra disparar 2x fora da ordem de turno (ver
+// iniciarIniciativaCombate em mestre.js). Só chamada quando
+// participantesElegiveisCQCIniciativa() já achou pelo menos 1
+// personagem nivel >= 2 — devolve uma Promise que resolve com
+// {bonusMap, dispararMap} (mapas {participanteId: true} dos marcados em
+// cada seção), ou `null` se o Mestre fechar/cancelar sem confirmar (o
+// botão então não rola a iniciativa de ninguém, pra não perder a chance
+// de aplicar os bônus).
 function abrirModalBonusIniciativaCQC(elegiveis) {
     return new Promise((resolve) => {
         let modal = document.getElementById("modal-bonus-cqc-iniciativa");
@@ -2116,14 +2150,27 @@ function abrirModalBonusIniciativaCQC(elegiveis) {
                 <span>${escapeHtml(e.nome)} — CQC nível ${e.nivel}</span>
             </label>
         `).join("");
+        const elegiveisNivel4 = elegiveis.filter(e => e.nivel >= 4);
+        const linhasNivel4 = elegiveisNivel4.map(e => `
+            <label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                <input type="checkbox" data-cqc-disparar="${e.id}">
+                <span>${escapeHtml(e.nome)} — CQC nível ${e.nivel}</span>
+            </label>
+        `).join("");
+        const blocoNivel4 = elegiveisNivel4.length ? `
+            <h4 style="margin-top:14px;">Disparar e Avançar (nível 4)</h4>
+            <p class="hint">Marque quem vai reservar 1 ação do 1º turno pra disparar 2x fora da ordem de turno (libera um botão próprio no Gerenciador de Combate).</p>
+            <div class="combate-lista">${linhasNivel4}</div>
+        ` : "";
         modal.innerHTML = `
             <div class="combate-painel-topo">
-                <span class="eyebrow">CQC nível 2</span>
+                <span class="eyebrow">CQC nível 2 e 4</span>
                 <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
             </div>
             <h4>Bônus de iniciativa (+1)</h4>
             <p class="hint">Marque quem está avançando contra oponentes armados pra derrubá-los antes de rolar a iniciativa.</p>
             <div class="combate-lista">${linhas}</div>
+            ${blocoNivel4}
             <button type="button" class="btn-lime" id="btn-confirmar-bonus-cqc-iniciativa" style="margin-top:10px;width:100%;">Rolar iniciativa</button>
         `;
         const fechar = (resultado) => { modal.remove(); resolve(resultado); };
@@ -2133,9 +2180,84 @@ function abrirModalBonusIniciativaCQC(elegiveis) {
             modal.querySelectorAll("[data-cqc-iniciativa]").forEach(chk => {
                 if (chk.checked) bonusMap[chk.dataset.cqcIniciativa] = true;
             });
-            fechar(bonusMap);
+            const dispararMap = {};
+            modal.querySelectorAll("[data-cqc-disparar]").forEach(chk => {
+                if (chk.checked) dispararMap[chk.dataset.cqcDisparar] = true;
+            });
+            fechar({ bonusMap, dispararMap });
         });
     });
+}
+
+// "Disparar e Avançar" (CQC nível 4, manual pg. 23): dispara 2x com uma
+// pistola (Armas de Fogo de Pequeno Porte) equipada contra um único
+// alvo, fora da ordem de turno — cada disparo reaproveita resolverAtaque
+// (mesmas modais/penalidades/dano de um tiro normal), só com
+// ehDisparoAvancarCQC:true pra pular o consumo de ação (já foi
+// reservada na hora de rolar a iniciativa, ver iniciarIniciativaCombate
+// em mestre.js) — igual ao contra-ataque do Aparar, que já faz esse
+// mesmo bypass. Só chamada quando dispararAvancarDisponivel &&
+// !dispararAvancarUsado (ver badge/botão no Gerenciador de Combate).
+function abrirModalDispararAvancar() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const meuParticipante = meuPid && combateAtivoCache.participantes && combateAtivoCache.participantes[meuPid];
+    if (!meuParticipante || !meuParticipante.dispararAvancarDisponivel || meuParticipante.dispararAvancarUsado) {
+        toast("Disparar e Avançar não está disponível agora.", "erro");
+        return;
+    }
+    const itemPistola = listaArmasInventario(fichaAtual).find(a => a.periciaUso === "Armas de Fogo de Pequeno Porte" && a.equipada);
+    if (!itemPistola) {
+        toast("Equipe uma pistola (Armas de Fogo de Pequeno Porte) pra poder Disparar e Avançar.", "erro");
+        return;
+    }
+
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([pid]) => pid !== meuPid);
+    if (!opcoes.length) { toast("Não há outros participantes no combate pra disparar.", "erro"); return; }
+
+    let modal = document.getElementById("modal-disparar-avancar-cqc");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-disparar-avancar-cqc";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const opts = opcoes.map(([pid, p]) => `<option value="${pid}">${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</option>`).join("");
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Disparar e Avançar — CQC nível 4</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>Escolha o alvo</h4>
+        <p class="hint">2 disparos com "${escapeHtml(itemPistola.nome)}", fora da ordem de turno, usando a ação já reservada do seu 1º turno.</p>
+        <label for="disparar-avancar-alvo-select">Alvo</label>
+        <select id="disparar-avancar-alvo-select">${opts}</select>
+        <button type="button" class="btn-lime" id="btn-confirmar-disparar-avancar" style="margin-top:10px;width:100%;">Disparar (2x)</button>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-disparar-avancar").addEventListener("click", async () => {
+        const alvoId = document.getElementById("disparar-avancar-alvo-select").value;
+        modal.remove();
+        await resolverDispararAvancar(alvoId, itemPistola);
+    });
+}
+
+async function resolverDispararAvancar(alvoId, itemPistola) {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const meuParticipante = meuPid && combateAtivoCache.participantes && combateAtivoCache.participantes[meuPid];
+    if (!meuParticipante || !meuParticipante.dispararAvancarDisponivel || meuParticipante.dispararAvancarUsado) {
+        toast("Disparar e Avançar não está disponível agora.", "erro");
+        return;
+    }
+    const alvo = combateAtivoCache.participantes && combateAtivoCache.participantes[alvoId];
+    if (!alvo) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
+
+    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    toast(`CQC nível 4 — Disparar e Avançar: 2 disparos em ${alvo.nome}, fora da ordem de turno.`);
+    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
+    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
+    await marcarDispararAvancarUsado(meuPid);
+    toast(`Disparar e Avançar concluído — pode avançar com sua movimentação livre (igual à Velocidade) em direção aos inimigos restantes.`);
 }
 
 // "Arremessar" (CQC nível 3+): escolhe de 1 a 3 alvos entre os
@@ -2242,6 +2364,7 @@ function configurarModalSelecionarAlvo() {
         contextoDerrubar = null;
         contextoDelimitar = null;
         contextoRetomar = null;
+        contextoImobilizar = null;
     };
     el.alvoCancelar.addEventListener("click", () => {
         el.modalSelecionarAlvo.classList.remove("active");
@@ -2254,7 +2377,7 @@ function configurarModalSelecionarAlvo() {
         }
     });
     el.alvoConfirmar.addEventListener("click", async () => {
-        if (!contextoAtaque && !contextoAgarrar && !contextoDesarmar && !contextoDerrubar && !contextoDelimitar && !contextoRetomar) return;
+        if (!contextoAtaque && !contextoAgarrar && !contextoDesarmar && !contextoDerrubar && !contextoDelimitar && !contextoRetomar && !contextoImobilizar) return;
         const pid = el.alvoSelect.value;
         const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
@@ -2303,6 +2426,10 @@ function configurarModalSelecionarAlvo() {
             const { nomePericia, modificador } = contextoRetomar;
             limparContextos();
             await resolverRetomarAlcance(nomePericia, modificador, { ...participante, _pid: pid });
+        } else if (contextoImobilizar) {
+            const { nomePericia, modificador } = contextoImobilizar;
+            limparContextos();
+            await resolverImobilizar(nomePericia, modificador, { ...participante, _pid: pid });
         }
     });
 }
@@ -2404,8 +2531,19 @@ async function resetarDisparosTurno() {
 async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opcoes = {}) {
     const modificadorExtra = opcoes.modificadorExtra || 0;
     const ehContraAtaque = !!opcoes.ehContraAtaque;
+    const ehDisparoAvancarCQC = !!opcoes.ehDisparoAvancarCQC;
     const nomePericia = it.periciaUso;
     if (!nomePericia) { toast("Esta arma não tem perícia vinculada.", "erro"); return; }
+
+    // Imobilizar (CQC nível 4, manual): "impedindo completamente ataques
+    // e movimentação" enquanto durar — diferente de Agarrar, bloqueia
+    // QUALQUER golpe (não só alcance médio/longo). Verifica antes de tudo,
+    // igual Agarrar.
+    const statusImobilizado = meuStatusImobilizado();
+    if (statusImobilizado && statusImobilizado.ativo) {
+        toast(`Você está IMOBILIZADO por ${statusImobilizado.porNome} — não consegue atacar nem se mover enquanto durar. Teste Destreza no seu turno pra se libertar.`, "erro");
+        return;
+    }
 
     // Agarrar (manual): quem está agarrado não consegue golpes de
     // alcance médio/longo — só curto — enquanto durar. Verifica ANTES de
@@ -2435,6 +2573,10 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // imediatamente com modificador -1") — não espera o próprio turno
     // nem gasta a ação normal do turno, então pula a trava de
     // "é seu turno?/tem ação sobrando?" que vale pro ataque comum.
+    // Disparar e Avançar (CQC nível 4) é igual nesse ponto: a ação já foi
+    // reservada do 1º turno na hora de rolar a iniciativa (ver
+    // iniciarIniciativaCombate em mestre.js), então os 2 disparos daqui
+    // também pulam essa trava — resolverDispararAvancar chama isso 2x.
     //
     // Gasto automático (direto, sem passar pelo Mestre) só é permitido
     // pra golpe corpo a corpo/arma branca (ehFogo === false). Disparo de
@@ -2442,11 +2584,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // controlando o NPC que atirou — sempre entra na fila de Ações
     // Pendentes pra ele decidir (ver checarConsumoDeAcao).
     let consumo, participanteIdParaGastarAcao;
-    if (ehContraAtaque) {
+    if (ehContraAtaque || ehDisparoAvancarCQC) {
         consumo = { participanteId: null, direto: false };
         participanteIdParaGastarAcao = null;
     } else {
-        consumo = checarConsumoDeAcao(!ehFogo);
+        consumo = checarConsumoDeAcao(!ehFogo, nomePericia === "CQC");
         if (!consumo) return;
         participanteIdParaGastarAcao = consumo.participanteId;
     }
@@ -2639,16 +2781,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // penalidade acumulada da ação anterior.
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
             if (ehFogo) await resetarRecuoArma(idDisparoAtual, chaveDisparoAtual);
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                detalhe: `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
                 payload: {
                     participanteId: participanteIdParaGastarAcao,
+                    extraCQC: consumo.extraCQC,
                     ehArmaFogo: ehFogo,
                     idDisparo: idDisparoAtual,
                     itemIdDisparo: chaveDisparoAtual
@@ -2887,7 +3030,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 // vítima ficam bloqueados e o dano dela sai pela metade, até alguém
 // soltar o agarrão (botão "Soltar" na lista de combate).
 async function resolverAgarrar(nomePericia, modificador, participante) {
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -2926,14 +3069,14 @@ async function resolverAgarrar(nomePericia, modificador, participante) {
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Agarrar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} tentou Agarrar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -2963,7 +3106,7 @@ async function resolverAgarrar(nomePericia, modificador, participante) {
 // alvo não tiver nenhuma arma equipada, o teste ainda pode ser vencido,
 // mas não tem o que desarmar — o Log deixa isso claro.
 async function resolverDesarmar(nomePericia, modificador, participante) {
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -2997,14 +3140,14 @@ async function resolverDesarmar(nomePericia, modificador, participante) {
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Desarmar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} tentou Desarmar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -3064,7 +3207,7 @@ async function resolverDesarmar(nomePericia, modificador, participante) {
 // do bônus têm que ser usadas juntas na mesma ação, então ficam
 // desacopladas — cabe ao Mestre decidir quando cada uma se aplica.
 async function resolverDerrubar(nomePericia, modificador, participante, usarBonusCQCDano = false) {
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -3100,14 +3243,14 @@ async function resolverDerrubar(nomePericia, modificador, participante, usarBonu
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Derrubar ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} tentou Derrubar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -3182,6 +3325,140 @@ async function tentarLevantarDerrubado(participanteId) {
     }
 }
 
+// Imobilizar (CQC nível 4, manual pg. 23 — ver MANOBRA_IMOBILIZAR_CQC em
+// dados-manual.js): teste vs. "10 + melhor perícia do alvo entre Jiu
+// Jitsu, CQC ou Briga de Rua" (PERICIAS_IMOBILIZAR_CQC), igual em
+// espírito ao Desarmar (mesma função calcularMelhorModCorpoACorpoParticipante,
+// só que com outra lista de perícias). A modal de alvo já filtra pra só
+// mostrar quem está Derrubado (ver abrirModalSelecionarAlvoImobilizar).
+// Sucesso trava o alvo (ver definirImobilizado em mestre.js), guardando
+// o RESULTADO deste próprio teste como a dificuldade que a vítima vai
+// precisar bater num teste de Destreza (no próprio turno dela, ver
+// tentarLibertarImobilizado abaixo) pra se libertar — o manual fala em
+// "o valor do agente CQC no teste de derrubar", mas como Imobilizar é
+// uma ação separada e posterior ao Derrubar, usamos o teste que de fato
+// prende o alvo agora.
+async function resolverImobilizar(nomePericia, modificador, participante) {
+    const consumo = checarConsumoDeAcao(true, true); // Imobilizar só rola CQC (MANOBRA_IMOBILIZAR_CQC)
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo;
+    try {
+        const melhorPericiaAlvo = await calcularMelhorModCorpoACorpoParticipante(participante.tipo, participante.refId, PERICIAS_IMOBILIZAR_CQC);
+        dificuldade = 10 + melhorPericiaAlvo;
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
+            nomeAlvo = (snap.val().config && snap.val().config.nomeExibicao) || participante.nome;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
+            nomeAlvo = snap.val().nome || participante.nome;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador de perícia: ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Imobilizar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Imobilizar ${nomeAlvo} (${nomePericia}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    if (meuPid) {
+        await definirImobilizado(participante._pid, meuPid, nomeAtacante, resultadoAtaque);
+    }
+    const detalhe = `${nomeAtacante} IMOBILIZOU ${nomeAlvo} (${nomePericia}, CQC nível 4) — vs. dificuldade ${dificuldade}. ${nomeAlvo} não consegue atacar nem se mover enquanto durar; pra se libertar, precisa testar Destreza (dificuldade ${resultadoAtaque}) no próprio turno.\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// "Libertar-se" do Imobilizado (efeito de CQC nível 4 — manual: "teste
+// Destreza, dif igual ao valor do agente CQC no teste de [Imobilizar]").
+// Mesma lógica de ação do "Levantar" (tentarLevantarDerrubado): só no
+// próprio turno de quem está imobilizado, gasta 1 ação. Diferente de
+// Levantar, aqui tem uma rolagem de verdade (Destreza, o ATRIBUTO
+// puro — o manual não pede uma perícia) contra a dificuldade guardada
+// em definirImobilizado.
+async function tentarLibertarImobilizado(participanteId) {
+    if (!combateComIniciativaAtivo()) {
+        await soltarImobilizado(participanteId);
+        toast("Livrou-se do Imobilizado.");
+        return;
+    }
+    if (combateAtivoCache.turnoAtual !== participanteId) {
+        toast("Só é possível tentar se libertar no próprio turno.", "erro");
+        return;
+    }
+    const p = combateAtivoCache.participantes[participanteId];
+    const statusImobilizado = p && p.imobilizado;
+    if (!statusImobilizado || !statusImobilizado.ativo) return;
+    if (Number(p.acoes) <= 0) {
+        toast("Sem ações restantes neste turno pra tentar se libertar.", "erro");
+        return;
+    }
+
+    const dificuldade = Number(statusImobilizado.dificuldadeEscape) || 10;
+    const modDestreza = Number(fichaAtual?.dados?.destreza) || 0;
+    const penalidade = penalidadeTestesAtual();
+    const bruto = rolarD20();
+    const modTotal = modDestreza + penalidade;
+    const resultado = bruto + modTotal;
+    const detalheRolagem = `rolagem: ${bruto}\nDestreza: ${modDestreza >= 0 ? "+" : ""}${modDestreza}${penalidade ? ` ${penalidade >= 0 ? "+" : ""}${penalidade} (penalidade de saúde/energia)` : ""}\nresultado: ${resultado}`;
+    const conseguiu = resultado >= dificuldade;
+
+    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    if (isMestre) {
+        await consumirAcaoCombate(participanteId);
+    } else {
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador,
+            detalhe: `${nomeJogador} testou Destreza pra se libertar do Imobilizado e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+            payload: { participanteId, ehArmaFogo: false }
+        });
+    }
+
+    if (conseguiu) {
+        await soltarImobilizado(participanteId);
+        const detalhe = `${nomeJogador} testou Destreza vs. dificuldade ${dificuldade} e se LIBERTOU do Imobilizado.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeJogador, modificador: modTotal, resultado, detalhe });
+        toast(detalhe);
+    } else {
+        const detalhe = `${nomeJogador} testou Destreza vs. dificuldade ${dificuldade} e continua Imobilizado.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeJogador, modificador: modTotal, resultado, detalhe });
+        toast(detalhe, "erro");
+    }
+}
+
 // Arremessar (CQC nível 3+, manual pg. 20-21, dentro de "Esfaquear e
 // Arremessar"): joga a faca/adaga equipada em até 3 alvos numa única
 // ação. "Para cada inimigo a mais até um máximo de 3, você recebe
@@ -3196,7 +3473,7 @@ async function tentarLevantarDerrubado(participanteId) {
 // difícil que o Derrubar corpo a corpo comum), usando a mesma
 // infraestrutura de definirDerrubado/resolverDerrubar.
 async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds) {
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -3210,14 +3487,14 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} arremessou ${itemFaca.nome} em ${alvosIds.length} alvo(s) e quer gastar 1 ação do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} arremessou ${itemFaca.nome} em ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -3296,7 +3573,7 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
 // ver calcularMelhorModCorpoACorpoParticipante). Sucesso trava a vítima
 // num único alcance (ver verificarAlcanceLimitado em resolverAtaque).
 async function resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhido, participante) {
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -3327,14 +3604,14 @@ async function resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhi
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Delimitar o alcance (${alcanceEscolhido}) de ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} tentou Delimitar o alcance (${alcanceEscolhido}) de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -3362,7 +3639,7 @@ async function resolverRetomarAlcance(nomePericia, modificador, participante) {
         toast(`${participante.nome} não está com o alcance limitado.`, "erro");
         return;
     }
-    const consumo = checarConsumoDeAcao();
+    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -3376,14 +3653,14 @@ async function resolverRetomarAlcance(nomePericia, modificador, participante) {
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
+            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
         } else {
             await criarAcaoPendente({
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+                detalhe: `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
         }
@@ -3675,13 +3952,16 @@ function renderizarManobrasCombate() {
     const modificadoresPlanos = coletarModificadores(fichaAtual);
     el.listaManobrasCombate.innerHTML = "";
 
-    // "Arremessar" (CQC nível 3+) não é uma manobra "de qualquer
-    // perícia" do manual — é exclusiva de quem tem o nível, por isso só
-    // entra na lista quando o personagem atende o requisito (ver
-    // MANOBRA_ARREMESSAR_CQC em dados-manual.js).
+    // "Arremessar" (CQC nível 3+) e "Imobilizar" (CQC nível 4+) não são
+    // manobras "de qualquer perícia" do manual — são exclusivas de quem
+    // tem o nível, por isso só entram na lista quando o personagem
+    // atende o requisito (ver MANOBRA_ARREMESSAR_CQC/MANOBRA_IMOBILIZAR_CQC
+    // em dados-manual.js).
     const entradaCQCLista = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
     const nivelCQCLista = entradaCQCLista ? (Number(entradaCQCLista[1].nivel) || 0) : 0;
-    const manobrasParaExibir = nivelCQCLista >= 3 ? [...MANOBRAS_COMBATE, MANOBRA_ARREMESSAR_CQC] : MANOBRAS_COMBATE;
+    const manobrasParaExibir = [...MANOBRAS_COMBATE];
+    if (nivelCQCLista >= 3) manobrasParaExibir.push(MANOBRA_ARREMESSAR_CQC);
+    if (nivelCQCLista >= 4) manobrasParaExibir.push(MANOBRA_IMOBILIZAR_CQC);
 
     manobrasParaExibir.forEach(m => {
         const li = document.createElement("li");
@@ -3697,9 +3977,12 @@ function renderizarManobrasCombate() {
         // "Arremessar" também não tem fallback "Sem Perícia" — é
         // exclusiva de CQC nível 3+, não existe "versão destreinada".
         const ehArremessar = m.nome === "Arremessar";
+        // "Imobilizar" também não tem fallback "Sem Perícia" — é
+        // exclusiva de CQC nível 4+, não existe "versão destreinada".
+        const ehImobilizar = m.nome === "Imobilizar";
         const periciasHtml = ehEsquivar
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
-            : ehArremessar
+            : (ehArremessar || ehImobilizar)
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="CQC" title="Rolar d20 + CQC">CQC 🎲</button>`
             : m.pericias.map(nomePericia => {
                 const entrada = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === nomePericia);
@@ -3825,6 +4108,22 @@ function renderizarManobrasCombate() {
                     return;
                 }
 
+                // Imobilizar (CQC nível 4, manual — ver
+                // MANOBRA_IMOBILIZAR_CQC em dados-manual.js): igual
+                // Agarrar/Desarmar, resolve num fluxo próprio
+                // (resolverImobilizar), sem dano direto. A modal de
+                // alvo (abrirModalSelecionarAlvoImobilizar) já filtra
+                // pra só mostrar quem está Derrubado.
+                if (m.nome === "Imobilizar") {
+                    if (!combateTemParticipantes()) {
+                        toast("Imobilizar precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const modificador = calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
+                    abrirModalSelecionarAlvoImobilizar(nomePericia, modificador);
+                    return;
+                }
+
                 // Delimitar alcance / Retomar alcance (manual): mesma
                 // ideia do Agarrar — resolvem num fluxo próprio, sem
                 // dano direto. Delimitar ainda pede pra escolher QUAL
@@ -3883,13 +4182,13 @@ function renderizarManobrasCombate() {
                         const dadoTexto = danoCalc.dadoMultiplicador > 1
                             ? `1d${danoCalc.faces}×${danoCalc.dadoMultiplicador}: ${danoCalc.dado}×${danoCalc.dadoMultiplicador}=${danoCalc.dadoTotal}`
                             : `1d${danoCalc.faces}: ${danoCalc.dado}`;
-                        await rolarERegistrar(`${m.nome} (${nomePericia}) · dano potencial ${danoCalc.total} (${dadoTexto} + ${danoCalc.bonusEscala})`, modificador);
+                        await rolarERegistrar(`${m.nome} (${nomePericia}) · dano potencial ${danoCalc.total} (${dadoTexto} + ${danoCalc.bonusEscala})`, modificador, nomePericia === "CQC");
                     }
                     return;
                 }
 
                 const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
-                await rolarERegistrar(`${m.nome} (${nomePericia})`, modificador);
+                await rolarERegistrar(`${m.nome} (${nomePericia})`, modificador, nomePericia === "CQC");
             });
         });
 
@@ -5548,12 +5847,14 @@ async function calcularModApararParticipante(alvoTipo, alvoRefId, nomePericia) {
     return -1;
 }
 
-// Melhor perícia corpo a corpo/arma branca do alvo, pra dificuldade de
-// Delimitar alcance ("11 + perícia corpo a corpo do alvo" — manual não
-// especifica QUAL perícia, então usa a mais alta entre as elegíveis pra
-// Aparar/Delimitar, igual PERICIAS_APARAR). Busca tudo de uma vez (não
-// chama calcularModApararParticipante em loop) pra economizar leituras.
-async function calcularMelhorModCorpoACorpoParticipante(alvoTipo, alvoRefId) {
+// Melhor perícia do alvo dentro de uma lista fechada — usado pra
+// dificuldade de Delimitar alcance ("11 + perícia corpo a corpo do
+// alvo", lista padrão PERICIAS_APARAR, já que o manual não especifica
+// QUAL perícia) e reaproveitado pra Imobilizar (CQC nível 4, lista
+// PERICIAS_IMOBILIZAR_CQC — aí o manual É específico: "Jiu Jitsu, CQC
+// ou Briga de Rua do alvo"). Busca tudo de uma vez (não chama
+// calcularModApararParticipante em loop) pra economizar leituras.
+async function calcularMelhorModCorpoACorpoParticipante(alvoTipo, alvoRefId, listaPericias = PERICIAS_APARAR) {
     if (alvoTipo === "ficha") {
         const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
         if (!snap.exists()) return -1;
@@ -5566,7 +5867,7 @@ async function calcularMelhorModCorpoACorpoParticipante(alvoTipo, alvoRefId) {
         const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
         const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
         let melhor = -1;
-        for (const nome of PERICIAS_APARAR) {
+        for (const nome of listaPericias) {
             const mod = modificadorDePericiaComPenalidade(nome, fichaAlvo.dados, fichaAlvo.pericias, modificadoresPlanos, estadoSaude.penalidadeTestes);
             if (mod > melhor) melhor = mod;
         }
@@ -5578,7 +5879,7 @@ async function calcularMelhorModCorpoACorpoParticipante(alvoTipo, alvoRefId) {
     if (npc.modoDetalhado && npc.periciasNpc) {
         let melhor = -1;
         Object.values(npc.periciasNpc).forEach(p => {
-            if (PERICIAS_APARAR.includes(p.nome)) {
+            if (listaPericias.includes(p.nome)) {
                 const nivel = Number(p.nivel) || 0;
                 if (nivel > melhor) melhor = nivel;
             }
@@ -5625,6 +5926,16 @@ function meuStatusAgarrado() {
     if (!meuPid) return null;
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     return (participantes[meuPid] && participantes[meuPid].agarrado) || null;
+}
+
+// Status de Imobilizado (CQC nível 4) de quem está sendo controlado
+// nesta tela agora. Diferente de Agarrado, bloqueia QUALQUER golpe
+// (ver checagem em resolverAtaque) — não só alcance médio/longo.
+function meuStatusImobilizado() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return null;
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    return (participantes[meuPid] && participantes[meuPid].imobilizado) || null;
 }
 
 // Agarrar (manual): "impossibilita golpes de alcance médio e longo".
@@ -5707,40 +6018,58 @@ function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
 // Constituição etc.) — precisa sempre ir pro gerenciador de Ações
 // Pendentes, mesmo quando é o próprio Mestre controlando o NPC que
 // rolou, pra ele decidir se quer mesmo gastar a ação.
-function checarConsumoDeAcao(permiteDireto = true) {
-    if (!combateComIniciativaAtivo()) return { participanteId: null, direto: false };
+//
+// ehCQC (default false): identifica se a rolagem em questão usa
+// especificamente a perícia CQC — só importa pro CQC nível 5 ("Agente
+// Impossível", manual: "recebe uma ação extra em seu turno para
+// rolagens de CQC"). Quando o `acoes` normal já zerou, MAS ehCQC e
+// ainda sobra `acoesExtraCQC`, a ação prossegue mesmo assim, usando
+// esse contador separado (ver consumirAcaoExtraCQC em mestre.js) — o
+// resultado devolve `extraCQC: true` pra quem chamou saber qual contador
+// gastar. Cada chamador que já sabe qual perícia está rolando (ver
+// resolverAtaque/resolverAgarrar/resolverDesarmar/resolverDerrubar/
+// resolverImobilizar/resolverArremessar/resolverDelimitarAlcance/
+// resolverRetomarAlcance/rolarERegistrar) passa isso adiante.
+function checarConsumoDeAcao(permiteDireto = true, ehCQC = false) {
+    if (!combateComIniciativaAtivo()) return { participanteId: null, direto: false, extraCQC: false };
 
     if (!isMestre) {
         const meuId = meuParticipanteIdCombate();
-        if (!meuId) return { participanteId: null, direto: false };
+        if (!meuId) return { participanteId: null, direto: false, extraCQC: false };
         if (combateAtivoCache.turnoAtual !== meuId) {
             toast("Não é o seu turno.", "erro");
             return null;
         }
         const p = combateAtivoCache.participantes[meuId];
         if (p && Number(p.acoes) <= 0) {
+            if (ehCQC && Number(p.acoesExtraCQC) > 0) {
+                return { participanteId: meuId, direto: false, extraCQC: true };
+            }
             toast("Sem ações restantes neste turno.", "erro");
             return null;
         }
-        return { participanteId: meuId, direto: false };
+        return { participanteId: meuId, direto: false, extraCQC: false };
     }
 
     if (modoNpc) {
         const npcPid = npcParticipanteIdCombate();
-        if (!npcPid) return { participanteId: null, direto: false };
+        if (!npcPid) return { participanteId: null, direto: false, extraCQC: false };
         if (combateAtivoCache.turnoAtual !== npcPid) {
             toast("Não é o turno desse NPC.", "erro");
             return null;
         }
         const p = combateAtivoCache.participantes[npcPid];
         if (p && Number(p.acoes) <= 0) {
+            if (ehCQC && Number(p.acoesExtraCQC) > 0) {
+                return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: true };
+            }
             toast("Esse NPC não tem ações restantes neste turno.", "erro");
             return null;
         }
-        return { participanteId: npcPid, direto: !!permiteDireto };
+        return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: false };
     }
 
-    return { participanteId: null, direto: false };
+    return { participanteId: null, direto: false, extraCQC: false };
 }
 
 // ---------------------------------------------------------------------
@@ -5827,6 +6156,20 @@ function montarPainelIniciativaJogador() {
         const badgeDerrubado = (p.derrubado && p.derrubado.ativo)
             ? ` <span class="mod-pill negativo" title="Derrubado por ${escapeHtml(p.derrubado.porNome)} — dificuldade pra ser acertado cai -3; gasta 1 ação pra se levantar">🔻 Derrubado</span>${pid === meuId ? ` <button type="button" class="btn-ghost btn-levantar-derrubado" data-levantar-derrubado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Levantar</button>` : ""}`
             : "";
+        // Imobilizado (CQC nível 4 — ver definirImobilizado em mestre.js):
+        // bloqueio TOTAL de ataque enquanto durar (diferente de Agarrado,
+        // que só bloqueia alcance médio/longo) — só se solta testando
+        // Destreza no próprio turno (ver tentarLibertarImobilizado).
+        const badgeImobilizado = (p.imobilizado && p.imobilizado.ativo)
+            ? ` <span class="mod-pill negativo" title="Imobilizado por ${escapeHtml(p.imobilizado.porNome)} — não consegue atacar nem se mover; teste Destreza (dificuldade ${p.imobilizado.dificuldadeEscape}) no próprio turno pra se libertar">🔒 Imobilizado</span>${pid === meuId ? ` <button type="button" class="btn-ghost btn-libertar-imobilizado" data-libertar-imobilizado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Testar Destreza</button>` : ""}`
+            : "";
+        // Disparar e Avançar (CQC nível 4 — ver iniciarIniciativaCombate
+        // em mestre.js, que reserva a ação): botão só aparece pro dono
+        // do participante enquanto não tiver sido usado ainda na rodada.
+        const podeDispararAvancar = pid === meuId && p.dispararAvancarDisponivel && !p.dispararAvancarUsado;
+        const botaoDispararAvancar = podeDispararAvancar
+            ? ` <button type="button" class="btn-ghost btn-disparar-avancar-cqc" data-disparar-avancar-cqc="${pid}" style="padding:2px 6px;font-size:0.7rem;" title="CQC nível 4 — 2 disparos com pistola, fora da ordem de turno">🔫 Disparar e Avançar</button>`
+            : "";
         const badgeSaude = badgeEstadoSaudeCombate(p);
         const badgeEnergia = badgeEstadoEnergiaCombate(p);
         const badgeStatus = badgeStatusAtivosCombate(p);
@@ -5835,12 +6178,16 @@ function montarPainelIniciativaJogador() {
         // Combate dele (montarGerenciadorCombate). Sem isso o painel do
         // jogador entregava de graça quanto PV um inimigo ainda tinha.
         const pvTexto = p.tipo === "npc" ? "" : `<span>${p.pv}/${p.pvMax} PV</span>`;
+        // CQC nível 5: ação extra separada, só pra rolagens de CQC (ver
+        // checarConsumoDeAcao/ehCQC) — mostrada à parte do contador
+        // normal pra não confundir com uma ação genérica a mais.
+        const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}</span>
                 ${pvTexto}
-                <span>${p.acoes}/${p.acoesMax} ações</span>
+                <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
             </div>`;
     }).join("");
 
@@ -5864,6 +6211,20 @@ function montarPainelIniciativaJogador() {
         btn.addEventListener("click", async (e) => {
             e.stopPropagation();
             await tentarLevantarDerrubado(btn.dataset.levantarDerrubado);
+        });
+    });
+
+    modal.querySelectorAll("[data-libertar-imobilizado]").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await tentarLibertarImobilizado(btn.dataset.libertarImobilizado);
+        });
+    });
+
+    modal.querySelectorAll("[data-disparar-avancar-cqc]").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            abrirModalDispararAvancar();
         });
     });
 
@@ -6899,14 +7260,26 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeDerrubado = (p.derrubado && p.derrubado.ativo)
                 ? ` <span class="mod-pill negativo" title="Derrubado por ${escapeHtml(p.derrubado.porNome)} — dificuldade pra ser acertado cai -3; gasta 1 ação pra se levantar">🔻 Derrubado</span> <button type="button" class="btn-ghost btn-levantar-derrubado" data-levantar-derrubado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Levantar</button>`
                 : "";
+            const badgeImobilizado = (p.imobilizado && p.imobilizado.ativo)
+                ? ` <span class="mod-pill negativo" title="Imobilizado por ${escapeHtml(p.imobilizado.porNome)} — não consegue atacar nem se mover; teste Destreza (dificuldade ${p.imobilizado.dificuldadeEscape}) no próprio turno pra se libertar">🔒 Imobilizado</span> <button type="button" class="btn-ghost btn-libertar-imobilizado" data-libertar-imobilizado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Testar Destreza</button>`
+                : "";
+            // Disparar e Avançar só é acionável aqui pro NPC que o Mestre
+            // estiver "atuando como" no momento (modoNpc) — precisa dos
+            // dados de inventário/perícia daquele personagem carregados
+            // como fichaAtual, igual as outras manobras de combate.
+            const podeDispararAvancarNpc = modoNpc && pid === npcParticipanteIdCombate() && p.dispararAvancarDisponivel && !p.dispararAvancarUsado;
+            const botaoDispararAvancar = podeDispararAvancarNpc
+                ? ` <button type="button" class="btn-ghost btn-disparar-avancar-cqc" data-disparar-avancar-cqc="${pid}" style="padding:2px 6px;font-size:0.7rem;" title="CQC nível 4 — 2 disparos com pistola, fora da ordem de turno">🔫 Disparar e Avançar</button>`
+                : "";
             const badgeSaude = badgeEstadoSaudeCombate(p);
             const badgeEnergia = badgeEstadoEnergiaCombate(p);
             const badgeStatus = badgeStatusAtivosCombate(p);
+            const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
-                <span>${p.acoes}/${p.acoesMax} ações</span>
+                <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
             `;
             const btnSoltar = linha.querySelector("[data-soltar-agarrado]");
             if (btnSoltar) {
@@ -6922,6 +7295,20 @@ function montarGerenciadorCombate(corpoOriginal) {
                     await tentarLevantarDerrubado(pid);
                 });
             }
+            const btnLibertar = linha.querySelector("[data-libertar-imobilizado]");
+            if (btnLibertar) {
+                btnLibertar.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await tentarLibertarImobilizado(pid);
+                });
+            }
+            const btnDispararAvancar = linha.querySelector("[data-disparar-avancar-cqc]");
+            if (btnDispararAvancar) {
+                btnDispararAvancar.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    abrirModalDispararAvancar();
+                });
+            }
             listaIniciativa.appendChild(linha);
         });
     }
@@ -6932,19 +7319,30 @@ function montarGerenciadorCombate(corpoOriginal) {
     btnIniciarIniciativa.innerText = "Iniciar Combate (rolar iniciativa)";
     btnIniciarIniciativa.addEventListener("click", async () => {
         try {
-            // CQC nível 2: antes de rolar, oferece o +1 de iniciativa pra
-            // quem tem o nível — é condicional a uma escolha narrativa
-            // (avançar contra oponente armado pra derrubá-lo), então
-            // pergunta via checkbox em vez de aplicar sozinho (ver
-            // participantesElegiveisCQCIniciativa em mestre.js).
+            // CQC nível 2 e nível 4: antes de rolar, oferece o +1 de
+            // iniciativa (nível 2) e a reserva de ação pra "Disparar e
+            // Avançar" (nível 4) — os dois são condicionais a uma
+            // escolha narrativa, então pergunta via checkbox em vez de
+            // aplicar sozinho (ver participantesElegiveisCQCIniciativa
+            // em mestre.js).
+            //
+            // CQC nível 5 ("Agente Impossível"): diferente dos outros
+            // dois, é SEMPRE ativo pra quem tem o nível — sem checkbox,
+            // sem escolha. Reaproveita a mesma lista `elegiveis` (já
+            // inclui nivel >= 2, então nivel >= 5 também) pra montar o
+            // mapa automaticamente.
             const elegiveis = await participantesElegiveisCQCIniciativa();
             let bonusMap = {};
+            let dispararMap = {};
             if (elegiveis.length) {
                 const resultado = await abrirModalBonusIniciativaCQC(elegiveis);
                 if (resultado === null) return; // Mestre cancelou
-                bonusMap = resultado;
+                bonusMap = resultado.bonusMap;
+                dispararMap = resultado.dispararMap;
             }
-            await iniciarIniciativaCombate(bonusMap);
+            const acaoExtraCQCMap = {};
+            elegiveis.filter(e => e.nivel >= 5).forEach(e => { acaoExtraCQCMap[e.id] = true; });
+            await iniciarIniciativaCombate(bonusMap, dispararMap, acaoExtraCQCMap);
             toast("Combate iniciado! Iniciativa rolada para todos.");
         } catch (e) {
             toast(e.message || "Falha ao iniciar o combate.", "erro");

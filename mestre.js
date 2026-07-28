@@ -606,6 +606,11 @@ function ordenarPorIniciativa(participantes) {
 // combate e devolve só quem TEM o nível pra oferecer a escolha —
 // funciona pra ficha de jogador e NPC detalhado (NPC "rápido" não tem
 // perícias cadastradas, então nunca aparece na lista).
+//
+// Mesma lista é reaproveitada em ficha.js pra oferecer o checkbox de
+// CQC nível 4 ("Disparar e Avançar" — filtra pra nivel >= 4 na hora de
+// montar a modal), já que os dois bônus são perguntados no mesmo passo
+// pré-rolagem de iniciativa.
 // ---------------------------------------------------------------------
 export async function participantesElegiveisCQCIniciativa() {
     const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
@@ -637,7 +642,7 @@ export async function participantesElegiveisCQCIniciativa() {
     return elegiveis;
 }
 
-export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}) {
+export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, dispararAvancarCQC = {}, acaoExtraCQC = {}) {
     const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
     const participantesBase = snap.exists() ? snap.val() : {};
     const ids = Object.keys(participantesBase);
@@ -668,6 +673,28 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}) {
         // fica salvo no participante só pra exibir a origem do +1 na UI
         // (badge "🥋 +1 CQC" no Gerenciador de Combate).
         const bonusCQC = bonusIniciativaCQC[id] ? 1 : 0;
+        // CQC nível 4 ("Disparar e Avançar" — manual pg. 23): quem foi
+        // marcado no checkbox de abrirModalBonusIniciativaCQC reserva já
+        // AGORA 1 ação do próprio 1º turno (o manual: "utilizando uma
+        // ação do seu primeiro turno") — fica marcado como já gasta no
+        // contador de ações, e dispararAvancarDisponivel libera o botão
+        // "Disparar e Avançar" em ficha.js (resolverDispararAvancar),
+        // que resolve os 2 disparos fora da ordem de turno. Como
+        // avancarTurnoCombate só RESTAURA `acoes` pro máximo cheio ao
+        // virar rodada (nunca no meio dela), essa reserva persiste até
+        // o próprio 1º turno de quem marcou chegar.
+        const dispararAvancar = !!dispararAvancarCQC[id];
+        // CQC nível 5 ("Agente Impossível" — manual: "recebe uma ação
+        // extra em seu turno para rolagens de CQC"). Diferente do nível
+        // 2/4, não é condicional a nenhuma escolha narrativa — é sempre
+        // ativo pra quem tem o nível, então ficha.js já manda esse mapa
+        // pronto (filtrando nivel >= 5 na mesma lista de elegiveis que
+        // monta os outros dois mapas), sem checkbox de confirmação.
+        // Guardado num contador SEPARADO de `acoes` (acoesExtraCQC),
+        // porque só serve pra rolagens de CQC (ver checarConsumoDeAcao/
+        // ehCQC em ficha.js) — resetado a cada rodada em
+        // avancarTurnoCombate, igual `acoes`.
+        const temAcaoExtraCQC = !!acaoExtraCQC[id];
         participantesAtualizados[id] = {
             ...base,
             ...stats,
@@ -675,7 +702,11 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}) {
             iniciativa: rolagemBruta + stats.modAgilidade + bonusCQC,
             bonusCQCIniciativa: !!bonusCQC,
             acoesMax,
-            acoes: acoesMax,
+            acoes: dispararAvancar ? Math.max(0, acoesMax - 1) : acoesMax,
+            dispararAvancarDisponivel: dispararAvancar,
+            dispararAvancarUsado: false,
+            acoesExtraCQCMax: temAcaoExtraCQC ? 1 : 0,
+            acoesExtraCQC: temAcaoExtraCQC ? 1 : 0,
             // Ações de Esquiva/Bloqueio guardadas (manual pg. ~48): só
             // ficam disponíveis DEPOIS que o personagem já teve seu
             // próprio turno na rodada. Por isso começa em 0 pra todo
@@ -796,6 +827,15 @@ export async function avancarTurnoCombate() {
         atualizacoes[`participantes/${id}/acoes`] = virouRodada
             ? acoesMaxAtualizado
             : Math.min(Number(participantes[id].acoes) || 0, acoesMaxAtualizado);
+        // CQC nível 5: mesma lógica de reset/trava do `acoes` normal,
+        // só que baseada em acoesExtraCQCMax (0 pra quem não tem o
+        // nível — nunca escreve nada além de 0 nesse caso).
+        const acoesExtraCQCMax = Number(participantes[id].acoesExtraCQCMax) || 0;
+        if (acoesExtraCQCMax > 0) {
+            atualizacoes[`participantes/${id}/acoesExtraCQC`] = virouRodada
+                ? acoesExtraCQCMax
+                : Math.min(Number(participantes[id].acoesExtraCQC) || 0, acoesExtraCQCMax);
+        }
     }
 
     await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
@@ -816,6 +856,31 @@ export async function consumirAcaoCombate(participanteId) {
     const novo = Math.max(0, atual - 1);
     await set(caminho, novo);
     return novo;
+}
+
+// Consome 1 ação EXTRA de CQC (nível 5, "Agente Impossível" — manual:
+// "recebe uma ação extra em seu turno para rolagens de CQC"). Separada
+// de consumirAcaoCombate porque essa ação só serve pra rolagens
+// especificamente de CQC (ver checarConsumoDeAcao/ehCQC em ficha.js,
+// que só recorre a este contador quando o normal já zerou) — nunca é
+// somada ao `acoes` normal, senão viraria uma ação genérica igual
+// qualquer outra. Nunca deixa negativo.
+export async function consumirAcaoExtraCQC(participanteId) {
+    const caminho = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoesExtraCQC`));
+    const snap = await get(caminho);
+    const atual = snap.exists() ? Number(snap.val()) : 0;
+    const novo = Math.max(0, atual - 1);
+    await set(caminho, novo);
+    return novo;
+}
+
+// Marca que o "Disparar e Avançar" de CQC nível 4 (ver iniciarIniciativaCombate
+// acima, que reserva a ação) já foi usado nesta rodada — chamado por
+// resolverDispararAvancar em ficha.js depois de resolver os 2 disparos,
+// só pra sumir com o botão (a ação em si já tinha sido descontada na
+// hora de rolar a iniciativa, não aqui).
+export async function marcarDispararAvancarUsado(participanteId) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/dispararAvancarUsado`)), true);
 }
 
 // Reseta o Recuo de UMA arma específica de UM personagem/NPC específico
@@ -920,6 +985,29 @@ export async function definirDerrubado(participanteId, porPid, porNome) {
 
 export async function levantarDerrubado(participanteId) {
     await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/derrubado`)));
+}
+
+// ---------------------------------------------------------------------
+// Imobilizar (CQC nível 4, manual pg. 23: "Após derrubar pode imobilizar
+// o alvo, impedindo completamente ataques e movimentação [...] Para o
+// alvo se livrar, teste Destreza, dif igual ao valor do agente CQC no
+// teste de derrubar"). Usamos o resultado do próprio teste de Imobilizar
+// (não o de Derrubar de antes, que o manual não deixa claro se ainda
+// está disponível pra referência) como essa dificuldade de escape —
+// guardado em `dificuldadeEscape` na hora de imobilizar (ver
+// resolverImobilizar em ficha.js). Igual a Agarrar/Derrubar: fica
+// guardado no próprio participante, sem mecânica de "quebrar"
+// automática além do teste de Destreza no próprio turno da vítima (ver
+// tentarLibertarImobilizado em ficha.js). Diferente de Agarrar, o
+// bloqueio é TOTAL — resolverAtaque nega QUALQUER golpe de quem estiver
+// imobilizado, não só alcance médio/longo.
+// ---------------------------------------------------------------------
+export async function definirImobilizado(participanteId, porPid, porNome, dificuldadeEscape) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/imobilizado`)), { ativo: true, porPid, porNome, dificuldadeEscape });
+}
+
+export async function soltarImobilizado(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/imobilizado`)));
 }
 
 // ---------------------------------------------------------------------
@@ -1222,7 +1310,12 @@ export async function confirmarAcaoPendente(acao) {
         // registrado no Log na hora — só o CONSUMO da ação espera o
         // Mestre confirmar). Rejeitar a pendência simplesmente não gasta
         // a ação, sem desfazer a rolagem já registrada.
-        if (payload.participanteId) {
+        // CQC nível 5: se a rolagem usou a ação extra (payload.extraCQC,
+        // ver checarConsumoDeAcao em ficha.js), o gasto vai pro contador
+        // separado acoesExtraCQC, não pro `acoes` normal.
+        if (payload.extraCQC && payload.participanteId) {
+            await consumirAcaoExtraCQC(payload.participanteId);
+        } else if (payload.participanteId) {
             await consumirAcaoCombate(payload.participanteId);
         }
         // Se essa ação validada era um disparo de arma de fogo, a ação

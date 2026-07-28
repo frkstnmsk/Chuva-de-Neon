@@ -909,6 +909,30 @@ export const MANOBRA_ARREMESSAR_CQC = {
     efeito: "Exclusiva de CQC nível 3+, com faca/adaga equipada. Arremessa em até 3 alvos (+1 no ataque por alvo extra); dano Força [escala C]; cada acerto testa Derrubar (dificuldade +2)"
 };
 
+// ---------------------------------------------------------------------
+// "Imobilizar" (manual pg. 23, dentro da descrição de CQC nível 4
+// "Disparar e Avançar") é outra manobra EXCLUSIVA — só aparece pra quem
+// tem CQC nível 4+ (ver renderizarManobrasCombate em ficha.js), igual
+// Arremessar acima. Só faz sentido contra um alvo já Derrubado (o
+// manual: "Após derrubar pode imobilizar o alvo") — a lista de alvos é
+// filtrada pra isso na hora de abrir a modal (ver
+// abrirModalSelecionarAlvoImobilizar em ficha.js).
+// ---------------------------------------------------------------------
+export const MANOBRA_IMOBILIZAR_CQC = {
+    nome: "Imobilizar",
+    alcance: "Curto",
+    pericias: ["CQC"],
+    dificuldade: "10 + melhor perícia do alvo entre Jiu Jitsu, CQC ou Briga de Rua",
+    efeito: "Exclusiva de CQC nível 4+, só pode ser usada contra um alvo já Derrubado. Sucesso IMOBILIZA o alvo: impede completamente ataques e movimentação até ele testar Destreza (no próprio turno, dificuldade = resultado deste teste de Imobilizar) pra se libertar"
+};
+
+// Melhor perícia elegível pra RESISTIR à manobra "Imobilizar" (CQC
+// nível 4 — manual: "teste CQC resistido contra Jiu Jitsu, CQC ou Briga
+// de Rua do alvo"). Lista fechada e diferente de PERICIAS_APARAR (que
+// serve pra Desarmar/Delimitar alcance) porque o manual explicita quais
+// perícias valem aqui.
+export const PERICIAS_IMOBILIZAR_CQC = ["Jiu Jitsu", "CQC", "Briga de Rua"];
+
 export function listaManobrasCombate() {
     return MANOBRAS_COMBATE;
 }
@@ -929,12 +953,48 @@ export function listaManobrasCombate() {
 // parte de arremessar (MANOBRA_ARREMESSAR_CQC acima) só aparece pra
 // quem tem o nível — ver resolverArremessar em ficha.js.
 //
-// Pendente: Nível 2 ("Avançar em direção a oponentes armados e
-// derrubá-los tem modificador +1 em sua iniciativa e derrubar uma vez.
-// Causa dano contundente Destreza D"). O +1 de iniciativa e a variante
-// de dano de Derrubar já têm resolução própria (checkbox condicional —
-// ver participantesElegiveisCQCIniciativa em mestre.js e o checkbox da
-// modal de Derrubar em ficha.js).
+// Nível 2 ("Avançar em direção a oponentes armados e derrubá-los tem
+// modificador +1 em sua iniciativa e derrubar uma vez. Causa dano
+// contundente Destreza D"): condicional a uma escolha narrativa (nem
+// todo golpe de Derrubar de quem tem o nível é esse avanço específico),
+// então não é automático feito o resto — o +1 de iniciativa e a
+// variante de dano de Derrubar entram como checkbox condicional (ver
+// participantesElegiveisCQCIniciativa/abrirModalBonusIniciativaCQC e o
+// checkbox da modal de Derrubar em ficha.js).
+//
+// Nível 4 (Disparar e Avançar): duas partes.
+// (1) "pode efetuar dois disparos em um alvo fora de seu turno com uma
+// pistola, utilizando uma ação do seu primeiro turno" — oferecido igual
+// ao bônus de iniciativa do nível 2, no mesmo checkbox pré-rolagem de
+// iniciativa (ver abrirModalBonusIniciativaCQC). Marcar reserva 1 ação
+// do 1º turno (iniciarIniciativaCombate em mestre.js) e libera um botão
+// "Disparar e Avançar" (resolverDispararAvancar em ficha.js) que rola 2
+// disparos de Armas de Fogo de Pequeno Porte contra o alvo escolhido,
+// fora da ordem de turno normal (mesmo mecanismo de bypass da ação que
+// o contra-ataque do Aparar já usa).
+// (2) "Após derrubar pode imobilizar o alvo [...] Requer uma ação e
+// teste CQC resistido contra Jiu Jitsu, CQC ou Briga de Rua do alvo" —
+// vira a manobra exclusiva "Imobilizar" (MANOBRA_IMOBILIZAR_CQC acima),
+// só disponível contra quem já está Derrubado. Sucesso trava o alvo
+// (ver definirImobilizado em mestre.js): nenhum ataque passa enquanto
+// durar (bloqueio TOTAL, mais forte que Agarrar, que só bloqueia
+// alcance médio/longo), até um teste de Destreza no próprio turno da
+// vítima (ver tentarLibertarImobilizado em ficha.js).
+// A "movimentação livre igual à Velocidade" pra avançar em inimigos
+// distantes é só narrativa — o sistema não tem grade/posicionamento, só
+// registra a nota no Log quando os disparos são resolvidos.
+//
+// Nível 5 (Agente Impossível): "Além de todos benefícios dos níveis
+// anteriores, você recebe uma ação extra em seu turno para rolagens de
+// CQC." Diferente do resto — não é condicional a nenhuma escolha
+// narrativa, então é automático (nenhum checkbox), mas a restrição
+// ("para rolagens de CQC") IMPORTA: não é uma ação genérica a mais, só
+// serve quando a rolagem usa a perícia CQC especificamente. Por isso é
+// um contador SEPARADO (acoesExtraCQC/acoesExtraCQCMax), nunca somado
+// ao `acoes` normal — ver iniciarIniciativaCombate/avancarTurnoCombate/
+// consumirAcaoExtraCQC em mestre.js e checarConsumoDeAcao (parâmetro
+// ehCQC) em ficha.js, que é quem decide se uma rolagem específica pode
+// recorrer a esse contador quando o normal já zerou.
 // ---------------------------------------------------------------------
 export function bonusCQC1x1(nivelCQC) {
     return Number(nivelCQC) >= 1 ? 1 : 0;
