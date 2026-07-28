@@ -90,7 +90,7 @@ import {
 } from "./mestre.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
-    atualizarItemBanco, excluirItemBanco, autopreencherItemDoBanco
+    atualizarItemBanco, excluirItemBanco, autopreencherItemDoBanco, buscarItemBancoPorId
 } from "./itens-globais.js";
 import {
     ouvirReceitasGlobais, salvarReceitaNoBanco, atualizarReceitaBanco, excluirReceitaBanco
@@ -299,6 +299,12 @@ const el = {
     modalCarregadorCapacidade: document.getElementById("modal-carregador-capacidade"),
     modalCampoProjetilQuantidade: document.getElementById("modal-campo-projetil-quantidade"),
     modalProjetilQuantidade: document.getElementById("modal-projetil-quantidade"),
+    modalCampoMaterialTipo: document.getElementById("modal-campo-material-tipo"),
+    modalMaterialTipo: document.getElementById("modal-material-tipo"),
+    modalCampoMaterialQualidade: document.getElementById("modal-campo-material-qualidade"),
+    modalMaterialQualidade: document.getElementById("modal-material-qualidade"),
+    modalCampoMaterialQuantidade: document.getElementById("modal-campo-material-quantidade"),
+    modalMaterialQuantidade: document.getElementById("modal-material-quantidade"),
     modalCampoPeso: document.getElementById("modal-campo-peso"),
     modalPeso: document.getElementById("modal-peso"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
@@ -4950,6 +4956,21 @@ function tierMinimoExigidoPeloNivel(nivelItem) {
     return 0;
 }
 
+// Trava dura do manual: materialABAIXO do tier mínimo do nível não pode
+// ser usado NESSA receita, ponto (não é só "sem bônus" — é inutilizável).
+// Baixa só cria nível 1-2, Média cria 2-4, só Alta cria nível 5. Material
+// sem variação de qualidade (Material bélico, Material especial) não tem
+// esse conceito de tier — sempre qualifica. Item de material antigo sem
+// qualidade marcada (herdado de antes desse campo existir) é tratado como
+// a qualidade mais baixa (tier 0) só pra essa checagem — não ganha bônus
+// (ver indiceQualidade), mas também não fica travado sem explicação.
+function materialQualificaParaNivel(materialNome, qualidade, tierMinimo) {
+    const qualidades = qualidadesDoMaterial(materialNome);
+    if (!qualidades) return true;
+    const idx = qualidade ? qualidades.indexOf(qualidade) : 0;
+    return idx >= tierMinimo;
+}
+
 // Itens do inventário do personagem que servem como este ingrediente:
 // tag "material" e mesmo tipo (materialTipo) — ou, pra itens antigos
 // cadastrados antes desse campo existir, mesmo nome do material.
@@ -4960,13 +4981,68 @@ function materiaisDisponiveisNoInventario(materialNome) {
         .map(([id, it]) => ({ id, ...it }));
 }
 
-// Modal de "Criar": antes de rolar, escolhe (opcionalmente) qual item do
-// inventário usar pra cada ingrediente da receita. Materiais de
-// qualidade ACIMA da mínima exigida pro nível do item dão +1 na rolagem
-// cada (equivalente ao "-1 na dificuldade" do manual pra material de
-// nível maior que o necessário) — por isso a escolha importa. Itens do
-// inventário sem qualidade marcada ainda podem ser marcados aqui mesmo,
-// na hora — fica salvo pro próximo uso.
+// Agrupa os itens de material do inventário por qualidade, somando a
+// quantidade em estoque de cada tier (materialQuantidade — itens antigos
+// sem esse campo contam como 1 unidade cada, pra não quebrar fichas de
+// antes dessa mudança). Cada grupo guarda as entradas de onde descontar
+// (id + quantidade), em ordem — é o que abrirModalEscolherMateriais usa
+// pra consumir estoque de verdade ao confirmar a criação. Ordenado da
+// qualidade mais alta pra mais baixa (material sem variação de qualidade
+// vira um grupo único, "qualidade: null").
+function materiaisAgregadosPorQualidade(materialNome) {
+    const entradas = materiaisDisponiveisNoInventario(materialNome);
+    const grupos = new Map();
+    entradas.forEach(it => {
+        const qtd = Math.max(0, Number(it.materialQuantidade ?? 1) || 0);
+        if (qtd <= 0) return;
+        const chave = it.materialQualidade || "";
+        if (!grupos.has(chave)) grupos.set(chave, { qualidade: it.materialQualidade || null, disponivel: 0, entradas: [] });
+        const grupo = grupos.get(chave);
+        grupo.disponivel += qtd;
+        grupo.entradas.push({ id: it.id, quantidade: qtd });
+    });
+    const qualidades = qualidadesDoMaterial(materialNome);
+    return Array.from(grupos.values()).sort((a, b) => {
+        const ia = qualidades && a.qualidade ? qualidades.indexOf(a.qualidade) : -1;
+        const ib = qualidades && b.qualidade ? qualidades.indexOf(b.qualidade) : -1;
+        return ib - ia;
+    });
+}
+
+// Desconta `quantidadeNecessaria` unidades de material a partir dos
+// grupos (na ordem em que vierem — normalmente com o grupo escolhido
+// pelo jogador primeiro, depois os demais como "troco" se faltar).
+// Retorna as atualizações de inventário a aplicar (id -> materialQuantidade
+// restante, ou null pra apagar o item quando a quantidade zera) e quanto
+// sobrou sem descontar (0 se conseguiu cobrir tudo).
+function planejarConsumoMaterial(grupos, quantidadeNecessaria) {
+    let faltando = quantidadeNecessaria;
+    const atualizacoes = {};
+    for (const grupo of grupos) {
+        if (faltando <= 0) break;
+        for (const entrada of grupo.entradas) {
+            if (faltando <= 0) break;
+            const usar = Math.min(entrada.quantidade, faltando);
+            const restante = entrada.quantidade - usar;
+            atualizacoes[entrada.id] = restante > 0 ? restante : null;
+            faltando -= usar;
+        }
+    }
+    return { atualizacoes, faltando };
+}
+
+// Modal de "Criar": antes de rolar, escolhe (opcionalmente) qual tier de
+// qualidade usar pra cada ingrediente da receita — o desconto do
+// inventário é automático e cobre a quantidade exigida puxando de outros
+// tiers QUALIFICADOS como troco se o escolhido não tiver o suficiente
+// sozinho. O botão "🎲 Rolar" fica travado se não houver material com
+// qualidade suficiente (ver materialQualificaParaNivel — nível 1-2 só
+// aceita Baixa+, 3-4 só Média+, 5 só Alta) pra algum ingrediente, MESMO
+// que haja estoque de qualidade inferior sobrando (esse estoque não
+// serve pra essa receita e não conta). Qualidade ACIMA do mínimo exigido
+// reduz -1 na dificuldade da receita por tipo de material usado acima do
+// mínimo (regra do manual) — aplicado direto na dificuldade dentro de
+// resolverCriacaoReceita, não no modificador do teste (ver lá o motivo).
 function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
     let modal = document.getElementById("modal-escolher-materiais");
     if (!modal) {
@@ -4986,7 +5062,7 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
         </div>
         ${!ingredientes.length
             ? `<p class="hint">Essa receita não tem materiais cadastrados — pode rolar direto.</p>`
-            : `<p class="hint">Escolha, pra cada material, qual item do inventário vai usar (opcional). Qualidade acima do mínimo exigido pro nível ${nivelItem} dá +1 na rolagem por material.</p>
+            : `<p class="hint">Materiais são descontados automaticamente do inventário ao confirmar. Material abaixo da qualidade mínima do nível ${nivelItem} não pode ser usado nesta receita; qualidade ACIMA do mínimo reduz -1 na dificuldade por tipo de material usado.</p>
                <div id="materiais-escolha-lista"></div>`
         }
         <div class="modal-btns">
@@ -4996,65 +5072,72 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
     `;
 
     const lista = modal.querySelector("#materiais-escolha-lista");
+    const btnConfirmar = modal.querySelector("#btn-confirmar-materiais");
+
+    // Reavalia se dá pra rolar: precisa ter, pra CADA ingrediente, estoque
+    // de qualidade QUALIFICADA (>= mínimo do nível) suficiente pra cobrir
+    // a quantidade exigida — estoque de qualidade inferior não conta.
+    function atualizarEstadoBotao() {
+        if (!lista) { btnConfirmar.disabled = false; btnConfirmar.title = ""; return; }
+        const linhas = [...lista.querySelectorAll(".material-escolha-linha")];
+        const faltando = linhas.filter(linha => linha.dataset.suficiente === "0");
+        btnConfirmar.disabled = faltando.length > 0;
+        btnConfirmar.title = faltando.length
+            ? `Falta material: ${faltando.map(l => l.dataset.material).join(", ")}`
+            : "";
+    }
+
     ingredientes.forEach((ing, idx) => {
         const qualidades = qualidadesDoMaterial(ing.material);
-        const disponiveis = materiaisDisponiveisNoInventario(ing.material);
+        const grupos = materiaisAgregadosPorQualidade(ing.material);
+        const gruposQualificados = grupos.filter(g => materialQualificaParaNivel(ing.material, g.qualidade, tierMinimo));
+        const gruposInsuficientes = grupos.filter(g => !gruposQualificados.includes(g));
+        const totalQualificado = gruposQualificados.reduce((acc, g) => acc + g.disponivel, 0);
+        const totalInsuficiente = gruposInsuficientes.reduce((acc, g) => acc + g.disponivel, 0);
+        const suficiente = totalQualificado >= ing.quantidade;
+
         const linha = document.createElement("div");
         linha.className = "receita-ingrediente-linha material-escolha-linha";
         linha.dataset.idx = idx;
         linha.dataset.material = ing.material;
+        linha.dataset.suficiente = suficiente ? "1" : "0";
+
+        const avisoQualidadeBaixa = totalInsuficiente > 0
+            ? `<span class="entity-sub" style="color:var(--neon-red);">+ ${totalInsuficiente}x de qualidade abaixo do mínimo — não servem pra nível ${nivelItem}</span>`
+            : "";
+        const statusEstoque = suficiente
+            ? `<span class="entity-sub">Em estoque (qualidade suficiente): ${totalQualificado}x</span>`
+            : `<span class="entity-sub" style="color:var(--neon-red);">Faltam materiais — em estoque com qualidade suficiente: ${totalQualificado}x, precisa de ${ing.quantidade}x</span>`;
 
         const cabecalho = document.createElement("div");
         cabecalho.className = "entity-main";
         cabecalho.innerHTML = `
             <span class="entity-nome">${ing.quantidade}x ${escapeHtml(ing.material)}</span>
             ${qualidades ? `<span class="entity-sub">Mínimo pro nível ${nivelItem}: ${qualidades[tierMinimo]}</span>` : ""}
+            ${statusEstoque}
+            ${avisoQualidadeBaixa}
         `;
         linha.appendChild(cabecalho);
 
-        if (!disponiveis.length) {
-            const aviso = document.createElement("span");
-            aviso.className = "hint-inline";
-            aviso.innerText = "Nenhum item desse tipo no inventário ainda.";
-            linha.appendChild(aviso);
-        } else {
-            const selectItem = document.createElement("select");
-            selectItem.className = "material-escolha-item";
-            const optNenhum = document.createElement("option");
-            optNenhum.value = "";
-            optNenhum.innerText = "— não usar um item específico —";
-            selectItem.appendChild(optNenhum);
-            disponiveis.forEach(it => {
-                const opt = document.createElement("option");
-                opt.value = it.id;
-                opt.innerText = `${it.nome}${it.materialQualidade ? ` (${it.materialQualidade})` : " — qualidade não marcada"}`;
-                selectItem.appendChild(opt);
-            });
-            linha.appendChild(selectItem);
-
-            // Se o item escolhido ainda não tem qualidade marcada (comum em
-            // itens antigos), deixa marcar aqui mesmo na hora — fica salvo
-            // no inventário pra da próxima vez não precisar de novo.
+        // Só mostra o select de tier se houver mais de um tier QUALIFICADO
+        // com estoque (material abaixo do mínimo nem aparece aqui — não
+        // dá pra escolher usar algo que a receita não aceita).
+        if (gruposQualificados.length > 1) {
             const selectQualidade = document.createElement("select");
-            selectQualidade.className = "material-escolha-qualidade";
-            selectQualidade.style.display = "none";
-            if (qualidades) {
-                qualidades.forEach(q => {
-                    const opt = document.createElement("option");
-                    opt.value = q;
-                    opt.innerText = `Marcar qualidade: ${q}`;
-                    selectQualidade.appendChild(opt);
-                });
-            }
-            linha.appendChild(selectQualidade);
-
-            selectItem.addEventListener("change", () => {
-                const escolhido = disponiveis.find(it => it.id === selectItem.value);
-                selectQualidade.style.display = (escolhido && !escolhido.materialQualidade && qualidades) ? "" : "none";
+            selectQualidade.className = "material-escolha-tier";
+            gruposQualificados.forEach(g => {
+                const opt = document.createElement("option");
+                opt.value = g.qualidade || "";
+                opt.innerText = `${g.qualidade || "Sem qualidade marcada"} — ${g.disponivel}x disponível`;
+                selectQualidade.appendChild(opt);
             });
+            linha.appendChild(selectQualidade);
         }
+
         lista.appendChild(linha);
     });
+
+    atualizarEstadoBotao();
 
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-ir-inventario").addEventListener("click", () => {
@@ -5062,47 +5145,236 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
         document.querySelector('.tab-btn[data-tab="inventario"]')?.click();
     });
 
-    modal.querySelector("#btn-confirmar-materiais").addEventListener("click", async () => {
+    btnConfirmar.addEventListener("click", async () => {
+        if (btnConfirmar.disabled) return;
+        // Não desconta nada do inventário ainda — só decide QUAL estoque
+        // (tier + entradas) cobriria cada ingrediente. O desconto de
+        // verdade só acontece depois de rolar, em resolverCriacaoReceita,
+        // porque a QUANTIDADE gasta de cada material depende do desfecho
+        // do teste (sucesso gasta tudo, falha só uma fração, falha
+        // crítica gasta tudo — ver regras do manual em resolverCriacaoReceita).
         let bonusQualidade = 0;
-        const usados = [];
-        const atualizacoesInventario = {};
+        const escolhas = [];
 
-        lista.querySelectorAll(".material-escolha-linha").forEach(linha => {
-            const selectItem = linha.querySelector(".material-escolha-item");
-            if (!selectItem || !selectItem.value) return;
-            const itemId = selectItem.value;
+        if (lista) lista.querySelectorAll(".material-escolha-linha").forEach(linha => {
             const material = linha.dataset.material;
-            const itemInventario = fichaAtual.inventario?.[itemId];
-            if (!itemInventario) return;
+            const ing = ingredientes.find(i => i.material === material);
+            if (!ing) return;
+            const grupos = materiaisAgregadosPorQualidade(material)
+                .filter(g => materialQualificaParaNivel(material, g.qualidade, tierMinimo));
+            if (!grupos.length) return;
 
-            const selectQualidade = linha.querySelector(".material-escolha-qualidade");
-            const qualidadeEscolhida = itemInventario.materialQualidade
-                || (selectQualidade && selectQualidade.style.display !== "none" ? selectQualidade.value : null);
+            const selectTier = linha.querySelector(".material-escolha-tier");
+            const qualidadeEscolhida = selectTier ? (selectTier.value || null) : (grupos[0].qualidade || null);
 
-            // Normaliza o item do inventário com tipo/qualidade, se ainda
-            // não tinha (fica salvo pra próxima criação já vir pronto).
-            if (!itemInventario.materialTipo || (!itemInventario.materialQualidade && qualidadeEscolhida)) {
-                atualizacoesInventario[itemId] = { ...itemInventario, materialTipo: material, materialQualidade: qualidadeEscolhida || itemInventario.materialQualidade || null };
-            }
+            // Puxa primeiro do tier escolhido; se não tiver o suficiente
+            // sozinho, completa com os demais tiers QUALIFICADOS como
+            // troco (nunca com material abaixo do mínimo — esse já foi
+            // filtrado acima e não entra nem como troco).
+            const grupoEscolhido = grupos.find(g => (g.qualidade || null) === qualidadeEscolhida);
+            const gruposOrdenados = grupoEscolhido
+                ? [grupoEscolhido, ...grupos.filter(g => g !== grupoEscolhido)]
+                : grupos;
 
             const idx = indiceQualidade(material, qualidadeEscolhida);
             if (idx > tierMinimo) bonusQualidade += 1;
-            usados.push({ material, qualidade: qualidadeEscolhida });
+            escolhas.push({ material, qualidade: qualidadeEscolhida, quantidade: ing.quantidade, gruposOrdenados });
         });
 
-        if (Object.keys(atualizacoesInventario).length) {
-            fichaAtual.inventario = { ...fichaAtual.inventario, ...atualizacoesInventario };
-            await update(ref(db, `${caminhoBase()}/inventario`), fichaAtual.inventario);
-        }
-
-        const modificadorFinal = modificadorBase + bonusQualidade;
-        const listaTexto = usados.length
-            ? ` — materiais: ${usados.map(u => `${u.material}${u.qualidade ? ` (${u.qualidade})` : ""}`).join(", ")}${bonusQualidade ? ` [+${bonusQualidade} por qualidade]` : ""}`
-            : "";
-        const rotulo = `Criar: ${receita.nome || "item"}${(receita.dificuldade || receita.dificuldade === 0) ? ` (dif. ${receita.dificuldade})` : ""}${listaTexto}`;
+        // O bônus de qualidade NÃO entra no modificador do teste — ele
+        // reduz a DIFICULDADE diretamente (ver resolverCriacaoReceita),
+        // exatamente como o manual descreve ("-1 na dificuldade por tipo
+        // de material de nível maior usado"). Isso importa porque o
+        // modificador do teste de perícia tem um teto (+10) que essa
+        // redução não deve competir com nem ficar sujeita.
         modal.remove();
-        await rolarERegistrar(rotulo, modificadorFinal);
+        await resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorBase);
     });
+}
+
+// Rola o teste de criação da receita e resolve sucesso/falha comparando
+// o resultado (d20 + modificador) com a dificuldade cadastrada na
+// receita, aplicando as regras do manual:
+//   - Sucesso (resultado >= dificuldade): gasta todo o material
+//     escolhido e gera o item — direto no inventário, se a receita
+//     estiver vinculada a um item do Banco Global (itemGlobalId); senão
+//     cria um item básico com o nome da receita.
+//   - Falha (resultado < dificuldade, sem ser falha crítica): a cada 3
+//     pontos abaixo da dificuldade, perde 1/3 dos materiais escolhidos
+//     (arredondando pra cima, então uma falha registra pelo menos 1
+//     unidade perdida por ingrediente assim que cruzar o primeiro
+//     limiar de 3 pontos) — até no máximo perder tudo (3/3). O que não
+//     é perdido continua no inventário, intacto.
+//   - Falha Crítica (d20 natural 1, ou resultado final <= 1): perde
+//     todo o material escolhido, sem gerar item.
+//   - Receita sem dificuldade cadastrada: não dá pra resolver
+//     sucesso/falha automaticamente — só registra a rolagem normal e
+//     gasta o material integralmente (comportamento antigo), deixando
+//     a resolução a critério do Mestre.
+async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorFinal) {
+    const consumo = checarConsumoDeAcao(false, false);
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const bruto = rolarD20();
+    const resultado = bruto + Number(modificadorFinal || 0);
+    // Acerto/Falha Crítica olham só pro d20 puro + modificador de
+    // perícia — a redução de dificuldade por qualidade NÃO participa
+    // disso (ela mexe na dificuldade, não no resultado do teste).
+    const criticoPositivo = resultado === 20;
+    const criticoNegativo = bruto === 1 || resultado <= 1;
+    const temDificuldade = receita.dificuldade || receita.dificuldade === 0;
+    const dificuldadeBase = temDificuldade ? Number(receita.dificuldade) : null;
+    // "-1 na dificuldade por tipo de material de nível maior usado" —
+    // aplicado aqui em vez de somar no teste, pra não competir com o
+    // teto de +10 do modificador de perícia. Não deixa a dificuldade
+    // ajustada ficar negativa (sem efeito prático usar mais bônus do
+    // que a própria dificuldade já cadastrada).
+    const dificuldade = dificuldadeBase !== null ? Math.max(0, dificuldadeBase - bonusQualidade) : null;
+
+    // fracaoPerdida: proporção do material escolhido que é de fato
+    // descontada do inventário (0 a 1). Sem dificuldade cadastrada,
+    // mantém o comportamento antigo (gasta tudo, sem julgar desfecho).
+    let desfecho = "sem-dificuldade";
+    let fracaoPerdida = 1;
+    if (dificuldade !== null) {
+        if (criticoNegativo) {
+            desfecho = "falha-critica";
+            fracaoPerdida = 1;
+        } else if (resultado >= dificuldade) {
+            desfecho = "sucesso";
+            fracaoPerdida = 1;
+        } else {
+            desfecho = "falha";
+            const deficit = dificuldade - resultado;
+            const tercosPerdidos = Math.min(3, Math.floor(deficit / 3));
+            fracaoPerdida = tercosPerdidos / 3;
+        }
+    }
+
+    // Aplica o desconto de material proporcional ao desfecho — só agora
+    // que já sabemos quanto de fato se perde de cada ingrediente.
+    const usadosTexto = [];
+    const atualizacoesInventario = {};
+    escolhas.forEach(({ material, qualidade, quantidade, gruposOrdenados }) => {
+        // Arredonda pra perto (não pra cima): "1/3 de 4" é ~1,33, então
+        // perde 1, não 2 — mas garante ao menos 1 unidade perdida
+        // sempre que fracaoPerdida > 0, pra uma falha nunca sair de
+        // graça mesmo com ingrediente de quantidade baixa.
+        const quantidadeGasta = fracaoPerdida <= 0
+            ? 0
+            : Math.min(quantidade, Math.max(1, Math.round(quantidade * fracaoPerdida)));
+        if (fracaoPerdida > 0 && fracaoPerdida < 1) {
+            usadosTexto.push(`${quantidadeGasta}/${quantidade}x ${material}${qualidade ? ` (${qualidade})` : ""}`);
+        } else {
+            usadosTexto.push(`${quantidade}x ${material}${qualidade ? ` (${qualidade})` : ""}`);
+        }
+        if (quantidadeGasta <= 0) return;
+        const { atualizacoes } = planejarConsumoMaterial(gruposOrdenados, quantidadeGasta);
+        Object.entries(atualizacoes).forEach(([id, valor]) => {
+            atualizacoesInventario[id] = valor === null ? null : { ...fichaAtual.inventario[id], materialQuantidade: valor };
+        });
+    });
+
+    if (Object.keys(atualizacoesInventario).length) {
+        const payload = {};
+        Object.entries(atualizacoesInventario).forEach(([id, valor]) => {
+            fichaAtual.inventario[id] = valor;
+            if (valor === null) delete fichaAtual.inventario[id];
+            payload[id] = valor;
+        });
+        await update(ref(db, `${caminhoBase()}/inventario`), payload);
+    }
+
+    // Sucesso: gera o item de verdade no inventário — reaproveita o
+    // molde do Banco Global se a receita estiver vinculada
+    // (itemGlobalId); senão cria um item básico só com nome/descrição.
+    let itemCriadoNome = null;
+    if (desfecho === "sucesso") {
+        if (!fichaAtual.inventario) fichaAtual.inventario = {};
+        let registroItem = null;
+        if (receita.itemGlobalId) {
+            try {
+                const itemBanco = await buscarItemBancoPorId(receita.itemGlobalId);
+                if (itemBanco) registroItem = autopreencherItemDoBanco(itemBanco, "levando");
+            } catch (e) {
+                // Se o Banco falhar por qualquer motivo, cai pro item
+                // básico abaixo em vez de travar a criação.
+            }
+        }
+        if (!registroItem) {
+            registroItem = {
+                nome: receita.nome || "Item criado",
+                descricao: receita.descricao || `Criado via receita${receita.dificuldade || receita.dificuldade === 0 ? ` (dif. ${receita.dificuldade})` : ""}.`,
+                modificadores: [],
+                ativo: true,
+                tag: null,
+                nivelTag: null,
+                peso: 0,
+                categoria: "levando",
+                periciaUso: null,
+                classeProtecao: null,
+                calibre: null,
+                reducoesDano: [],
+                localProtegido: null,
+                arma: null,
+                carregador: null,
+                projetil: null,
+                materialTipo: null,
+                materialQualidade: null,
+                materialQuantidade: null
+            };
+        }
+        const idNovoItem = gerarIdLocal();
+        fichaAtual.inventario[idNovoItem] = registroItem;
+        await update(ref(db, `${caminhoBase()}/inventario/${idNovoItem}`), registroItem);
+        itemCriadoNome = registroItem.nome;
+    }
+
+    const notaCritico = criticoNegativo
+        ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre."
+        : (criticoPositivo ? " ⚡ ACERTO CRÍTICO!" : "");
+
+    const notaDesfecho = desfecho === "sucesso"
+        ? ` ✅ Sucesso — "${itemCriadoNome}" criado e adicionado ao inventário.`
+        : desfecho === "falha-critica"
+            ? " 🔥 Falha Crítica — todo o material foi perdido."
+            : desfecho === "falha"
+                ? (fracaoPerdida > 0 ? ` ❌ Falha — perdeu ${Math.round(fracaoPerdida * 100)}% dos materiais usados.` : " ❌ Falha — nenhum material perdido.")
+                : " (receita sem dificuldade cadastrada — resolução manual pelo Mestre.)";
+
+    const listaTexto = usadosTexto.length ? ` — materiais: ${usadosTexto.join(", ")}` : "";
+    const notaDificuldade = dificuldade !== null
+        ? (bonusQualidade
+            ? ` (dif. ${dificuldadeBase} -${bonusQualidade} por qualidade = ${dificuldade})`
+            : ` (dif. ${dificuldade})`)
+        : "";
+    const rotulo = `Criar: ${receita.nome || "item"}${notaDificuldade}`;
+    const quem = isMestre ? `Mestre (${modoNpc ? (fichaAtual?.config?.nomeExibicao || npcAtualId) : (nomeDeFicha(fichaAtualId) || "—")})` : (fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador");
+
+    await registrarRolagem({
+        quem, modificador: modificadorFinal, resultado,
+        detalhe: `${rotulo}: d20 (${bruto}) ${modificadorFinal >= 0 ? "+" : ""}${modificadorFinal}${notaCritico}${notaDesfecho}${listaTexto}`,
+        critico: criticoNegativo ? "falha" : (criticoPositivo ? "acerto" : null)
+    });
+
+    const tipoToast = desfecho === "sucesso" ? "critico-acerto" : (desfecho === "falha-critica" || criticoNegativo ? "critico-falha" : "ok");
+    toast(`${rotulo}: ${resultado} (d20: ${bruto} ${modificadorFinal >= 0 ? "+" : ""}${modificadorFinal})${notaDesfecho}`, tipoToast);
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: quem,
+                detalhe: `${quem} rolou "${rotulo}" (resultado ${resultado}) e quer gastar 1 ação do turno.`,
+                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
 }
 
 function renderizarReceitas() {
@@ -5803,6 +6075,9 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoLocalProtegido.style.display = "none";
     el.modalCampoPeso.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
+    el.modalCampoMaterialTipo.style.display = "none";
+    el.modalCampoMaterialQualidade.style.display = "none";
+    el.modalCampoMaterialQuantidade.style.display = "none";
     el.modalConfigArma.style.display = "none";
     el.modalConfigReducaoDano.style.display = "none";
     el.modalNome.parentElement.style.display = "flex";
@@ -5990,13 +6265,13 @@ function prepararModalItem(existente, ehBanco) {
         el.modalTag.value = existente.tag || "";
         el.modalPeso.value = existente.peso ?? 0;
         if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade });
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
         if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null);
     }
 
     // Autocompletar pelo Banco Global — só ao CRIAR um item novo dentro
@@ -6031,7 +6306,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalPeso.value = it.peso ?? 0;
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade });
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
             });
@@ -6213,7 +6488,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual) {
     const temNivel = tagTemNivel(tagKey);
     el.modalCampoNivelTag.style.display = temNivel ? "flex" : "none";
     if (temNivel) el.modalNivelTag.value = nivelTag || 1;
@@ -6230,6 +6505,29 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     const exigeQuantidadeProjetil = tagExigeQuantidadeProjetil(tagKey);
     el.modalCampoProjetilQuantidade.style.display = exigeQuantidadeProjetil ? "flex" : "none";
     if (exigeQuantidadeProjetil) el.modalProjetilQuantidade.value = (projetilConfigAtual && projetilConfigAtual.quantidade) ?? 1;
+
+    // Material de criação — tipo (obrigatório, lista fechada do manual),
+    // qualidade (se aquele tipo tiver variação) e quantidade em estoque
+    // (unidades). É isso que abrirModalEscolherMateriais usa pra saber
+    // exatamente quanto tem de cada material na hora de criar um item.
+    const ehMaterial = tagKey === "material";
+    el.modalCampoMaterialTipo.style.display = ehMaterial ? "flex" : "none";
+    el.modalCampoMaterialQuantidade.style.display = ehMaterial ? "flex" : "none";
+    if (ehMaterial) {
+        el.modalMaterialTipo.innerHTML = "";
+        MATERIAIS_CRIACAO.forEach(m => {
+            const opt = document.createElement("option");
+            opt.value = m.nome;
+            opt.innerText = m.nome;
+            el.modalMaterialTipo.appendChild(opt);
+        });
+        const tipoAtual = (materialConfigAtual && materialConfigAtual.tipo && MATERIAIS_CRIACAO.some(m => m.nome === materialConfigAtual.tipo))
+            ? materialConfigAtual.tipo
+            : MATERIAIS_CRIACAO[0].nome;
+        el.modalMaterialTipo.value = tipoAtual;
+        atualizarCampoQualidadeMaterial(tipoAtual, materialConfigAtual && materialConfigAtual.qualidade);
+        el.modalMaterialQuantidade.value = (materialConfigAtual && materialConfigAtual.quantidade) ?? 1;
+    }
 
     // Perícia vinculada — obrigatória em armas, eletrônicos, ferramentas
     // de criação (geral e química) e destraves (é ela que o botão "Usar"
@@ -6290,7 +6588,28 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null);
+});
+
+// Repopula o select de Qualidade conforme o Tipo de material escolhido
+// (alguns materiais não têm variação de qualidade — ver MATERIAIS_CRIACAO
+// em dados-manual.js — nesse caso o campo some).
+function atualizarCampoQualidadeMaterial(tipoMaterial, qualidadeAtual) {
+    const qualidades = qualidadesDoMaterial(tipoMaterial);
+    el.modalCampoMaterialQualidade.style.display = qualidades ? "flex" : "none";
+    if (!qualidades) { el.modalMaterialQualidade.innerHTML = ""; return; }
+    el.modalMaterialQualidade.innerHTML = "";
+    qualidades.forEach(q => {
+        const opt = document.createElement("option");
+        opt.value = q;
+        opt.innerText = q;
+        el.modalMaterialQualidade.appendChild(opt);
+    });
+    el.modalMaterialQualidade.value = qualidades.includes(qualidadeAtual) ? qualidadeAtual : qualidades[0];
+}
+
+document.getElementById("modal-material-tipo")?.addEventListener("change", (e) => {
+    atualizarCampoQualidadeMaterial(e.target.value, null);
 });
 
 // Trocar a perícia vinculada de uma arma (ex: de "CQC" pra "Armas de
@@ -6606,12 +6925,14 @@ async function salvarItemDoModal(id) {
         arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null,
         carregador,
         projetil,
-        // Preserva a marcação de tipo/qualidade de material (ver
-        // abrirModalEscolherMateriais) — esse modal genérico não tem
-        // campo pra isso, então sem preservar aqui, editar peso/descrição
-        // de um material já marcado apagaria a marcação sem querer.
-        materialTipo: existenteItem.materialTipo ?? null,
-        materialQualidade: existenteItem.materialQualidade ?? null
+        // Material de criação: tipo/qualidade/quantidade em estoque —
+        // ver atualizarCamposPorTag. Itens antigos que só tinham a
+        // marcação implícita (feita de leve em abrirModalEscolherMateriais,
+        // antes desse campo existir no modal) continuam preservados aqui
+        // se o item não for tag "material" nesta edição.
+        materialTipo: tag === "material" ? el.modalMaterialTipo.value : (existenteItem.materialTipo ?? null),
+        materialQualidade: tag === "material" ? (qualidadesDoMaterial(el.modalMaterialTipo.value) ? el.modalMaterialQualidade.value : null) : (existenteItem.materialQualidade ?? null),
+        materialQuantidade: tag === "material" ? Math.max(0, Number(el.modalMaterialQuantidade.value) || 0) : (existenteItem.materialQuantidade ?? null)
     };
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual.inventario) fichaAtual.inventario = {};
@@ -6703,7 +7024,14 @@ async function salvarItemBancoDoModal(id) {
         localProtegido,
         arma: armaConfig,
         carregador,
-        projetil
+        projetil,
+        // Molde do Banco Global de material: guarda tipo/qualidade como
+        // referência, mas a quantidade em estoque é zerada — ela é
+        // específica de cada ficha, não faz sentido "herdar estoque"
+        // de um molde compartilhado entre todas as mesas.
+        materialTipo: tag === "material" ? el.modalMaterialTipo.value : null,
+        materialQualidade: tag === "material" ? (qualidadesDoMaterial(el.modalMaterialTipo.value) ? el.modalMaterialQualidade.value : null) : null,
+        materialQuantidade: null
     };
 
     try {
