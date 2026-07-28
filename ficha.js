@@ -36,7 +36,7 @@ import {
     MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC,
     danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
     danoQuebrarOssosJiuJitsu,
-    PERICIAS_CRIACAO_ITEM,
+    PERICIAS_CRIACAO_ITEM, MATERIAIS_CRIACAO, qualidadesDoMaterial,
     ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
@@ -4920,15 +4920,202 @@ async function salvarTreinamento() {
 // Banco Global de Itens. O botão "+ Criar receita" no fim da aba
 // funciona tanto pro jogador quanto pro Mestre (ver abrirModalCriarReceita).
 // ---------------------------------------------------------------------
+// Formata a lista estruturada de ingredientes (r.ingredientes, cada um
+// { material, quantidade }) num texto tipo "2x Metal leve, 1x Propelente".
+// Fichas antigas podem ter só o campo legado `materiais` (texto livre,
+// de antes dessa lista existir) — nesse caso mostra o texto legado.
+function formatarIngredientes(r) {
+    if (Array.isArray(r?.ingredientes) && r.ingredientes.length) {
+        return r.ingredientes.map(ing => `${ing.quantidade}x ${ing.material}${ing.qualidade ? ` (${ing.qualidade})` : ""}`).join(", ");
+    }
+    if (r?.materiais) return r.materiais;
+    return null;
+}
+
+// Índice do tier de qualidade escolhido dentro da lista de qualidades
+// daquele material (0 = a mais baixa). -1 se o material não tem
+// variação de qualidade, ou se a qualidade não foi informada.
+function indiceQualidade(materialNome, qualidade) {
+    const qualidades = qualidadesDoMaterial(materialNome);
+    if (!qualidades || !qualidade) return -1;
+    return qualidades.indexOf(qualidade);
+}
+
+// Nível do item → tier mínimo de qualidade de material exigido pelo
+// manual: nível 1-2 pede a qualidade mais baixa, 3-4 pede a do meio, 5
+// só com a mais alta (ver seção "Criar e modificar itens").
+function tierMinimoExigidoPeloNivel(nivelItem) {
+    if (nivelItem >= 5) return 2;
+    if (nivelItem >= 3) return 1;
+    return 0;
+}
+
+// Itens do inventário do personagem que servem como este ingrediente:
+// tag "material" e mesmo tipo (materialTipo) — ou, pra itens antigos
+// cadastrados antes desse campo existir, mesmo nome do material.
+function materiaisDisponiveisNoInventario(materialNome) {
+    const alvo = materialNome.trim().toLowerCase();
+    return Object.entries(fichaAtual.inventario || {})
+        .filter(([, it]) => it.tag === "material" && (it.materialTipo === materialNome || (!it.materialTipo && (it.nome || "").trim().toLowerCase() === alvo)))
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+// Modal de "Criar": antes de rolar, escolhe (opcionalmente) qual item do
+// inventário usar pra cada ingrediente da receita. Materiais de
+// qualidade ACIMA da mínima exigida pro nível do item dão +1 na rolagem
+// cada (equivalente ao "-1 na dificuldade" do manual pra material de
+// nível maior que o necessário) — por isso a escolha importa. Itens do
+// inventário sem qualidade marcada ainda podem ser marcados aqui mesmo,
+// na hora — fica salvo pro próximo uso.
+function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
+    let modal = document.getElementById("modal-escolher-materiais");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-escolher-materiais";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const ingredientes = Array.isArray(receita.ingredientes) ? receita.ingredientes : [];
+    const nivelItem = Number(receita.nivel) || 1;
+    const tierMinimo = tierMinimoExigidoPeloNivel(nivelItem);
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Criar — ${escapeHtml(receita.nome || "item")}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        ${!ingredientes.length
+            ? `<p class="hint">Essa receita não tem materiais cadastrados — pode rolar direto.</p>`
+            : `<p class="hint">Escolha, pra cada material, qual item do inventário vai usar (opcional). Qualidade acima do mínimo exigido pro nível ${nivelItem} dá +1 na rolagem por material.</p>
+               <div id="materiais-escolha-lista"></div>`
+        }
+        <div class="modal-btns">
+            <button type="button" class="btn-ghost" id="btn-ir-inventario">Ir pro Inventário</button>
+            <button type="button" class="btn-lime" id="btn-confirmar-materiais">🎲 Rolar</button>
+        </div>
+    `;
+
+    const lista = modal.querySelector("#materiais-escolha-lista");
+    ingredientes.forEach((ing, idx) => {
+        const qualidades = qualidadesDoMaterial(ing.material);
+        const disponiveis = materiaisDisponiveisNoInventario(ing.material);
+        const linha = document.createElement("div");
+        linha.className = "receita-ingrediente-linha material-escolha-linha";
+        linha.dataset.idx = idx;
+        linha.dataset.material = ing.material;
+
+        const cabecalho = document.createElement("div");
+        cabecalho.className = "entity-main";
+        cabecalho.innerHTML = `
+            <span class="entity-nome">${ing.quantidade}x ${escapeHtml(ing.material)}</span>
+            ${qualidades ? `<span class="entity-sub">Mínimo pro nível ${nivelItem}: ${qualidades[tierMinimo]}</span>` : ""}
+        `;
+        linha.appendChild(cabecalho);
+
+        if (!disponiveis.length) {
+            const aviso = document.createElement("span");
+            aviso.className = "hint-inline";
+            aviso.innerText = "Nenhum item desse tipo no inventário ainda.";
+            linha.appendChild(aviso);
+        } else {
+            const selectItem = document.createElement("select");
+            selectItem.className = "material-escolha-item";
+            const optNenhum = document.createElement("option");
+            optNenhum.value = "";
+            optNenhum.innerText = "— não usar um item específico —";
+            selectItem.appendChild(optNenhum);
+            disponiveis.forEach(it => {
+                const opt = document.createElement("option");
+                opt.value = it.id;
+                opt.innerText = `${it.nome}${it.materialQualidade ? ` (${it.materialQualidade})` : " — qualidade não marcada"}`;
+                selectItem.appendChild(opt);
+            });
+            linha.appendChild(selectItem);
+
+            // Se o item escolhido ainda não tem qualidade marcada (comum em
+            // itens antigos), deixa marcar aqui mesmo na hora — fica salvo
+            // no inventário pra da próxima vez não precisar de novo.
+            const selectQualidade = document.createElement("select");
+            selectQualidade.className = "material-escolha-qualidade";
+            selectQualidade.style.display = "none";
+            if (qualidades) {
+                qualidades.forEach(q => {
+                    const opt = document.createElement("option");
+                    opt.value = q;
+                    opt.innerText = `Marcar qualidade: ${q}`;
+                    selectQualidade.appendChild(opt);
+                });
+            }
+            linha.appendChild(selectQualidade);
+
+            selectItem.addEventListener("change", () => {
+                const escolhido = disponiveis.find(it => it.id === selectItem.value);
+                selectQualidade.style.display = (escolhido && !escolhido.materialQualidade && qualidades) ? "" : "none";
+            });
+        }
+        lista.appendChild(linha);
+    });
+
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-ir-inventario").addEventListener("click", () => {
+        modal.remove();
+        document.querySelector('.tab-btn[data-tab="inventario"]')?.click();
+    });
+
+    modal.querySelector("#btn-confirmar-materiais").addEventListener("click", async () => {
+        let bonusQualidade = 0;
+        const usados = [];
+        const atualizacoesInventario = {};
+
+        lista.querySelectorAll(".material-escolha-linha").forEach(linha => {
+            const selectItem = linha.querySelector(".material-escolha-item");
+            if (!selectItem || !selectItem.value) return;
+            const itemId = selectItem.value;
+            const material = linha.dataset.material;
+            const itemInventario = fichaAtual.inventario?.[itemId];
+            if (!itemInventario) return;
+
+            const selectQualidade = linha.querySelector(".material-escolha-qualidade");
+            const qualidadeEscolhida = itemInventario.materialQualidade
+                || (selectQualidade && selectQualidade.style.display !== "none" ? selectQualidade.value : null);
+
+            // Normaliza o item do inventário com tipo/qualidade, se ainda
+            // não tinha (fica salvo pra próxima criação já vir pronto).
+            if (!itemInventario.materialTipo || (!itemInventario.materialQualidade && qualidadeEscolhida)) {
+                atualizacoesInventario[itemId] = { ...itemInventario, materialTipo: material, materialQualidade: qualidadeEscolhida || itemInventario.materialQualidade || null };
+            }
+
+            const idx = indiceQualidade(material, qualidadeEscolhida);
+            if (idx > tierMinimo) bonusQualidade += 1;
+            usados.push({ material, qualidade: qualidadeEscolhida });
+        });
+
+        if (Object.keys(atualizacoesInventario).length) {
+            fichaAtual.inventario = { ...fichaAtual.inventario, ...atualizacoesInventario };
+            await update(ref(db, `${caminhoBase()}/inventario`), fichaAtual.inventario);
+        }
+
+        const modificadorFinal = modificadorBase + bonusQualidade;
+        const listaTexto = usados.length
+            ? ` — materiais: ${usados.map(u => `${u.material}${u.qualidade ? ` (${u.qualidade})` : ""}`).join(", ")}${bonusQualidade ? ` [+${bonusQualidade} por qualidade]` : ""}`
+            : "";
+        const rotulo = `Criar: ${receita.nome || "item"}${(receita.dificuldade || receita.dificuldade === 0) ? ` (dif. ${receita.dificuldade})` : ""}${listaTexto}`;
+        modal.remove();
+        await rolarERegistrar(rotulo, modificadorFinal);
+    });
+}
+
 function renderizarReceitas() {
     if (!el.receitasLista) return;
     const entradasCriacao = Object.values(fichaAtual.pericias || {})
         .filter(p => PERICIAS_CRIACAO_ITEM.includes(p.nome));
+    const modificadoresPlanos = coletarModificadores(fichaAtual);
 
     const corpoHtml = !entradasCriacao.length
         ? `<p class="entity-list-empty" style="cursor:default;">Nenhuma perícia de criação de item (Mecânica Automotiva, Armeiro, Ofícios Utilitários, Explosivos, Eletrônica ou Química) cadastrada nesta ficha ainda.</p>`
         : entradasCriacao.map(p => {
             const nivelPericia = Number(p.nivel) || 0;
+            const calcPericia = calcularTotalPericia(p, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(p.nome));
 
             // Um "slot" por nível de 1 até o nível atual da perícia — cada
             // um comporta exatamente 1 receita gratuita (origem "livre").
@@ -4940,7 +5127,7 @@ function renderizarReceitas() {
                     const detalhes = r ? [
                         (r.dificuldade || r.dificuldade === 0) ? `Dificuldade ${r.dificuldade}` : null,
                         r.tempoCriacao ? `Tempo: ${escapeHtml(r.tempoCriacao)}` : null,
-                        r.materiais ? `Materiais: ${escapeHtml(r.materiais)}` : null,
+                        formatarIngredientes(r) ? `Materiais: ${escapeHtml(formatarIngredientes(r))}` : null,
                         (r.custo || r.custo === 0) ? `Custo: CN$ ${r.custo}` : null
                     ].filter(Boolean).join(" · ") : null;
                     slotsHtml.push(`
@@ -4949,6 +5136,9 @@ function renderizarReceitas() {
                                 <span class="entity-nome">Nível ${nivel} · ${escapeHtml(r ? (r.nome || "(receita sem nome)") : "(receita removida do Banco Global)")}</span>
                                 ${detalhes ? `<span class="entity-sub">${detalhes}</span>` : ""}
                                 ${r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : ""}
+                            </div>
+                            <div class="entity-badges">
+                                ${r ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(p.nome)}" data-modificador="${calcPericia.total}" title="Rolar ${p.nome} (${calcPericia.total >= 0 ? "+" : ""}${calcPericia.total}) pra criar">🎲 Criar</button>` : ""}
                             </div>
                             <span class="hint-inline">Gratuita — travada${isMestre ? "" : " (só o Mestre pode trocar)"}</span>
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${livre.id}">Remover</button>` : ""}
@@ -5007,11 +5197,16 @@ function renderizarReceitas() {
                 ? `<div class="hint-inline" style="margin-top:10px;">Receitas adquiridas em jogo (adicionadas pelo Mestre)</div>
                    <ul class="entity-list">${extras.map(x => {
                        const r = receitasGlobaisCache.find(g => g.id === x.receitaGlobalId);
+                       const podeCriar = r && Number(x.nivel) <= nivelPericia;
                        return `
                         <li style="cursor:default;">
                             <div class="entity-main">
                                 <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}</span>
                                 ${r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : ""}
+                                ${!podeCriar && r ? `<span class="entity-sub">Perícia ainda não chegou no nível ${x.nivel} pra criar isso.</span>` : ""}
+                            </div>
+                            <div class="entity-badges">
+                                ${podeCriar ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(p.nome)}" data-modificador="${calcPericia.total}" title="Rolar ${p.nome} (${calcPericia.total >= 0 ? "+" : ""}${calcPericia.total}) pra criar">🎲 Criar</button>` : ""}
                             </div>
                             <span class="hint-inline">adicionada por ${escapeHtml(x.adicionadoPorNome || "—")}</span>
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
@@ -5089,6 +5284,18 @@ function renderizarReceitas() {
     el.receitasLista.querySelectorAll(".receita-remover").forEach(btn => {
         btn.addEventListener("click", () => removerReceitaConhecida(btn.dataset.id));
     });
+
+    // Criar o item da receita: primeiro escolhe quais materiais do
+    // inventário vai usar (a qualidade deles influencia a rolagem — ver
+    // abrirModalEscolherMateriais), depois rola a perícia vinculada e
+    // registra no Log de Dados.
+    el.receitasLista.querySelectorAll(".receita-criar").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const receita = receitasGlobaisCache.find(g => g.id === btn.dataset.receitaId);
+            if (!receita) { toast("Receita não encontrada no Banco Global.", "erro"); return; }
+            abrirModalEscolherMateriais(receita, btn.dataset.pericia, Number(btn.dataset.modificador) || 0);
+        });
+    });
 }
 
 // Modal própria (fora do sistema genérico modal-item, que já é
@@ -5144,8 +5351,10 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             <input type="text" id="receita-tempo" placeholder="ex.: 2 horas, 1 dia..." value="${escapeHtml(r.tempoCriacao || "")}">
         </div>
         <div class="modal-field">
-            <label for="receita-materiais">Materiais necessários (opcional)</label>
-            <textarea id="receita-materiais" rows="2">${escapeHtml(r.materiais || "")}</textarea>
+            <label>Materiais necessários (ingredientes)</label>
+            <span class="hint-inline">Só materiais válidos do Manual — escolha o tipo e a quantidade.</span>
+            <div id="receita-ingredientes-lista"></div>
+            <button type="button" class="btn-ghost" id="btn-add-ingrediente" style="margin-top:6px;">+ Adicionar material</button>
         </div>
         <div class="modal-field">
             <label for="receita-custo">Custo em CN$ (opcional)</label>
@@ -5218,6 +5427,71 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
         opcoesDiv.style.display = "block";
     });
 
+    // Ingredientes: cada linha é { material, quantidade }, com o material
+    // restrito à lista fechada MATERIAIS_CRIACAO (seção "Materiais" do
+    // Manual) — nada de texto livre, pra manter a receita sempre
+    // referenciando um tipo de material que existe de verdade no jogo.
+    const listaIngredientes = modal.querySelector("#receita-ingredientes-lista");
+    const nomesMateriais = MATERIAIS_CRIACAO.map(m => m.nome);
+    function adicionarLinhaIngrediente(materialSelecionado, qualidadeSelecionada, quantidade) {
+        const linha = document.createElement("div");
+        linha.className = "receita-ingrediente-linha";
+        const selectMaterial = document.createElement("select");
+        nomesMateriais.forEach(nome => {
+            const opt = document.createElement("option");
+            opt.value = nome;
+            opt.innerText = nome;
+            selectMaterial.appendChild(opt);
+        });
+        selectMaterial.value = nomesMateriais.includes(materialSelecionado) ? materialSelecionado : nomesMateriais[0];
+
+        // Qualidade só aparece pros materiais que realmente têm essa
+        // variação no manual (a maioria — Material bélico e Materiais
+        // especiais não têm tiers de qualidade, então ficam sem esse
+        // select), e usa os nomes exatos daquele material (a maioria é
+        // Baixa/Média/Boa, mas alguns variam — ver qualidadesDoMaterial).
+        const selectQualidade = document.createElement("select");
+        function atualizarOpcoesQualidade() {
+            selectQualidade.innerHTML = "";
+            const qualidades = qualidadesDoMaterial(selectMaterial.value);
+            if (qualidades) {
+                qualidades.forEach(q => {
+                    const opt = document.createElement("option");
+                    opt.value = q;
+                    opt.innerText = q;
+                    selectQualidade.appendChild(opt);
+                });
+                selectQualidade.value = qualidades.includes(qualidadeSelecionada) ? qualidadeSelecionada : qualidades[0];
+                selectQualidade.style.display = "";
+            } else {
+                selectQualidade.style.display = "none";
+            }
+        }
+        atualizarOpcoesQualidade();
+        selectMaterial.addEventListener("change", atualizarOpcoesQualidade);
+
+        const inputQtd = document.createElement("input");
+        inputQtd.type = "number";
+        inputQtd.min = "1";
+        inputQtd.step = "1";
+        inputQtd.value = quantidade || 1;
+        const btnRemover = document.createElement("button");
+        btnRemover.type = "button";
+        btnRemover.className = "btn-red";
+        btnRemover.innerText = "×";
+        btnRemover.title = "Remover este material";
+        btnRemover.addEventListener("click", () => linha.remove());
+        linha.append(selectMaterial, selectQualidade, inputQtd, btnRemover);
+        listaIngredientes.appendChild(linha);
+    }
+    if (Array.isArray(r.ingredientes) && r.ingredientes.length) {
+        r.ingredientes.forEach(ing => adicionarLinhaIngrediente(ing.material, ing.qualidade, ing.quantidade));
+    } else {
+        adicionarLinhaIngrediente();
+    }
+    modal.querySelector("#btn-add-ingrediente").addEventListener("click", () => adicionarLinhaIngrediente());
+
+
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-confirmar-receita").addEventListener("click", async () => {
         const nome = inputNome.value.trim();
@@ -5229,7 +5503,15 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             nivel: Number(selectNivel.value) || 1,
             dificuldade: modal.querySelector("#receita-dificuldade").value !== "" ? Number(modal.querySelector("#receita-dificuldade").value) || 0 : null,
             tempoCriacao: modal.querySelector("#receita-tempo").value.trim(),
-            materiais: modal.querySelector("#receita-materiais").value.trim(),
+            ingredientes: Array.from(listaIngredientes.querySelectorAll(".receita-ingrediente-linha")).map(linha => {
+                const selects = linha.querySelectorAll("select");
+                const materialNome = selects[0].value;
+                return {
+                    material: materialNome,
+                    qualidade: qualidadesDoMaterial(materialNome) ? selects[1].value : null,
+                    quantidade: Number(linha.querySelector("input").value) || 1
+                };
+            }),
             custo: modal.querySelector("#receita-custo").value !== "" ? Number(modal.querySelector("#receita-custo").value) || 0 : null,
             descricao: modal.querySelector("#receita-descricao").value.trim(),
             itemGlobalId: itemGlobalIdVinculado,
@@ -6323,7 +6605,13 @@ async function salvarItemDoModal(id) {
         localProtegido,
         arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null,
         carregador,
-        projetil
+        projetil,
+        // Preserva a marcação de tipo/qualidade de material (ver
+        // abrirModalEscolherMateriais) — esse modal genérico não tem
+        // campo pra isso, então sem preservar aqui, editar peso/descrição
+        // de um material já marcado apagaria a marcação sem querer.
+        materialTipo: existenteItem.materialTipo ?? null,
+        materialQualidade: existenteItem.materialQualidade ?? null
     };
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual.inventario) fichaAtual.inventario = {};
@@ -8012,6 +8300,7 @@ function montarPainelBibliotecaReceitas(corpo) {
             card.innerHTML = `
                 <strong>${escapeHtml(r.nome)}</strong>
                 <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}</span>
+                ${formatarIngredientes(r) ? `<span class="hint-inline">Materiais: ${escapeHtml(formatarIngredientes(r))}</span>` : ""}
                 <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
             `;
             const linhaBtns = document.createElement("div");

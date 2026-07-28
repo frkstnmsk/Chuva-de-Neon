@@ -34,7 +34,19 @@
 //                                              // pelo nível atual da perícia).
 //     dificuldade: 12,                        // número, opcional
 //     tempoCriacao: "2 horas",                // texto livre, opcional
-//     materiais: "Sucata de metal, fita isolante", // texto livre, opcional
+//     ingredientes: [                         // lista de materiais válidos
+//         { material: "Metal leve", qualidade: "Baixa", quantidade: 2 }, // (ver
+//         { material: "Material bélico", qualidade: null, quantidade: 1 } // MATERIAIS_CRIACAO
+//     ],                                      // em dados-manual.js — nada de
+//                                              // texto livre aqui. `qualidade`
+//                                              // usa o rótulo EXATO do manual
+//                                              // pra aquele material (varia:
+//                                              // maioria é Baixa/Média/Boa,
+//                                              // CEB e Material Químico usam
+//                                              // Alta) — ou null pros que
+//                                              // não têm variação (Material
+//                                              // bélico, Material especial —
+//                                              // ver qualidadesDoMaterial).
 //     custo: 50,                              // CN$, opcional
 //     descricao: "Efeito/notas livres sobre a receita e o item final.",
 //     itemGlobalId: "abc123" | null,          // se vinculada a um item já

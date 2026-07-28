@@ -651,6 +651,42 @@ export const PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA = ["Biomecânica"];
 // ---------------------------------------------------------------------
 export const PERICIAS_CRIACAO_ITEM = [...PERICIAS_FERRAMENTA_CRIACAO, ...PERICIAS_FERRAMENTA_CRIACAO_QUIMICA, ...PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA];
 
+// Materiais de criação (seção "Materiais" do Manual do Jogador) — a
+// lista fechada de tipos de material que uma receita pode exigir como
+// ingrediente. Cada receita guarda uma lista de
+// { material, qualidade, quantidade } usando exatamente um destes nomes
+// (ver abrirModalCriarReceita, em ficha.js, que restringe o seletor a
+// esta lista — nada de texto livre). `qualidades` é a lista EXATA de
+// tiers que aquele material tem no manual (a maioria é Baixa/Média/Boa;
+// CEB e Material Químico usam Alta em vez de Boa); `null` pros materiais
+// sem variação de qualidade (preço único no manual): Material bélico e
+// Materiais especiais.
+export const MATERIAIS_CRIACAO = [
+    { nome: "Metal leve", qualidades: ["Baixa", "Média", "Boa"] },
+    { nome: "Metal pesado", qualidades: ["Baixa", "Média", "Boa"] },
+    { nome: "Material bélico", qualidades: null },
+    { nome: "Propelente", qualidades: ["Baixa", "Média", "Boa"] },
+    { nome: "Carga Explosiva Bruta (CEB)", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Eletrônico", qualidades: ["Baixa", "Média", "Boa"] },
+    { nome: "Eletrônico avançado", qualidades: ["Baixa", "Média", "Boa"] },
+    { nome: "Material especial", qualidades: null },
+    { nome: "Material Químico: Sedativo", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Tóxico", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Veículo de transporte", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Inflamável", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Explosivo", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Oxidante", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Corrosivo", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Catalizador", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Psicotrópico", qualidades: ["Baixa", "Média", "Alta"] },
+    { nome: "Material Químico: Bioquímico", qualidades: ["Baixa", "Média", "Alta"] }
+];
+
+export function qualidadesDoMaterial(nomeMaterial) {
+    const m = MATERIAIS_CRIACAO.find(m => m.nome === nomeMaterial);
+    return m ? m.qualidades : null;
+}
+
 export const PERICIAS_DESTRAVE = ["Mão Leve", "Arrombamento"];
 export const PERICIAS_ARMA_FOGO = ["Armas de Fogo de Pequeno Porte", "Armas de Fogo de Médio Porte", "Armas de Fogo de Grande Porte"];
 export const PERICIAS_ARMA_COMBATE = [
