@@ -1017,3 +1017,104 @@ export function bonusCQCFacaAdaga(nivelCQC) {
     if (Number(nivelCQC) < 3) return null;
     return { difAjuste: -1, escalaMultDano: 1 }; // escala D = 1x Destreza
 }
+
+// ---------------------------------------------------------------------
+// Jiu Jitsu (manual pg. 22): "Técnica baseada em derrubar, imobilizar e
+// quebrar ossos." Implementado por completo:
+//
+// Base (qualquer nível, exige ao menos nível 1): "Ao derrubar alguém
+// que não tenha Jiu Jitsu, cause 1/10 do total de PV da vítima." — bônus
+// automático de dano na manobra "Derrubar" (manual pg. 49-50) quando
+// rolada com a perícia Jiu Jitsu, contra alvo sem a perícia. Ver
+// danoQuedaJiuJitsu abaixo e o hook em resolverDerrubar (ficha.js) — o
+// "PV total" usado é o PV MÁXIMO do alvo (participante.pvMax, já
+// calculado no Gerenciador de Combate), não o atual.
+//
+// Nível 1 (Quedas): é o próprio nível que HABILITA o bônus acima — o
+// manual não descreve nada além do título "Quedas" nesse nível, e o
+// parágrafo-base já cobre o efeito (Derrubar é a manobra "de qualquer
+// perícia" padrão da lista MANOBRAS_COMBATE, sem exigir nível pra
+// existir — só o BÔNUS de dano extra por não-ter-Jiu-Jitsu depende do
+// atacante ter pelo menos nível 1 na perícia).
+//
+// Nível 2 (Imobilização): igual em espírito ao "Imobilizar" do CQC
+// nível 4 (MANOBRA_IMOBILIZAR_CQC acima) — por isso REAPROVEITA toda a
+// mecânica de status já pronta (definirImobilizado/soltarImobilizado em
+// mestre.js, badges 🔒 Imobilizado, bloqueio de ataque em resolverAtaque,
+// teste de Destreza pra se libertar). A diferença é só na ROLAGEM: o
+// manual diz "vítima não pode fazer nenhuma ação até vencer em um teste
+// disputado de Força ou Jiu Jitsu. O usuário pode escolher entre usar a
+// perícia Jiu Jitsu, Força ou Destreza nesse teste" — ou seja, tabela
+// própria (o atacante rola Jiu Jitsu OU o atributo Força OU o atributo
+// Destreza, sua escolha; a dificuldade é 10 + o melhor entre Força e
+// Jiu Jitsu do ALVO), diferente da lista fixa do CQC (10 + melhor entre
+// Jiu Jitsu/CQC/Briga de Rua do alvo). Ver MANOBRA_IMOBILIZAR_JIUJITSU
+// abaixo e resolverImobilizarJiuJitsu/calcularMelhorForcaOuJiuJitsuAlvo
+// em ficha.js. Segue a mesma convenção do resto do sistema pra "teste
+// disputado" (transformar em dificuldade estática 10 + atributo/perícia
+// do alvo — igual Agarrar "10 + Força do alvo", Derrubar "10 +
+// Constituição do alvo" etc.), e também exige alvo já Derrubado (mesma
+// leitura usada pro Imobilizar do CQC — "imobilizar" no manual de Jiu
+// Jitsu é sempre citado junto de "derrubar" no parágrafo-base da perícia).
+//
+// Nível 3 (Desacordar ao Imobilizar): "Ao vencer no teste disputado, a
+// vítima é desacordada se for da vontade do usuário" — oferecido como
+// checkbox opcional na mesma modal de alvo do Imobilizar-Jiu-Jitsu
+// (só quando nível >= 3). Sucesso com a caixa marcada troca o resultado
+// de Imobilizado por um status NOVO, "Desacordado" (definirDesacordado/
+// soltarDesacordado em mestre.js) — inconsciente de verdade: bloqueia
+// tudo igual Imobilizado, mas SEM teste de Destreza pra se libertar
+// sozinho (o manual não dá esse recurso pra quem foi nocauteado) — só
+// o Mestre pode "Acordar" a vítima (botão no Gerenciador de Combate).
+//
+// Níveis 4 e 5 (Quebrar pequenos ossos / Quebrar ossos): "Com o alvo
+// imobilizado, o dano é de Destreza C [nível 4] / B [nível 5] e reduz
+// em um [nível 4] / dois [nível 5] pontos qualquer ação física, e caso
+// seja em um membro inferior, impossibilita correr [só nível 5; ambas
+// pernas quebradas = só se arrasta, testando Tolerância dificuldade
+// 15]." Vira a manobra exclusiva "Quebrar ossos" (MANOBRA_QUEBRAR_OSSOS_JIUJITSU
+// abaixo), só disponível contra quem VOCÊ está imobilizando agora (ver
+// abrirModalQuebrarOssosJiuJitsu/resolverQuebrarOssosJiuJitsu em
+// ficha.js) — aplica o dano automaticamente (ver danoQuebrarOssosJiuJitsu
+// abaixo) e registra o status ossosQuebrados (badge 🦴) com a nota
+// textual da penalidade pro Mestre aplicar nos testes físicos seguintes
+// da vítima — o sistema não tem uma trava genérica de "penalidade em
+// qualquer ação física de um participante específico" (só o dono da
+// ficha tem seu próprio estado de saúde/energia calculado), então essa
+// parte final fica com o Mestre, igual outras notas só-narrativas já
+// existentes no CQC nível 4 (ver comentário acima de MANOBRA_IMOBILIZAR_CQC).
+// ---------------------------------------------------------------------
+
+// Bônus de dano da manobra "Derrubar" quando rolada com Jiu Jitsu contra
+// alvo sem a perícia — manual: "cause 1/10 do total de PV da vítima".
+// pvMaxAlvo é o PV MÁXIMO do participante (não o atual).
+export function danoQuedaJiuJitsu(nivelJJAtacante, alvoTemJiuJitsu, pvMaxAlvo) {
+    if (Number(nivelJJAtacante) < 1) return 0;
+    if (alvoTemJiuJitsu) return 0;
+    return Math.floor((Number(pvMaxAlvo) || 0) / 10);
+}
+
+export const MANOBRA_IMOBILIZAR_JIUJITSU = {
+    nome: "Imobilizar (Jiu Jitsu)",
+    alcance: "Curto",
+    pericias: ["Jiu Jitsu", "Força", "Destreza"],
+    dificuldade: "Teste disputado — 10 + melhor entre Força ou Jiu Jitsu do alvo",
+    efeito: "Exclusiva de Jiu Jitsu nível 2+, só pode ser usada contra um alvo já Derrubado. Escolha rolar com Jiu Jitsu, Força ou Destreza. Sucesso IMOBILIZA o alvo (mesmo efeito do CQC nível 4): impede completamente ataques e movimentação até testar Destreza pra se libertar. Jiu Jitsu nível 3: pode escolher Desacordar o alvo em vez disso (sem teste pra se libertar sozinho)."
+};
+
+export const MANOBRA_QUEBRAR_OSSOS_JIUJITSU = {
+    nome: "Quebrar ossos",
+    alcance: "Curto",
+    pericias: ["Jiu Jitsu"],
+    dificuldade: "Automático — só contra alvo que você já Imobilizou",
+    efeito: "Exclusiva de Jiu Jitsu nível 4+, só pode ser usada contra um alvo que você esteja Imobilizando agora. Causa dano automático (Destreza C no nível 4, Destreza B no nível 5) e reduz em 1 (nível 4) ou 2 (nível 5) pontos qualquer ação física da vítima; se atingir um membro inferior (nível 5), impossibilita correr — ambas as pernas quebradas, só dá pra se arrastar (teste de Tolerância, dificuldade 15)."
+};
+
+// Escala/label de dano de "Quebrar ossos" por nível de Jiu Jitsu — null
+// se o personagem não tem nível suficiente (< 4).
+export function danoQuebrarOssosJiuJitsu(nivelJJ) {
+    const nivel = Number(nivelJJ) || 0;
+    if (nivel >= 5) return { escalaMult: 4, label: "Destreza B", pontosPenalidade: 2 }; // Escala B = 4x
+    if (nivel >= 4) return { escalaMult: 2, label: "Destreza C", pontosPenalidade: 1 }; // Escala C = 2x
+    return null;
+}

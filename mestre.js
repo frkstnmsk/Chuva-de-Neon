@@ -1011,6 +1011,56 @@ export async function soltarImobilizado(participanteId) {
 }
 
 // ---------------------------------------------------------------------
+// Desacordado (Jiu Jitsu nível 3, manual pg. 22: "Ao vencer no teste
+// disputado [de Imobilizar], a vítima é desacordada se for da vontade
+// do usuário"). Diferente de Imobilizado, é inconsciência de verdade:
+// bloqueia tudo igual (ver checagem em resolverAtaque, mesmo padrão de
+// meuStatusImobilizado), mas o manual não dá à vítima nenhum teste pra
+// se libertar sozinha — por isso não guarda `dificuldadeEscape` nem tem
+// um "tentarLibertar" equivalente; só volta com soltarDesacordado, de
+// dentro do Gerenciador de Combate do Mestre (botão "Acordar").
+// ---------------------------------------------------------------------
+export async function definirDesacordado(participanteId, porPid, porNome) {
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/desacordado`)), { ativo: true, porPid, porNome });
+}
+
+export async function soltarDesacordado(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/desacordado`)));
+}
+
+// ---------------------------------------------------------------------
+// Ossos quebrados (Jiu Jitsu níveis 4/5, manual pg. 22: "Com o alvo
+// imobilizado, [...] reduz em um/dois pontos qualquer ação física e
+// caso seja em um membro inferior, impossibilita correr. Caso ambas
+// pernas sejam quebradas, apenas pode se arrastar, testando Tolerância,
+// dificuldade 15"). O dano em si é aplicado direto via aplicarDano (ver
+// resolverQuebrarOssosJiuJitsu em ficha.js) — isso aqui só guarda o
+// status textual/contador pra exibir como badge (🦴) no Gerenciador de
+// Combate; a penalidade de "-X em qualquer ação física" e o "só se
+// arrasta" ficam com o Mestre aplicar manualmente (o sistema não tem
+// uma trava genérica de penalidade por participante pra testes físicos
+// de terceiros — só o dono da ficha calcula o próprio estado de saúde/
+// energia), igual a outras notas só-narrativas do CQC nível 4.
+// ---------------------------------------------------------------------
+export async function definirOssosQuebrados(participanteId, { pontosPenalidade, membroInferior, porNome }) {
+    const caminho = caminhoMesa(`combateAtivo/participantes/${participanteId}/ossosQuebrados`);
+    const snap = await get(ref(db, caminho));
+    const atual = snap.exists() ? snap.val() : { pernasQuebradas: 0 };
+    const pernasQuebradas = Math.min(2, (Number(atual.pernasQuebradas) || 0) + (membroInferior ? 1 : 0));
+    await set(ref(db, caminho), {
+        ativo: true,
+        pontosPenalidade: Math.max(Number(atual.pontosPenalidade) || 0, Number(pontosPenalidade) || 0),
+        pernasQuebradas,
+        arrastaSomente: pernasQuebradas >= 2,
+        porNome
+    });
+}
+
+export async function curarOssosQuebrados(participanteId) {
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/ossosQuebrados`)));
+}
+
+// ---------------------------------------------------------------------
 // Delimitar alcance / Retomar alcance (manual): a vítima só pode usar
 // golpes do alcance escolhido pelo atacante (exceto Médio, que sempre
 // pode ser usado "de perto", a metade do dano — ver checagem em

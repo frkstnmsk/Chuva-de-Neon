@@ -33,7 +33,9 @@ import {
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
-    MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC
+    MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC,
+    danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
+    danoQuebrarOssosJiuJitsu
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -81,7 +83,8 @@ import {
     consumirContraAtaquePendente, definirAgarrado, soltarAgarrado,
     definirDerrubado, levantarDerrubado,
     definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
-    definirAlcanceLimitado, soltarAlcanceLimitado
+    definirAlcanceLimitado, soltarAlcanceLimitado,
+    definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados
 } from "./mestre.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -1977,6 +1980,8 @@ let contextoDerrubar = null;
 let contextoDelimitar = null;
 let contextoRetomar = null;
 let contextoImobilizar = null;
+let contextoImobilizarJJ = null;
+let contextoQuebrarOssosJJ = null;
 
 function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
@@ -2118,6 +2123,72 @@ function abrirModalSelecionarAlvoImobilizar(nomePericia, modificador) {
         const opt = document.createElement("option");
         opt.value = pid;
         opt.innerText = `${p.nome} (Derrubado)`;
+        el.alvoSelect.appendChild(opt);
+    });
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// "Imobilizar (Jiu Jitsu)" (Jiu Jitsu nível 2, manual pg. 22 — ver
+// MANOBRA_IMOBILIZAR_JIUJITSU em dados-manual.js): mesma ideia de
+// abrirModalSelecionarAlvoImobilizar acima (só quem está Derrubado),
+// mas com um campo extra pra oferecer o checkbox "Desacordar" (Jiu
+// Jitsu nível 3) quando o personagem tem o nível.
+function abrirModalSelecionarAlvoImobilizarJJ(nomeBase, modificador, nivelJJ) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const opcoes = Object.entries(participantes).filter(([, p]) => p.derrubado && p.derrubado.ativo);
+    if (!opcoes.length) { toast("Ninguém no combate está Derrubado agora — Imobilizar só funciona depois de Derrubar o alvo.", "erro"); return; }
+
+    contextoImobilizarJJ = { nomeBase, modificador, nivelJJ };
+    el.alvoTitulo.innerText = `Imobilizar (Jiu Jitsu) com ${nomeBase}`;
+    if (Number(nivelJJ) >= 3) {
+        el.alvoCampoExtra.style.display = "block";
+        el.alvoCampoExtra.innerHTML = `
+            <label style="display:flex;align-items:flex-start;gap:6px;">
+                <input type="checkbox" id="alvo-jj-desacordar-check">
+                <span>Desacordar o alvo em vez de só imobilizar (Jiu Jitsu nível 3) — inconsciente, sem teste pra se libertar sozinho</span>
+            </label>
+        `;
+    } else {
+        el.alvoCampoExtra.style.display = "none";
+        el.alvoCampoExtra.innerHTML = "";
+    }
+    el.alvoSelect.innerHTML = "";
+    opcoes.forEach(([pid, p]) => {
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.innerText = `${p.nome} (Derrubado)`;
+        el.alvoSelect.appendChild(opt);
+    });
+    el.modalSelecionarAlvo.classList.add("active");
+}
+
+// "Quebrar ossos" (Jiu Jitsu níveis 4/5, manual pg. 22 — ver
+// MANOBRA_QUEBRAR_OSSOS_JIUJITSU em dados-manual.js): só faz sentido
+// contra quem EU já estou imobilizando agora ("Com o alvo imobilizado
+// [...]") — filtra por imobilizado.porPid === meuPid, diferente de
+// Imobilizar (CQC/Jiu Jitsu) que filtra por Derrubado.
+function abrirModalQuebrarOssosJJ(modificadorNaoUsado, nivelJJ) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const opcoes = Object.entries(participantes).filter(([, p]) => p.imobilizado && p.imobilizado.ativo && meuPid && p.imobilizado.porPid === meuPid);
+    if (!opcoes.length) { toast("Você precisa estar Imobilizando alguém agora pra Quebrar ossos.", "erro"); return; }
+
+    contextoQuebrarOssosJJ = { nivelJJ };
+    el.alvoTitulo.innerText = "Quebrar ossos (Jiu Jitsu)";
+    el.alvoCampoExtra.style.display = "block";
+    el.alvoCampoExtra.innerHTML = Number(nivelJJ) >= 5
+        ? `
+            <label style="display:flex;align-items:flex-start;gap:6px;">
+                <input type="checkbox" id="alvo-jj-membro-inferior-check">
+                <span>Atingir um membro inferior (Jiu Jitsu nível 5) — impossibilita correr; ambas as pernas quebradas, só dá pra se arrastar (teste de Tolerância, dificuldade 15)</span>
+            </label>
+        `
+        : "";
+    el.alvoSelect.innerHTML = "";
+    opcoes.forEach(([pid, p]) => {
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.innerText = `${p.nome} (Imobilizado por você)`;
         el.alvoSelect.appendChild(opt);
     });
     el.modalSelecionarAlvo.classList.add("active");
@@ -2365,6 +2436,8 @@ function configurarModalSelecionarAlvo() {
         contextoDelimitar = null;
         contextoRetomar = null;
         contextoImobilizar = null;
+        contextoImobilizarJJ = null;
+        contextoQuebrarOssosJJ = null;
     };
     el.alvoCancelar.addEventListener("click", () => {
         el.modalSelecionarAlvo.classList.remove("active");
@@ -2377,7 +2450,7 @@ function configurarModalSelecionarAlvo() {
         }
     });
     el.alvoConfirmar.addEventListener("click", async () => {
-        if (!contextoAtaque && !contextoAgarrar && !contextoDesarmar && !contextoDerrubar && !contextoDelimitar && !contextoRetomar && !contextoImobilizar) return;
+        if (!contextoAtaque && !contextoAgarrar && !contextoDesarmar && !contextoDerrubar && !contextoDelimitar && !contextoRetomar && !contextoImobilizar && !contextoImobilizarJJ && !contextoQuebrarOssosJJ) return;
         const pid = el.alvoSelect.value;
         const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
@@ -2430,6 +2503,18 @@ function configurarModalSelecionarAlvo() {
             const { nomePericia, modificador } = contextoImobilizar;
             limparContextos();
             await resolverImobilizar(nomePericia, modificador, { ...participante, _pid: pid });
+        } else if (contextoImobilizarJJ) {
+            const { nomeBase, modificador, nivelJJ } = contextoImobilizarJJ;
+            const desacordarCheck = document.getElementById("alvo-jj-desacordar-check");
+            const desacordar = desacordarCheck ? desacordarCheck.checked : false;
+            limparContextos();
+            await resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, { ...participante, _pid: pid }, desacordar);
+        } else if (contextoQuebrarOssosJJ) {
+            const { nivelJJ } = contextoQuebrarOssosJJ;
+            const membroInferiorCheck = document.getElementById("alvo-jj-membro-inferior-check");
+            const membroInferior = membroInferiorCheck ? membroInferiorCheck.checked : false;
+            limparContextos();
+            await resolverQuebrarOssosJiuJitsu(nivelJJ, { ...participante, _pid: pid }, membroInferior);
         }
     });
 }
@@ -2534,6 +2619,16 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const ehDisparoAvancarCQC = !!opcoes.ehDisparoAvancarCQC;
     const nomePericia = it.periciaUso;
     if (!nomePericia) { toast("Esta arma não tem perícia vinculada.", "erro"); return; }
+
+    // Desacordado (Jiu Jitsu nível 3, manual): inconsciente — bloqueia
+    // TUDO igual Imobilizado, mas sem teste pra se libertar sozinho (só
+    // o Mestre "Acorda" pelo Gerenciador de Combate). Verifica antes de
+    // tudo, igual Imobilizado logo abaixo.
+    const statusDesacordado = meuStatusDesacordado();
+    if (statusDesacordado && statusDesacordado.ativo) {
+        toast(`Você está DESACORDADO por ${statusDesacordado.porNome} — inconsciente, não consegue agir enquanto durar. Só o Mestre pode te acordar.`, "erro");
+        return;
+    }
 
     // Imobilizar (CQC nível 4, manual): "impedindo completamente ataques
     // e movimentação" enquanto durar — diferente de Agarrar, bloqueia
@@ -3278,7 +3373,30 @@ async function resolverDerrubar(nomePericia, modificador, participante, usarBonu
         }
     }
 
-    const detalhe = `${nomeAtacante} DERRUBOU ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} está derrubado: dificuldade pra ser acertado cai -3 e precisa gastar 1 ação pra se levantar.${notaBonusCQC}\n${detalheRolagem}`;
+    // Jiu Jitsu (manual pg. 22): "Ao derrubar alguém que não tenha Jiu
+    // Jitsu, cause 1/10 do total de PV da vítima" — bônus automático
+    // (não é uma escolha como o de CQC acima), só quando a manobra foi
+    // de fato rolada com a perícia Jiu Jitsu e o atacante tem nível >= 1
+    // nela. Usa o PV MÁXIMO do participante (já calculado no Gerenciador
+    // de Combate, ver p.pvMax) — ver danoQuedaJiuJitsu em dados-manual.js.
+    let notaQuedaJJ = "";
+    if (nomePericia === "Jiu Jitsu") {
+        try {
+            const entradaJJ = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Jiu Jitsu");
+            const nivelJJAtacante = entradaJJ ? (Number(entradaJJ[1].nivel) || 0) : 0;
+            const alvoTemJJ = await alvoTemJiuJitsuTreinado(participante.tipo, participante.refId);
+            const danoQueda = danoQuedaJiuJitsu(nivelJJAtacante, alvoTemJJ, participante.pvMax);
+            if (danoQueda > 0) {
+                const resultadoDanoQueda = await aplicarDano(participante.tipo, participante.refId, danoQueda, null, null);
+                notaQuedaJJ = ` Jiu Jitsu (alvo sem a perícia): +${danoQueda} de dano extra (1/10 do PV total do alvo) — ${resultadoDanoQueda.danoFinal} aplicado, PV restante: ${resultadoDanoQueda.novoPv}.`;
+            }
+        } catch (err) {
+            console.error(err);
+            notaQuedaJJ = " Bônus de dano do Jiu Jitsu (queda) falhou ao aplicar — resolva manualmente.";
+        }
+    }
+
+    const detalhe = `${nomeAtacante} DERRUBOU ${nomeAlvo} (${nomePericia}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} está derrubado: dificuldade pra ser acertado cai -3 e precisa gastar 1 ação pra se levantar.${notaBonusCQC}${notaQuedaJJ}\n${detalheRolagem}`;
     await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
     toast(detalhe);
 }
@@ -3400,7 +3518,201 @@ async function resolverImobilizar(nomePericia, modificador, participante) {
     toast(detalhe);
 }
 
-// "Libertar-se" do Imobilizado (efeito de CQC nível 4 — manual: "teste
+// Melhor entre a Força (atributo) e a perícia Jiu Jitsu (nível) do
+// alvo — usado na dificuldade de "Imobilizar (Jiu Jitsu)" (manual:
+// "teste disputado de Força ou Jiu Jitsu", ver MANOBRA_IMOBILIZAR_JIUJITSU
+// em dados-manual.js). Mesma convenção do resto do sistema pra "teste
+// disputado" (10 + o melhor dos dois valores do alvo). NPC "rápido"
+// (sem mini-ficha detalhada) não tem Força cadastrada — usa Constituição
+// como aproximação, igual resolverAgarrar já faz, e não tem perícia
+// Jiu Jitsu pra comparar.
+async function calcularMelhorForcaOuJiuJitsuAlvo(alvoTipo, alvoRefId) {
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
+        if (!snap.exists()) return -1;
+        const fichaAlvo = normalizarFicha(snap.val());
+        const modificadoresPlanos = coletarModificadores(fichaAlvo);
+        const pvMaxCalc = Math.round(calcularDerivados(fichaAlvo.dados, modificadoresPlanos).recursos.pv.total) + (Number(fichaAlvo.dados.pvBonusExtra) || 0);
+        const overridePv = fichaAlvo.dados.pvMaximoOverride;
+        const pvMax = (overridePv !== null && overridePv !== undefined && overridePv !== "") ? (Number(overridePv) || 0) : pvMaxCalc;
+        const pvAtual = (fichaAlvo.dados.pvAtual !== null && fichaAlvo.dados.pvAtual !== undefined) ? Number(fichaAlvo.dados.pvAtual) : pvMax;
+        const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
+        const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
+        const forcaAlvo = Number(fichaAlvo.dados.forca) || 0;
+        const jjAlvo = modificadorDePericiaComPenalidade("Jiu Jitsu", fichaAlvo.dados, fichaAlvo.pericias, modificadoresPlanos, estadoSaude.penalidadeTestes);
+        return Math.max(forcaAlvo, jjAlvo);
+    }
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoRefId}`)));
+    if (!snap.exists()) return -1;
+    const npc = snap.val();
+    const forcaAlvo = npc.modoDetalhado ? (Number(npc.atributosPrimarios?.forca) || 0) : (Number(npc.constituicao) || 0);
+    let jjAlvo = -1;
+    if (npc.modoDetalhado && npc.periciasNpc) {
+        const entrada = Object.values(npc.periciasNpc).find(p => p.nome === "Jiu Jitsu");
+        jjAlvo = entrada ? (Number(entrada.nivel) || 0) : -1;
+    }
+    return Math.max(forcaAlvo, jjAlvo);
+}
+
+// Verifica se o alvo já tem a perícia Jiu Jitsu treinada (nível > 0) —
+// usado no bônus de dano base da manobra Derrubar (manual: "Ao derrubar
+// alguém que NÃO TENHA Jiu Jitsu [...]", ver danoQuedaJiuJitsu em
+// dados-manual.js e o hook em resolverDerrubar).
+async function alvoTemJiuJitsuTreinado(alvoTipo, alvoRefId) {
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
+        if (!snap.exists()) return false;
+        const fichaAlvo = normalizarFicha(snap.val());
+        const entrada = Object.values(fichaAlvo.pericias || {}).find(p => p.nome === "Jiu Jitsu");
+        return !!(entrada && Number(entrada.nivel) > 0);
+    }
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoRefId}`)));
+    if (!snap.exists()) return false;
+    const npc = snap.val();
+    if (!npc.modoDetalhado || !npc.periciasNpc) return false;
+    const entrada = Object.values(npc.periciasNpc).find(p => p.nome === "Jiu Jitsu");
+    return !!(entrada && Number(entrada.nivel) > 0);
+}
+
+// "Imobilizar (Jiu Jitsu)" (Jiu Jitsu nível 2, manual pg. 22 — ver
+// MANOBRA_IMOBILIZAR_JIUJITSU em dados-manual.js): mesmo espírito do
+// resolverImobilizar (CQC) logo acima — reaproveita a MESMA mecânica de
+// status (definirImobilizado/soltarImobilizado, badges, bloqueio em
+// resolverAtaque) — só muda a rolagem/dificuldade (ver
+// calcularMelhorForcaOuJiuJitsuAlvo acima) e, com sucesso e Jiu Jitsu
+// nível 3+, a opção de Desacordar o alvo em vez de só imobilizar.
+async function resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, participante, desacordar) {
+    const consumo = checarConsumoDeAcao(true, false);
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificador;
+
+    let dificuldade, nomeAlvo;
+    try {
+        const melhorDoAlvo = await calcularMelhorForcaOuJiuJitsuAlvo(participante.tipo, participante.refId);
+        dificuldade = 10 + melhorDoAlvo;
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
+            nomeAlvo = (snap.val().config && snap.val().config.nomeExibicao) || participante.nome;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
+            nomeAlvo = snap.val().nome || participante.nome;
+        }
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao buscar dados do alvo.", "erro");
+        return;
+    }
+
+    const detalheRolagem = `rolagem: ${brutoAtaque}\nmodificador (${nomeBase}): ${modificador >= 0 ? "+" : ""}${modificador}\nresultado: ${resultadoAtaque}`;
+    const conseguiu = resultadoAtaque >= dificuldade;
+    const desacordarValido = desacordar && Number(nivelJJ) >= 3;
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} tentou Imobilizar (Jiu Jitsu) ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    if (!conseguiu) {
+        const detalhe = `${nomeAtacante} tentou Imobilizar (Jiu Jitsu) ${nomeAlvo} (${nomeBase}). ERRO — vs. dificuldade ${dificuldade}.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    if (meuPid && desacordarValido) {
+        await definirDesacordado(participante._pid, meuPid, nomeAtacante);
+        const detalhe = `${nomeAtacante} venceu o teste disputado e DESACORDOU ${nomeAlvo} (${nomeBase}, Jiu Jitsu nível ${nivelJJ}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} está inconsciente: não age nem se defende, e não tem teste pra se libertar sozinho — só o Mestre pode acordá-lo.\n${detalheRolagem}`;
+        await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+        toast(detalhe);
+        return;
+    }
+
+    if (meuPid) {
+        await definirImobilizado(participante._pid, meuPid, nomeAtacante, resultadoAtaque);
+    }
+    const detalhe = `${nomeAtacante} IMOBILIZOU ${nomeAlvo} (${nomeBase}, Jiu Jitsu nível ${nivelJJ}) — vs. dificuldade ${dificuldade}. ${nomeAlvo} não consegue atacar nem se mover enquanto durar; pra se libertar, precisa testar Destreza (dificuldade ${resultadoAtaque}) no próprio turno.\n${detalheRolagem}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador, resultado: resultadoAtaque, detalhe });
+    toast(detalhe);
+}
+
+// "Quebrar ossos" (Jiu Jitsu níveis 4/5, manual pg. 22 — ver
+// MANOBRA_QUEBRAR_OSSOS_JIUJITSU/danoQuebrarOssosJiuJitsu em
+// dados-manual.js): sem rolagem — é automático contra quem você já
+// está Imobilizando (ver abrirModalQuebrarOssosJJ). Aplica o dano
+// (Destreza C/B) direto com aplicarDano (mesmo helper do bônus de dano
+// do CQC nível 2 em resolverDerrubar) e registra o status ossosQuebrados
+// (ver definirOssosQuebrados em mestre.js) só pra exibir a nota da
+// penalidade — o Mestre decide como aplicar "-X em qualquer ação
+// física" nos testes seguintes da vítima.
+async function resolverQuebrarOssosJiuJitsu(nivelJJ, participante, membroInferior) {
+    const consumo = checarConsumoDeAcao(true, false);
+    if (!consumo) return;
+    const participanteIdParaGastarAcao = consumo.participanteId;
+
+    const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
+    const info = danoQuebrarOssosJiuJitsu(nivelJJ);
+    if (!info) { toast("Jiu Jitsu nível 4+ é necessário pra Quebrar ossos.", "erro"); return; }
+
+    const destrezaAtacante = Number(fichaAtual.dados.destreza) || 0;
+    const dano = calcularDanoTotalArma({ danoBase: 0, escalaMult: info.escalaMult }, destrezaAtacante);
+
+    let resultadoDano, nomeAlvo;
+    try {
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, dano, "contusao", null);
+        nomeAlvo = resultadoDano.nomeAlvo;
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao aplicar dano no alvo.", "erro");
+        return;
+    }
+
+    if (participanteIdParaGastarAcao) {
+        if (consumo.direto) {
+            await consumirAcaoCombate(participanteIdParaGastarAcao);
+        } else {
+            await criarAcaoPendente({
+                tipo: "gastar_acao_combate",
+                fichaId: fichaAtualId,
+                nomeJogador: nomeAtacante,
+                detalhe: `${nomeAtacante} usou Quebrar ossos em ${nomeAlvo} e quer gastar 1 ação do turno.`,
+                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+            });
+            toast("Gasto de ação enviado pro Mestre aprovar.");
+        }
+    }
+
+    await definirOssosQuebrados(participante._pid, {
+        pontosPenalidade: info.pontosPenalidade,
+        membroInferior: membroInferior && Number(nivelJJ) >= 5,
+        porNome: nomeAtacante
+    });
+
+    const notaMembro = (membroInferior && Number(nivelJJ) >= 5)
+        ? " Atingiu um membro inferior: impossibilita correr (se ambas as pernas forem quebradas, só dá pra se arrastar, testando Tolerância dificuldade 15)."
+        : "";
+    const detalhe = `${nomeAtacante} QUEBROU OSSOS de ${nomeAlvo} (Jiu Jitsu nível ${nivelJJ}, ${info.label}): +${dano} de dano contundente — ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} aplicado, PV restante: ${resultadoDano.novoPv}. Reduz em ${info.pontosPenalidade} ponto(s) qualquer ação física da vítima enquanto durar (a critério do Mestre).${notaMembro}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador: 0, resultado: dano, detalhe });
+    toast(detalhe);
+}
+
+
 // Destreza, dif igual ao valor do agente CQC no teste de [Imobilizar]").
 // Mesma lógica de ação do "Levantar" (tentarLevantarDerrubado): só no
 // próprio turno de quem está imobilizado, gasta 1 ação. Diferente de
@@ -3959,9 +4271,17 @@ function renderizarManobrasCombate() {
     // em dados-manual.js).
     const entradaCQCLista = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
     const nivelCQCLista = entradaCQCLista ? (Number(entradaCQCLista[1].nivel) || 0) : 0;
+    // Mesma ideia acima, pra Jiu Jitsu (manual pg. 22 — ver
+    // MANOBRA_IMOBILIZAR_JIUJITSU/MANOBRA_QUEBRAR_OSSOS_JIUJITSU em
+    // dados-manual.js): "Imobilizar (Jiu Jitsu)" nível 2+, "Quebrar
+    // ossos" nível 4+.
+    const entradaJJLista = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Jiu Jitsu");
+    const nivelJJLista = entradaJJLista ? (Number(entradaJJLista[1].nivel) || 0) : 0;
     const manobrasParaExibir = [...MANOBRAS_COMBATE];
     if (nivelCQCLista >= 3) manobrasParaExibir.push(MANOBRA_ARREMESSAR_CQC);
     if (nivelCQCLista >= 4) manobrasParaExibir.push(MANOBRA_IMOBILIZAR_CQC);
+    if (nivelJJLista >= 2) manobrasParaExibir.push(MANOBRA_IMOBILIZAR_JIUJITSU);
+    if (nivelJJLista >= 4) manobrasParaExibir.push(MANOBRA_QUEBRAR_OSSOS_JIUJITSU);
 
     manobrasParaExibir.forEach(m => {
         const li = document.createElement("li");
@@ -3980,10 +4300,23 @@ function renderizarManobrasCombate() {
         // "Imobilizar" também não tem fallback "Sem Perícia" — é
         // exclusiva de CQC nível 4+, não existe "versão destreinada".
         const ehImobilizar = m.nome === "Imobilizar";
+        // "Imobilizar (Jiu Jitsu)" — exclusiva de Jiu Jitsu nível 2+
+        // (manual: "usuário pode escolher entre usar a perícia Jiu
+        // Jitsu, Força ou Destreza"), por isso 3 botões em vez de 1.
+        const ehImobilizarJJ = m.nome === "Imobilizar (Jiu Jitsu)";
+        // "Quebrar ossos" — exclusiva de Jiu Jitsu nível 4+, sem
+        // rolagem (automática contra quem já está Imobilizado por você).
+        const ehQuebrarOssosJJ = m.nome === "Quebrar ossos";
         const periciasHtml = ehEsquivar
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
             : (ehArremessar || ehImobilizar)
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="CQC" title="Rolar d20 + CQC">CQC 🎲</button>`
+            : ehImobilizarJJ
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Jiu Jitsu" title="Rolar d20 + Jiu Jitsu">Jiu Jitsu 🎲</button>
+               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Força" title="Rolar d20 + Força">Força 🎲</button>
+               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Destreza" title="Rolar d20 + Destreza">Destreza 🎲</button>`
+            : ehQuebrarOssosJJ
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Quebrar Ossos" title="Aplicar dano automático de Quebrar ossos">Quebrar ossos 🦴</button>`
             : m.pericias.map(nomePericia => {
                 const entrada = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === nomePericia);
                 if (!entrada) return `<span class="manobra-pericia-texto">${escapeHtml(nomePericia)}</span>`;
@@ -4028,6 +4361,39 @@ function renderizarManobrasCombate() {
 
                 if (ehEsquivar) {
                     await executarManobraEsquivar(modificadoresPlanos);
+                    return;
+                }
+
+                // Imobilizar (Jiu Jitsu) — nível 2+ (manual: "usuário
+                // pode escolher entre usar a perícia Jiu Jitsu, Força ou
+                // Destreza"). Força/Destreza são ATRIBUTOS puros, não
+                // batem com nenhuma entrada de fichaAtual.pericias, por
+                // isso trata antes do lookup/early-return padrão logo
+                // abaixo (que mataria o clique nesses dois botões).
+                if (ehImobilizarJJ) {
+                    if (!combateTemParticipantes()) {
+                        toast("Imobilizar (Jiu Jitsu) precisa de um combate com participantes cadastrado.", "erro");
+                        return;
+                    }
+                    const nomeBase = btn.dataset.periciaGolpe;
+                    let modificador;
+                    if (nomeBase === "Jiu Jitsu") {
+                        const entradaJJ = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Jiu Jitsu");
+                        if (!entradaJJ) return;
+                        modificador = calcularTotalPericia(entradaJJ[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia("Jiu Jitsu")).total;
+                    } else {
+                        const atributo = nomeBase === "Força" ? "forca" : "destreza";
+                        modificador = (Number(fichaAtual.dados[atributo]) || 0) + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
+                    }
+                    abrirModalSelecionarAlvoImobilizarJJ(nomeBase, modificador, nivelJJLista);
+                    return;
+                }
+
+                // Quebrar ossos (Jiu Jitsu nível 4+) — sem rolagem, só
+                // precisa de um alvo já Imobilizado por você (ver
+                // abrirModalQuebrarOssosJJ).
+                if (ehQuebrarOssosJJ) {
+                    abrirModalQuebrarOssosJJ(null, nivelJJLista);
                     return;
                 }
 
@@ -5938,6 +6304,18 @@ function meuStatusImobilizado() {
     return (participantes[meuPid] && participantes[meuPid].imobilizado) || null;
 }
 
+// Status de Desacordado (Jiu Jitsu nível 3) de quem está sendo
+// controlado nesta tela agora — inconsciente, bloqueia TUDO igual
+// Imobilizado (ver checagem em resolverAtaque), mas sem teste pra se
+// libertar sozinho (ver definirDesacordado/soltarDesacordado em
+// mestre.js).
+function meuStatusDesacordado() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return null;
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    return (participantes[meuPid] && participantes[meuPid].desacordado) || null;
+}
+
 // Agarrar (manual): "impossibilita golpes de alcance médio e longo".
 // Pra manobras desarmadas com dano (Soco/Chute/Joelhada/Cotovelada), o
 // alcance vem direto da própria manobra (MANOBRAS_COMBATE). Pra uma
@@ -6163,6 +6541,20 @@ function montarPainelIniciativaJogador() {
         const badgeImobilizado = (p.imobilizado && p.imobilizado.ativo)
             ? ` <span class="mod-pill negativo" title="Imobilizado por ${escapeHtml(p.imobilizado.porNome)} — não consegue atacar nem se mover; teste Destreza (dificuldade ${p.imobilizado.dificuldadeEscape}) no próprio turno pra se libertar">🔒 Imobilizado</span>${pid === meuId ? ` <button type="button" class="btn-ghost btn-libertar-imobilizado" data-libertar-imobilizado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Testar Destreza</button>` : ""}`
             : "";
+        // Desacordado (Jiu Jitsu nível 3 — ver definirDesacordado em
+        // mestre.js): inconsciente, sem teste pra se libertar sozinho —
+        // por isso sem botão aqui; só o Mestre acorda (Gerenciador de
+        // Combate do Mestre).
+        const badgeDesacordado = (p.desacordado && p.desacordado.ativo)
+            ? ` <span class="mod-pill negativo" title="Desacordado por ${escapeHtml(p.desacordado.porNome)} (Jiu Jitsu nível 3) — inconsciente, não age nem se defende; só o Mestre pode acordá-lo">💤 Desacordado</span>`
+            : "";
+        // Ossos quebrados (Jiu Jitsu níveis 4/5 — ver definirOssosQuebrados
+        // em mestre.js): a penalidade em testes físicos e o "só se
+        // arrasta" com as duas pernas quebradas ficam a critério do
+        // Mestre (ver comentário em MANOBRA_QUEBRAR_OSSOS_JIUJITSU).
+        const badgeOssosQuebrados = (p.ossosQuebrados && p.ossosQuebrados.ativo)
+            ? ` <span class="mod-pill negativo" title="Ossos quebrados por ${escapeHtml(p.ossosQuebrados.porNome)} — reduz ${p.ossosQuebrados.pontosPenalidade} ponto(s) qualquer ação física (a critério do Mestre)${p.ossosQuebrados.arrastaSomente ? "; ambas as pernas quebradas — só dá pra se arrastar, testando Tolerância dificuldade 15" : (p.ossosQuebrados.pernasQuebradas >= 1 ? "; perna quebrada — impossibilita correr" : "")}">🦴 Ossos quebrados</span>`
+            : "";
         // Disparar e Avançar (CQC nível 4 — ver iniciarIniciativaCombate
         // em mestre.js, que reserva a ação): botão só aparece pro dono
         // do participante enquanto não tiver sido usado ainda na rodada.
@@ -6184,7 +6576,7 @@ function montarPainelIniciativaJogador() {
         const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -7263,6 +7655,21 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeImobilizado = (p.imobilizado && p.imobilizado.ativo)
                 ? ` <span class="mod-pill negativo" title="Imobilizado por ${escapeHtml(p.imobilizado.porNome)} — não consegue atacar nem se mover; teste Destreza (dificuldade ${p.imobilizado.dificuldadeEscape}) no próprio turno pra se libertar">🔒 Imobilizado</span> <button type="button" class="btn-ghost btn-libertar-imobilizado" data-libertar-imobilizado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Testar Destreza</button>`
                 : "";
+            // Desacordado (Jiu Jitsu nível 3 — ver definirDesacordado em
+            // mestre.js): sem teste de auto-libertação, então o único
+            // jeito de tirar é o Mestre clicar em "Acordar" aqui.
+            const badgeDesacordado = (p.desacordado && p.desacordado.ativo)
+                ? ` <span class="mod-pill negativo" title="Desacordado por ${escapeHtml(p.desacordado.porNome)} (Jiu Jitsu nível 3) — inconsciente, não age nem se defende">💤 Desacordado</span> <button type="button" class="btn-ghost btn-acordar-desacordado" data-acordar-desacordado="${pid}" style="padding:2px 6px;font-size:0.7rem;">Acordar</button>`
+                : "";
+            // Ossos quebrados (Jiu Jitsu níveis 4/5 — ver
+            // definirOssosQuebrados em mestre.js): fica só como nota pro
+            // Mestre aplicar a penalidade nos testes físicos seguintes;
+            // não some sozinho (sem cura automática no sistema), então
+            // tem um botão "Curar" pro Mestre limpar quando fizer sentido
+            // na narrativa (primeiros socorros, cura, fim de cena etc.).
+            const badgeOssosQuebrados = (p.ossosQuebrados && p.ossosQuebrados.ativo)
+                ? ` <span class="mod-pill negativo" title="Ossos quebrados por ${escapeHtml(p.ossosQuebrados.porNome)} — reduz ${p.ossosQuebrados.pontosPenalidade} ponto(s) qualquer ação física (a critério do Mestre)${p.ossosQuebrados.arrastaSomente ? "; ambas as pernas quebradas — só dá pra se arrastar, testando Tolerância dificuldade 15" : (p.ossosQuebrados.pernasQuebradas >= 1 ? "; perna quebrada — impossibilita correr" : "")}">🦴 Ossos quebrados</span> <button type="button" class="btn-ghost btn-curar-ossos" data-curar-ossos="${pid}" style="padding:2px 6px;font-size:0.7rem;">Curar</button>`
+                : "";
             // Disparar e Avançar só é acionável aqui pro NPC que o Mestre
             // estiver "atuando como" no momento (modoNpc) — precisa dos
             // dados de inventário/perícia daquele personagem carregados
@@ -7276,7 +7683,7 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeStatus = badgeStatusAtivosCombate(p);
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -7300,6 +7707,20 @@ function montarGerenciadorCombate(corpoOriginal) {
                 btnLibertar.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     await tentarLibertarImobilizado(pid);
+                });
+            }
+            const btnAcordar = linha.querySelector("[data-acordar-desacordado]");
+            if (btnAcordar) {
+                btnAcordar.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await soltarDesacordado(pid);
+                });
+            }
+            const btnCurarOssos = linha.querySelector("[data-curar-ossos]");
+            if (btnCurarOssos) {
+                btnCurarOssos.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await curarOssosQuebrados(pid);
                 });
             }
             const btnDispararAvancar = linha.querySelector("[data-disparar-avancar-cqc]");
