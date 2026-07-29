@@ -33,6 +33,7 @@ import {
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
+    cobraKaiCriticoAutomatico,
     MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC,
     danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
     danoQuebrarOssosJiuJitsu,
@@ -2918,6 +2919,15 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // no Gerenciador de Combate com iniciativa ativa.
     const entradaCQC = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "CQC");
     const nivelCQC = entradaCQC ? (Number(entradaCQC[1].nivel) || 0) : 0;
+    // Karatê Cobra Kai (manual pg. 22): "No nível 5 todos os ataques
+    // desarmados são críticos" — só vale pra golpe desarmado ROLADO COM
+    // a perícia Karatê Cobra Kai (mesma leitura usada pro dano máximo
+    // sem rolar em calcularEspecificidadeGolpe/danoMaximoSemRolar).
+    // Aplicado mais abaixo, assim que o ataque é confirmado como
+    // acerto — ver cobraKaiCriticoAutomatico em dados-manual.js.
+    const entradaCobraKai = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Karatê Cobra Kai");
+    const nivelCobraKai = entradaCobraKai ? (Number(entradaCobraKai[1].nivel) || 0) : 0;
+    const cobraKaiCriticoElegivel = armaConfig.desarmado && nomePericia === "Karatê Cobra Kai" && cobraKaiCriticoAutomatico(nivelCobraKai);
     const numParticipantesCombate = (combateAtivoCache && combateAtivoCache.participantes) ? Object.keys(combateAtivoCache.participantes).length : 0;
     const ehCombate1x1 = combateComIniciativaAtivo() && numParticipantesCombate === 2;
     // Nível 1: +1 EM ROLAGENS DE CQC (só quando a perícia usada pra
@@ -2968,9 +2978,9 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // sempre sinalizada no Log como "Fogo Amigo/Desastre" pra resolução
     // rápida do Mestre, independente do resultado final ter batido a
     // dificuldade ou não.
-    const criticoPositivo = resultadoAtaque === 20;
+    let criticoPositivo = resultadoAtaque === 20;
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
-    const detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
+    let detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
 
     // constituicaoAlvo agora é sempre preenchida (usada mais abaixo,
     // depois do dano aplicado, pro teste de Constituição que decide SE
@@ -3047,6 +3057,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const notaSituacional = notasSituacionaisLista.length ? ` Situacional: ${notasSituacionaisLista.join("; ")}.` : "";
 
     const acertou = resultadoAtaque >= dificuldade;
+
+    // Karatê Cobra Kai nível 5 (manual): "todos os ataques desarmados
+    // são críticos" — não depende do resultado final ser 20 (ver
+    // cobraKaiCriticoElegivel acima), só de ter acertado. Aplicado
+    // aqui, ANTES da mensagem de erro/acerto e de qualquer uso de
+    // criticoPositivo mais abaixo (dobra de dano, nota no Log, badge de
+    // crítico no toast e na tela de Esquiva/Bloqueio/Aparar pendente).
+    if (acertou && cobraKaiCriticoElegivel && !criticoPositivo) {
+        criticoPositivo = true;
+        detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
+    }
 
     // A rolagem do ataque já aconteceu e vai ser registrada de qualquer
     // forma (acerto ou erro) — só o gasto da ação do turno entra na fila
@@ -3162,7 +3183,9 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     let notaCritico = "";
     if (criticoPositivo) {
         danoTotal *= 2;
-        notaCritico = " ⚡ ACERTO CRÍTICO — dano dobrado!";
+        notaCritico = cobraKaiCriticoElegivel
+            ? " ⚡ ACERTO CRÍTICO (Karatê Cobra Kai nível 5 — todo golpe desarmado acertado é crítico) — dano dobrado!"
+            : " ⚡ ACERTO CRÍTICO — dano dobrado!";
     }
     // Falha Crítica (nat 1) que, apesar de tudo, ainda bateu a
     // dificuldade (modificador alto o bastante) — caso raro, mas o
@@ -3260,15 +3283,19 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         return;
     }
 
-    // Golpes Mirados (manual): Golpe Perfurante testa Sangramento,
+    // Golpes Mirados (manual pg. 51): Golpe Perfurante testa Sangramento,
     // Golpe Cortante aplica obrigatoriamente a regra de Amputação, e
     // Golpe Contundente na Cabeça agrava o teste de Desmaio.
     // Corpo a corpo/arma branca: só quando o golpe teve um local mirado
-    // de verdade ("Padrão" é "sem efeitos extras", manual). Arma de
-    // fogo: TODO tiro perfurante testa Sangramento, mirado ou não — um
-    // tiro sem mira ainda pode perfurar e sangrar, então cai na mesma
-    // regra do Torso (mesmo localArmadura do golpe "Padrão") quando não
-    // há um local mirado escolhido. O teste de Sangramento só faz
+    // de verdade ("Padrão" é "sem efeitos extras", manual) — nenhuma
+    // outra circunstância de corpo a corpo sangra. Arma de fogo (manual
+    // pg. 57): "todo projétil" pode causar sangramento — TODO tiro que
+    // causou dano testa, mirado ou não, cai na mesma regra do Torso
+    // (mesmo localArmadura do golpe "Padrão") quando não há um local
+    // mirado escolhido, e usa a fórmula própria da pág. 57 (1d[metade
+    // do dano], sempre 3 turnos — ver ehProjetil em
+    // testarSangramento/mestre.js), diferente da fração fixa por local
+    // usada em corpo a corpo. O teste de Sangramento só faz
     // sentido dentro do Gerenciador de Combate com iniciativa (é lá que
     // existe a noção de "turno" pra decrementar — ver
     // processarStatusInicioTurno em mestre.js) — o ferimento só sangra
@@ -3277,12 +3304,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // internamente quando o teste falha).
     let notaSangramento = "";
     let notaEfeitoLocal = "";
-    if (danoTotal > 0 && ehDanoPerfurante(tipoDanoKey) && participante._pid && combateComIniciativaAtivo()) {
+    if (danoTotal > 0 && (ehFogo || ehDanoPerfurante(tipoDanoKey)) && participante._pid && combateComIniciativaAtivo()) {
         const regraSangramentoAplicavel = ehFogo
             ? (localMira.sangramento || localMiraPorKey("torso").sangramento)
-            : (localMira.key !== "padrao" ? localMira.sangramento : null);
+            : (ehDanoPerfurante(tipoDanoKey) && localMira.key !== "padrao" ? localMira.sangramento : null);
         if (regraSangramentoAplicavel) {
-            const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, regraSangramentoAplicavel);
+            const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, regraSangramentoAplicavel, ehFogo);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
         }
     }
@@ -7295,7 +7322,7 @@ function avaliarReacaoPendente() {
 function renderizarReacaoPendente(r) {
     const avisoBase = r.ehArmaFogo
         ? `${escapeHtml(r.nomeAlvo)} tem Esquiva/Bloqueio guardada, mas não dá pra esquivar/aparar de arma de fogo — só Bloquear ou levar o golpe cheio. Bloquear reduz o dano pela metade (não reduz dano perfurante).`
-        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar anula o golpe inteiro; Aparar (com teste de perícia contra o resultado do ataque) anula o golpe E permite contra-atacar na hora com -1; Bloquear reduz o dano pela metade (não reduz dano perfurante). Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
+        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar rola Agilidade (+ bônus de Boxe, se tiver) contra o resultado do ataque — só anula o golpe se bater; Aparar (com teste de perícia contra o resultado do ataque) anula o golpe E permite contra-atacar na hora com -1; Bloquear reduz o dano pela metade (não reduz dano perfurante). Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
     el.reacaoDefesaCorpo.innerHTML = `
         <p class="hint">${escapeHtml(r.nomeAtacante)} acertou ${escapeHtml(r.nomeAlvo)} com ${escapeHtml(r.nomeArma)} (${r.resultadoAtaque} vs. dificuldade ${r.dificuldade}). Dano previsto${escapeHtml(r.danoDadoTexto || "")}: ${r.danoTotal} (${escapeHtml(r.tipoDanoLabel)}).</p>
         <p class="hint">${avisoBase}</p>
@@ -7317,7 +7344,13 @@ function renderizarReacaoPendente(r) {
     if (!r.ehArmaFogo) {
         const btnEsquivar = document.createElement("button");
         btnEsquivar.className = "btn-lime"; btnEsquivar.type = "button"; btnEsquivar.innerText = "Esquivar";
-        btnEsquivar.addEventListener("click", () => responder("esquivar"));
+        btnEsquivar.addEventListener("click", async () => {
+            btnEsquivar.disabled = true;
+            const modDado = await calcularModEsquivarParticipante(r.alvoTipo, r.alvoRefId, r.ataqueArmaBranca);
+            const brutoDado = rolarD20();
+            const resultadoDado = brutoDado + modDado;
+            await responder("esquivar", { brutoDado, modDado, resultadoDado });
+        });
         el.reacaoDefesaBotoes.appendChild(btnEsquivar);
 
         // Manual: "não é possível aparar ataques de armas brancas
@@ -7359,6 +7392,60 @@ function renderizarReacaoPendente(r) {
     el.reacaoDefesaBotoes.appendChild(btnBloquear);
     el.reacaoDefesaBotoes.appendChild(btnNenhuma);
     el.modalReacaoDefesa.classList.add("active");
+}
+
+// Modificador (d20 + isso) do teste de Esquivar de quem RECEBEU o golpe
+// (manual: Agilidade vs. dificuldade = pontuação do ataque sofrido).
+// Mesma fórmula de Agilidade de combate usada em
+// calcularStatsCombateParticipante (mestre.js) — penalidade de Machucado/
+// Muito Machucado (estadoSaude) E de Exausto/Crítico (estadoEnergia), já
+// que Agilidade é um teste físico igual iniciativa. Soma o bônus passivo
+// de Boxe (manual pg. 22: +2 esquivando de golpe desarmado, +1 de arma
+// branca — ver bonusEsquivaBoxe em dados-manual.js) quando o alvo tem a
+// perícia, escolhendo o valor certo conforme `ataqueArmaBranca`. NPC
+// "rápido" usa a Agilidade solta cadastrada nele (sem perícias, então
+// nunca tem Boxe).
+async function calcularModEsquivarParticipante(alvoTipo, alvoRefId, ataqueArmaBranca) {
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoRefId}`)));
+        if (!snap.exists()) return 0;
+        const fichaAlvo = normalizarFicha(snap.val());
+        const modificadoresPlanos = coletarModificadores(fichaAlvo);
+        const derivados = calcularDerivados(fichaAlvo.dados, modificadoresPlanos);
+        const pvMaxCalc = Math.round(derivados.recursos.pv.total) + (Number(fichaAlvo.dados.pvBonusExtra) || 0);
+        const overridePv = fichaAlvo.dados.pvMaximoOverride;
+        const pvMax = (overridePv !== null && overridePv !== undefined && overridePv !== "") ? (Number(overridePv) || 0) : pvMaxCalc;
+        const pvAtual = (fichaAlvo.dados.pvAtual !== null && fichaAlvo.dados.pvAtual !== undefined) ? Number(fichaAlvo.dados.pvAtual) : pvMax;
+        const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
+        const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
+        const energiaMax = Math.round(derivados.recursos.energia.total);
+        const energiaAtual = (fichaAlvo.dados.energiaAtual !== null && fichaAlvo.dados.energiaAtual !== undefined) ? Number(fichaAlvo.dados.energiaAtual) : energiaMax;
+        const estadoEnergia = calcularEstadoEnergia(energiaAtual, energiaMax, false);
+        const modAgilidade = Math.round(derivados.secundarios.agilidade.total) + estadoSaude.penalidadeTestes + estadoEnergia.penalidadeFisica;
+        const entradaBoxe = Object.entries(fichaAlvo.pericias || {}).find(([, p]) => p.nome === "Boxe");
+        const bonusBoxe = entradaBoxe ? bonusEsquivaBoxe(entradaBoxe[1].nivel) : null;
+        const extraBoxe = bonusBoxe ? (ataqueArmaBranca ? bonusBoxe.armaBranca : bonusBoxe.desarmado) : 0;
+        return modAgilidade + extraBoxe;
+    }
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoRefId}`)));
+    if (!snap.exists()) return 0;
+    const npc = snap.val();
+    if (npc.modoDetalhado && npc.atributosPrimarios) {
+        const secundarios = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride);
+        const pvMax = secundarios.recursos.pv.valor;
+        const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : pvMax;
+        const temTolerancia = temPericiaTreinada(npc.periciasNpc, "Tolerância");
+        const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
+        const energiaMax = secundarios.recursos.energia.valor;
+        const energiaAtual = (npc.energiaAtual !== null && npc.energiaAtual !== undefined) ? Number(npc.energiaAtual) : energiaMax;
+        const estadoEnergia = calcularEstadoEnergia(energiaAtual, energiaMax, false);
+        const modAgilidade = Math.round(secundarios.secundarios.agilidade.valor) + estadoSaude.penalidadeTestes + estadoEnergia.penalidadeFisica;
+        const entradaBoxe = npc.periciasNpc ? Object.entries(npc.periciasNpc).find(([, p]) => p.nome === "Boxe") : null;
+        const bonusBoxe = entradaBoxe ? bonusEsquivaBoxe(entradaBoxe[1].nivel) : null;
+        const extraBoxe = bonusBoxe ? (ataqueArmaBranca ? bonusBoxe.armaBranca : bonusBoxe.desarmado) : 0;
+        return modAgilidade + extraBoxe;
+    }
+    return Number(npc.agilidade) || 0;
 }
 
 // Modificador (d20 + isso) do teste de Aparar de quem RECEBEU o golpe —
@@ -7758,7 +7845,7 @@ function montarPainelIniciativaJogador() {
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
                 <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
-                <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}</span>
+                <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}${p.bonusCobraKaiIniciativa ? ` (+${p.bonusCobraKaiIniciativa} Cobra Kai)` : ""}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
             </div>`;
@@ -8931,7 +9018,7 @@ function montarGerenciadorCombate(corpoOriginal) {
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
                 <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
-                <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""})</span>
+                <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""}${p.bonusCobraKaiIniciativa ? ` + ${p.bonusCobraKaiIniciativa} Cobra Kai` : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
             `;

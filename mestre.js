@@ -17,7 +17,14 @@ import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calenda
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa } from "./dados-manual.js";
+
+// Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
+// (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
+function nivelDaPericia(pericias, nome) {
+    const entrada = Object.values(pericias || {}).find(p => p.nome === nome);
+    return entrada ? (Number(entrada.nivel) || 0) : 0;
+}
 
 // ---------------------------------------------------------------------
 // Padrão de vida — valores semanais fixos do manual (pg. 105-106).
@@ -198,16 +205,30 @@ export async function aplicarSangramento(participanteId, danoPorTurno, turnos, o
 
 // Teste de Constituição contra Sangramento (manual): rolado uma vez por
 // Golpe Mirado PERFURANTE que causou dano de verdade (golpe "Padrão",
-// sem mirar, nunca sangra — manual: "sem efeitos extras"), ANTES de
-// decidir se aplicarSangramento entra em ação. dificuldade = 10 +
-// nível da arma + agravante do local (regraLocal.difExtra —
-// dificuldadeSangramento em regras.js). Sucesso (d20 + Constituição do
+// sem mirar, nunca sangra — manual: "sem efeitos extras") OU por
+// qualquer tiro de arma de fogo perfurante (mirado ou não — manual pg.
+// 57: "ao ser atingido por um projétil, role um teste de
+// Constituição"), ANTES de decidir se aplicarSangramento entra em
+// ação. dificuldade = 10 + nível da arma + agravante do local
+// (regraLocal.difExtra — dificuldadeSangramento em regras.js; o manual
+// não dá uma dificuldade separada pra pág. 57, então a mesma fórmula é
+// reaproveitada pra ambos os casos). Sucesso (d20 + Constituição do
 // alvo >= dificuldade) resiste — o ferimento não sangra, sem nenhum
-// efeito mecânico. Falha entra como uma entrada nova de Sangramento,
-// com duração e dano fixo definidos por regraLocal (ver LOCAIS_MIRA em
-// dados-manual.js — regraLocal é o campo `sangramento` do local
-// mirado). Retorna o detalhe da rolagem pro chamador registrar no Log.
-export async function testarSangramento(participanteId, constituicaoAlvo, nivelArma, danoOriginalBruto, regraLocal) {
+// efeito mecânico.
+//
+// Falha entra como uma entrada nova de Sangramento, mas o CÁLCULO do
+// dano/duração muda conforme a origem (ehProjetil):
+// - Golpe Mirado corpo a corpo/arma branca (manual pg. 51): dano FIXO
+//   = fração do dano original (regraLocal.fracaoDano), por
+//   regraLocal.turnos turnos (2 ou 3, conforme o local).
+// - Tiro de arma de fogo (manual pg. 57): "1d metade do dano recebido
+//   [...] sempre arredondado pra baixo" — um ÚNICO dado é rolado (o
+//   próprio tamanho do dado é metade do dano causado, ex.: 20 de dano
+//   → 1d10) e o RESULTADO dessa rolagem vale como dano fixo pelos
+//   próximos 3 turnos (não é rerolado a cada turno — mesmo padrão do
+//   exemplo do manual: "rolou 1d10, resultado 7 [...] receberá por três
+//   turnos 7 de dano").
+export async function testarSangramento(participanteId, constituicaoAlvo, nivelArma, danoOriginalBruto, regraLocal, ehProjetil = false) {
     if (!participanteId || !regraLocal) return null;
     const dificuldade = dificuldadeSangramento(nivelArma, regraLocal.difExtra);
     const bruto = rolarD20();
@@ -215,15 +236,25 @@ export async function testarSangramento(participanteId, constituicaoAlvo, nivelA
     const resultado = bruto + modConstituicao;
     const sucesso = resultado >= dificuldade;
     let sangramento = null;
+    let detalheDano = "";
     if (!sucesso) {
-        const danoPorTurno = Math.max(0, Math.floor((Number(danoOriginalBruto) || 0) * regraLocal.fracaoDano));
-        sangramento = await aplicarSangramento(participanteId, danoPorTurno, regraLocal.turnos, "Golpe Mirado perfurante");
+        let danoPorTurno, turnos;
+        if (ehProjetil) {
+            const facesDado = Math.max(1, Math.floor((Number(danoOriginalBruto) || 0) / 2));
+            danoPorTurno = rolarDado(facesDado);
+            turnos = 3;
+            detalheDano = ` (1d${facesDado}: ${danoPorTurno})`;
+        } else {
+            danoPorTurno = Math.max(0, Math.floor((Number(danoOriginalBruto) || 0) * regraLocal.fracaoDano));
+            turnos = regraLocal.turnos;
+        }
+        sangramento = await aplicarSangramento(participanteId, danoPorTurno, turnos, ehProjetil ? "Tiro de arma de fogo" : "Golpe Mirado perfurante");
     }
     return {
         dificuldade, bruto, modConstituicao, resultado, sucesso, sangramento,
         detalhe: sucesso
             ? `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — RESISTIU, não sangrou.`
-            : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR (${sangramento.danoPorTurno} de dano fixo por turno, por ${sangramento.turnos} turnos).`
+            : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR${detalheDano} (${sangramento.danoPorTurno} de dano fixo por turno, por ${sangramento.turnos} turnos).`
     };
 }
 
@@ -488,6 +519,11 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
         const temTolerancia = temPericiaTreinada(ficha.pericias, "Tolerância");
         const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, ignorarPenalidadeSaude);
         const velocidadeAjustada = aplicarEstadoSaudeVelocidade(derivados.secundarios.velocidade, estadoSaude).total;
+        // Karatê Cobra Kai (manual pg. 22): "a cada dois pontos na
+        // perícia bônus +1 na iniciativa" — automático, sem checkbox
+        // (ver bonusCobraKaiIniciativa em dados-manual.js), somado na
+        // rolagem de iniciativa em iniciarIniciativaCombate abaixo.
+        const nivelCobraKai = nivelDaPericia(ficha.pericias, "Karatê Cobra Kai");
         // Energia — mesma automação da Ficha (ver regras.js): Energia
         // Baixa/Crítica penaliza modAgilidade (teste físico) igual ao
         // estado de saúde; em 0 de Energia, o participante está morto.
@@ -505,7 +541,8 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
             energia: energiaAtual,
             energiaMax,
             estadoEnergia: estadoEnergia.estado,
-            estadoEnergiaLabel: estadoEnergia.label
+            estadoEnergiaLabel: estadoEnergia.label,
+            nivelCobraKai
         };
     }
 
@@ -524,6 +561,10 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
         const energiaMax = secundarios.recursos.energia.valor;
         const energiaAtual = (npc.energiaAtual !== null && npc.energiaAtual !== undefined) ? Number(npc.energiaAtual) : energiaMax;
         const estadoEnergia = calcularEstadoEnergia(energiaAtual, energiaMax, ignorarPenalidadeSaude);
+        // Karatê Cobra Kai (manual pg. 22): mesmo bônus de iniciativa
+        // da ficha de jogador, agora pro NPC detalhado (que tem
+        // perícias próprias em npc.periciasNpc).
+        const nivelCobraKai = nivelDaPericia(npc.periciasNpc, "Karatê Cobra Kai");
         return {
             modAgilidade: Math.round(secundarios.secundarios.agilidade.valor) + estadoSaude.penalidadeTestes + estadoEnergia.penalidadeFisica,
             velocidade: Math.round(velocidadeAjustada),
@@ -534,7 +575,8 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
             energia: energiaAtual,
             energiaMax,
             estadoEnergia: estadoEnergia.estado,
-            estadoEnergiaLabel: estadoEnergia.label
+            estadoEnergiaLabel: estadoEnergia.label,
+            nivelCobraKai
         };
     }
 
@@ -673,6 +715,12 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, disparar
         // fica salvo no participante só pra exibir a origem do +1 na UI
         // (badge "🥋 +1 CQC" no Gerenciador de Combate).
         const bonusCQC = bonusIniciativaCQC[id] ? 1 : 0;
+        // Karatê Cobra Kai (manual pg. 22): +1 na iniciativa a cada 2
+        // pontos na perícia — automático (sem checkbox, diferente do
+        // +1 de CQC nível 2 acima, que É condicional a uma escolha
+        // narrativa). Ver bonusCobraKaiIniciativa em dados-manual.js e
+        // nivelCobraKai calculado em calcularStatsCombateParticipante.
+        const bonusCobraKai = bonusCobraKaiIniciativa(stats.nivelCobraKai);
         // CQC nível 4 ("Disparar e Avançar" — manual pg. 23): quem foi
         // marcado no checkbox de abrirModalBonusIniciativaCQC reserva já
         // AGORA 1 ação do próprio 1º turno (o manual: "utilizando uma
@@ -699,8 +747,9 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, disparar
             ...base,
             ...stats,
             rolagemBruta,
-            iniciativa: rolagemBruta + stats.modAgilidade + bonusCQC,
+            iniciativa: rolagemBruta + stats.modAgilidade + bonusCQC + bonusCobraKai,
             bonusCQCIniciativa: !!bonusCQC,
+            bonusCobraKaiIniciativa: bonusCobraKai,
             acoesMax,
             acoes: dispararAvancar ? Math.max(0, acoesMax - 1) : acoesMax,
             dispararAvancarDisponivel: dispararAvancar,
@@ -1106,7 +1155,7 @@ export async function abrirReacaoPendente(dados) {
 // três (exceto "nenhuma") consomem a ação de Esquiva/Bloqueio guardada.
 // "nenhuma" (ou a ação já ter sido gasta antes de responder) deixa
 // passar o golpe cheio e NÃO consome a ação guardada.
-export async function responderReacaoPendente(escolha, dadosAparar = null) {
+export async function responderReacaoPendente(escolha, dadosExtra = null) {
     const snap = await get(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
     if (!snap.exists()) return null;
     const r = snap.val();
@@ -1135,9 +1184,22 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
     let danoParaAplicar = r.danoTotal;
     let notaEscolha;
     let apararConseguiu = false;
-    if (escolha === "esquivar" && consumiu) {
-        danoParaAplicar = 0;
-        notaEscolha = `${r.nomeAlvo} usou a ação guardada pra ESQUIVAR e ANULOU o golpe.`;
+    if (escolha === "esquivar" && consumiu && dadosExtra) {
+        // Esquivar (manual): teste de Agilidade vs. dificuldade = a
+        // pontuação do ataque sofrido (r.resultadoAtaque) — mesmo
+        // padrão de "aparar" logo abaixo. dadosExtra já vem calculado
+        // do lado do cliente (ver calcularModEsquivarParticipante em
+        // ficha.js), com o bônus de Boxe (+2 desarmado/+1 arma branca)
+        // já embutido no modDado quando aplicável.
+        const { brutoDado, modDado, resultadoDado } = dadosExtra;
+        const esquivouConseguiu = resultadoDado >= r.resultadoAtaque;
+        const detalheDado = `d20 (${brutoDado}) ${modDado >= 0 ? "+" : ""}${modDado} = ${resultadoDado}`;
+        if (esquivouConseguiu) {
+            danoParaAplicar = 0;
+            notaEscolha = `${r.nomeAlvo} ESQUIVOU (${detalheDado}) vs. ${r.resultadoAtaque} do ataque — ANULOU o golpe.`;
+        } else {
+            notaEscolha = `${r.nomeAlvo} tentou ESQUIVAR (${detalheDado}) vs. ${r.resultadoAtaque} do ataque — FALHOU. Ação guardada consumida mesmo assim.`;
+        }
     } else if (escolha === "bloquear" && consumiu) {
         if (r.tipoDanoKey === "perfuracao_comum" || r.tipoDanoKey === "perfuracao_especial") {
             notaEscolha = `${r.nomeAlvo} tentou BLOQUEAR, mas dano perfurante não é reduzido por bloqueio. Ação guardada consumida mesmo assim.`;
@@ -1145,8 +1207,8 @@ export async function responderReacaoPendente(escolha, dadosAparar = null) {
             danoParaAplicar = Math.floor(danoParaAplicar / 2);
             notaEscolha = `${r.nomeAlvo} usou a ação guardada pra BLOQUEAR e reduziu o dano pela metade.`;
         }
-    } else if (escolha === "aparar" && consumiu && dadosAparar) {
-        const { periciaEscolhida, brutoDado, modDado, resultadoDado } = dadosAparar;
+    } else if (escolha === "aparar" && consumiu && dadosExtra) {
+        const { periciaEscolhida, brutoDado, modDado, resultadoDado } = dadosExtra;
         apararConseguiu = resultadoDado >= r.resultadoAtaque;
         const detalheDado = `d20 (${brutoDado}) ${modDado >= 0 ? "+" : ""}${modDado} = ${resultadoDado}`;
         if (apararConseguiu) {

@@ -603,6 +603,32 @@ export function calcularEspecificidadeGolpe(nomeManobra, nomePericia, nivelPeric
     return { escalaMult, dadoMultiplicador, danoMaximoSemRolar };
 }
 
+// ---------------------------------------------------------------------
+// Karatê Cobra Kai (manual pg. 22): "a cada dois pontos na perícia
+// bônus +1 na iniciativa e golpes desarmados causam o dano total, não
+// sendo necessário rolar Força [dano máximo já coberto acima, em
+// danoMaximoSemRolar]. No nível 5 todos os ataques desarmados são
+// críticos." Os outros dois efeitos, faltantes até então:
+//
+// - bonusCobraKaiIniciativa: +1 na iniciativa a cada 2 pontos na
+//   perícia (nível 2 → +1, nível 4 → +2 etc.) — automático pra quem
+//   tem a perícia, sem depender de escolha narrativa (diferente do +1
+//   de CQC nível 2, que É condicional). Somado direto em
+//   iniciarIniciativaCombate (mestre.js), igual ao resto da iniciativa.
+// - cobraKaiCriticoAutomatico: no nível 5, todo golpe desarmado
+//   ROLADO COM Karatê Cobra Kai que acerta já é Acerto Crítico (dano
+//   dobrado), sem precisar do resultado final ser exatamente 20 — ver
+//   resolverAtaque em ficha.js, que soma essa condição em
+//   criticoPositivo assim que o ataque é confirmado como acerto.
+// ---------------------------------------------------------------------
+export function bonusCobraKaiIniciativa(nivelCobraKai) {
+    return Math.floor((Number(nivelCobraKai) || 0) / 2);
+}
+
+export function cobraKaiCriticoAutomatico(nivelCobraKai) {
+    return Number(nivelCobraKai) >= 5;
+}
+
 // Boxe também dá um bônus passivo pra esquivar desarmado (manual pg. 22):
 // +2 contra golpes desarmados, +1 contra armas brancas — independe do
 // nível, basta ter a perícia. Usado pra mostrar o bônus na manobra
