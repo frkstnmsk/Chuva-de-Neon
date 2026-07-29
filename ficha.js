@@ -7194,13 +7194,26 @@ function configurarCalendario() {
                 clima: el.calEditClima.value
             };
             await salvarCalendario(novo);
+            // Atualiza a variável local NA HORA, sem esperar o listener
+            // ouvirCalendario ecoar de volta do servidor (assíncrono, não
+            // é instantâneo). Sem isso, clicar em "Passar o dia" logo
+            // depois de "Salvar calendário" corria o risco de pegar
+            // calendarioAtual ainda com o valor ANTIGO (o de antes deste
+            // salvamento) e avançar 1 dia a partir dele — sobrescrevendo
+            // a data que acabou de ser salva com "data antiga + 1 dia".
+            calendarioAtual = novo;
             toast("Calendário atualizado.");
         });
 
         el.btnPassarDia.addEventListener("click", async () => {
             if (!calendarioAtual) return;
             const fichasParaPopup = todasAsFichasCache;
-            const { virouDomingo, popups } = await passarODia(calendarioAtual, fichasParaPopup);
+            const { calendario, virouDomingo, popups } = await passarODia(calendarioAtual, fichasParaPopup);
+            // Mesmo motivo do handler de "Salvar calendário" acima: evita
+            // que um segundo clique rápido em "Passar o dia" (ou um clique
+            // em "Salvar calendário" logo em seguida) use a versão antiga
+            // do dia, de antes deste avanço.
+            calendarioAtual = calendario;
             toast(virouDomingo ? "Dia avançado — caiu Domingo!" : "Dia avançado.");
         });
     }
