@@ -33,6 +33,20 @@
 //                                              // lista da aba "Receitas"
 //                                              // pelo nível atual da perícia).
 //     dificuldade: 12,                        // número, opcional
+//     dificuldadeArmar: null,                 // número, opcional — só
+//                                              // Explosivos tem teste
+//                                              // separado de criar e
+//                                              // armar o item (manual
+//                                              // pg. 81: "Teste e dif
+//                                              // criar e armar:
+//                                              // Explosivos, dificuldade
+//                                              // 22, 18" — o primeiro
+//                                              // número é `dificuldade`
+//                                              // acima, o segundo é
+//                                              // este). null pra
+//                                              // qualquer receita que
+//                                              // só tem um teste único
+//                                              // (a imensa maioria).
 //     tempoCriacao: "2 horas",                // texto livre, opcional
 //     ingredientes: [                         // lista de materiais válidos
 //         { material: "Metal leve", qualidade: "Baixa", quantidade: 2 }, // (ver

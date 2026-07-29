@@ -347,6 +347,7 @@ const el = {
     calClima: document.getElementById("cal-clima"),
     calendarioEdicaoMestre: document.getElementById("calendario-edicao-mestre"),
     calEditData: document.getElementById("cal-edit-data"),
+    calEditDiaSemana: document.getElementById("cal-edit-dia-semana"),
     calEditHora: document.getElementById("cal-edit-hora"),
     calEditTemp: document.getElementById("cal-edit-temp"),
     calEditClima: document.getElementById("cal-edit-clima"),
@@ -902,6 +903,15 @@ function montarSelectsFixos() {
         opt.value = c;
         opt.innerText = c;
         el.calEditClima.appendChild(opt);
+    });
+
+    // ---- Dia da semana (calendário, edição do Mestre) ----
+    el.calEditDiaSemana.innerHTML = "";
+    diasSemana().forEach(d => {
+        const opt = document.createElement("option");
+        opt.value = d;
+        opt.innerText = d;
+        el.calEditDiaSemana.appendChild(opt);
     });
 }
 
@@ -5425,6 +5435,7 @@ function renderizarReceitas() {
                     const r = receitasGlobaisCache.find(g => g.id === livre.receitaGlobalId);
                     const detalhes = r ? [
                         (r.dificuldade || r.dificuldade === 0) ? `Dificuldade ${r.dificuldade}` : null,
+                        (r.dificuldadeArmar || r.dificuldadeArmar === 0) ? `Dificuldade de armar ${r.dificuldadeArmar}` : null,
                         r.tempoCriacao ? `Tempo: ${escapeHtml(r.tempoCriacao)}` : null,
                         formatarIngredientes(r) ? `Materiais: ${escapeHtml(formatarIngredientes(r))}` : null,
                         (r.custo || r.custo === 0) ? `Custo: CN$ ${r.custo}` : null
@@ -5646,6 +5657,10 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             <input type="number" id="receita-dificuldade" min="0" step="1" value="${r.dificuldade ?? ""}">
         </div>
         <div class="modal-field">
+            <label for="receita-dificuldade-armar">Dificuldade de armar (opcional — manual: só Explosivos tem teste separado de criar e armar, pg. 81)</label>
+            <input type="number" id="receita-dificuldade-armar" min="0" step="1" value="${r.dificuldadeArmar ?? ""}">
+        </div>
+        <div class="modal-field">
             <label for="receita-tempo">Tempo de criação (opcional)</label>
             <input type="text" id="receita-tempo" placeholder="ex.: 2 horas, 1 dia..." value="${escapeHtml(r.tempoCriacao || "")}">
         </div>
@@ -5801,6 +5816,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             periciaVinculada: selectPericia.value,
             nivel: Number(selectNivel.value) || 1,
             dificuldade: modal.querySelector("#receita-dificuldade").value !== "" ? Number(modal.querySelector("#receita-dificuldade").value) || 0 : null,
+            dificuldadeArmar: modal.querySelector("#receita-dificuldade-armar").value !== "" ? Number(modal.querySelector("#receita-dificuldade-armar").value) || 0 : null,
             tempoCriacao: modal.querySelector("#receita-tempo").value.trim(),
             ingredientes: Array.from(listaIngredientes.querySelectorAll(".receita-ingrediente-linha")).map(linha => {
                 const selects = linha.querySelectorAll("select");
@@ -7163,6 +7179,7 @@ function configurarCalendario() {
             if (document.activeElement !== el.calEditHora) el.calEditHora.value = cal.hora || "";
             if (document.activeElement !== el.calEditTemp) el.calEditTemp.value = cal.temperatura ?? "";
             el.calEditClima.value = cal.clima || climas()[0];
+            el.calEditDiaSemana.value = cal.diaSemana || diasSemana()[0];
         }
     });
 
@@ -7171,6 +7188,7 @@ function configurarCalendario() {
             const novo = {
                 ...calendarioAtual,
                 dataLabel: el.calEditData.value,
+                diaSemana: el.calEditDiaSemana.value,
                 hora: el.calEditHora.value,
                 temperatura: Number(el.calEditTemp.value) || 0,
                 clima: el.calEditClima.value
@@ -8714,7 +8732,7 @@ function montarPainelBibliotecaReceitas(corpo) {
             card.className = "npc-card";
             card.innerHTML = `
                 <strong>${escapeHtml(r.nome)}</strong>
-                <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}</span>
+                <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}${(r.dificuldadeArmar || r.dificuldadeArmar === 0) ? ` · Dificuldade de armar ${r.dificuldadeArmar}` : ""}</span>
                 ${formatarIngredientes(r) ? `<span class="hint-inline">Materiais: ${escapeHtml(formatarIngredientes(r))}</span>` : ""}
                 <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
             `;
