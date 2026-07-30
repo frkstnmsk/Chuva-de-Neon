@@ -757,6 +757,22 @@ export function tagExigePericiaUso(tagKey) {
         tagKey === "destrave";
 }
 
+// Eletrônico é a única tag (fora Ferramenta de Criação geral, que tem
+// mecanismo próprio) cujo item pode ficar vinculado a MAIS DE UMA
+// perícia ao mesmo tempo — um item pode servir tanto pra Hackear
+// quanto pra Programar. periciaUso guarda um array quando é essa a
+// tag; as demais tags continuam guardando uma string única (ou null).
+// periciaUsoComoArray normaliza os dois formatos pra quem só quer
+// iterar as perícias vinculadas, não importa a tag.
+export function ehTagMultiPericia(tagKey) {
+    return tagKey === "eletronico";
+}
+
+export function periciaUsoComoArray(periciaUso) {
+    if (!periciaUso) return [];
+    return Array.isArray(periciaUso) ? periciaUso.filter(Boolean) : [periciaUso];
+}
+
 export function periciasVinculaveisPorTag(tagKey) {
     switch (tagKey) {
         // "Sem Perícia" fica só aqui (não entra em PERICIAS_ARMA_COMBATE

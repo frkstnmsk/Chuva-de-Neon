@@ -464,8 +464,10 @@
             </label>
         </div>
         <div class="modal-field" id="modal-campo-pericia-uso" style="display:none;">
-            <label for="modal-pericia-uso">Perícia vinculada (obrigatória)</label>
+            <label for="modal-pericia-uso" id="modal-label-pericia-uso">Perícia vinculada (obrigatória)</label>
             <select id="modal-pericia-uso"></select>
+            <div id="modal-pericia-uso-checkboxes" style="display:none;"></div>
+            <p class="hint" id="hint-pericia-uso-multipla" style="display:none;">Eletrônico pode ficar vinculado a mais de uma perícia — marque as que fizerem sentido pra este item (ex.: um item que serve tanto pra Hackear quanto pra Programar).</p>
         </div>
         <div class="hint" id="hint-ferramenta-criacao-geral" style="display:none;">Ferramenta de Criação (geral): o mesmo kit serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários e Eletrônica — não precisa escolher uma perícia aqui, quem usa o item escolhe na hora de "Usar".</div>
         <div class="modal-field" id="modal-campo-classe-protecao" style="display:none;">

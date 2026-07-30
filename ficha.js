@@ -20,6 +20,7 @@ import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
+    ehTagMultiPericia, periciaUsoComoArray,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
     CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
@@ -290,7 +291,10 @@ const el = {
     modalNivelTag: document.getElementById("modal-nivel-tag"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
     hintFerramentaCriacaoGeral: document.getElementById("hint-ferramenta-criacao-geral"),
+    modalLabelPericiaUso: document.getElementById("modal-label-pericia-uso"),
     modalPericiaUso: document.getElementById("modal-pericia-uso"),
+    modalPericiaUsoCheckboxes: document.getElementById("modal-pericia-uso-checkboxes"),
+    hintPericiaUsoMultipla: document.getElementById("hint-pericia-uso-multipla"),
     modalCampoClasseProtecao: document.getElementById("modal-campo-classe-protecao"),
     modalLabelClasseProtecao: document.getElementById("modal-label-classe-protecao"),
     modalClasseProtecao: document.getElementById("modal-classe-protecao"),
@@ -2049,7 +2053,7 @@ async function recarregarArma(armaId, armaItem) {
 // Rola de fato a perícia vinculada ao uso de um item — extraído de
 // rolarUsoItem pra poder ser chamado tanto direto (item com periciaUso
 // fixo) quanto depois de escolher qual perícia usar (Kit de Ferramentas
-// de Criação geral — ver abrirModalEscolherPericiaFerramentaGeral).
+// de Criação geral — ver abrirModalEscolherPericiaItem).
 async function rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos) {
     const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
     await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
@@ -2062,17 +2066,28 @@ async function rolarUsoItem(it, modificadoresPlanos) {
     // dados-manual.js) — por isso não fica travado numa perícia só na
     // criação do item; a escolha é feita aqui, na hora de usar.
     if (ehFerramentaCriacaoGeral(it.tag) && !it.periciaUso) {
-        abrirModalEscolherPericiaFerramentaGeral(it, modificadoresPlanos);
+        abrirModalEscolherPericiaItem(it, PERICIAS_FERRAMENTA_CRIACAO, modificadoresPlanos, "Kit de Ferramentas de Criação (geral) — serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários e Eletrônica. Escolha qual perícia rolar agora.");
         return;
     }
-    const nomePericia = it.periciaUso;
+    // Eletrônico pode ficar vinculado a mais de uma perícia ao mesmo
+    // tempo (Hacking e Programação — ver ehTagMultiPericia em
+    // dados-manual.js). Com as duas marcadas, pergunta qual rolar agora,
+    // igual ao Kit de Ferramentas de Criação geral acima.
+    const periciasItem = periciaUsoComoArray(it.periciaUso);
+    if (periciasItem.length > 1) {
+        abrirModalEscolherPericiaItem(it, periciasItem, modificadoresPlanos, "Este item está vinculado a mais de uma perícia. Escolha qual rolar agora.");
+        return;
+    }
+    const nomePericia = periciasItem[0];
     if (!nomePericia) { toast("Este item não tem perícia vinculada.", "erro"); return; }
     await rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos);
 }
 
-// Escolha de qual das 5 perícias rolar com um Kit de Ferramentas de
-// Criação (geral) — ver rolarUsoItem acima.
-function abrirModalEscolherPericiaFerramentaGeral(it, modificadoresPlanos) {
+// Escolha de qual perícia rolar quando um item serve pra mais de uma
+// ao mesmo tempo — usado tanto pelo Kit de Ferramentas de Criação
+// (geral) quanto por itens Eletrônico com Hacking + Programação
+// vinculados (ver rolarUsoItem acima).
+function abrirModalEscolherPericiaItem(it, opcoes, modificadoresPlanos, textoAjuda) {
     let modal = document.getElementById("modal-escolher-pericia-kit");
     if (!modal) {
         modal = document.createElement("div");
@@ -2086,11 +2101,11 @@ function abrirModalEscolherPericiaFerramentaGeral(it, modificadoresPlanos) {
             <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
         </div>
         <h4>Escolha a perícia</h4>
-        <p class="hint">Kit de Ferramentas de Criação (geral) — serve pra Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários e Eletrônica. Escolha qual perícia rolar agora.</p>
+        <p class="hint">${escapeHtml(textoAjuda)}</p>
         <div class="combate-lista" id="kit-pericia-opcoes"></div>
     `;
     const opcoesDiv = modal.querySelector("#kit-pericia-opcoes");
-    PERICIAS_FERRAMENTA_CRIACAO.forEach(nome => {
+    opcoes.forEach(nome => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "btn-lime";
@@ -4285,7 +4300,8 @@ function renderizarInventario(modificadoresPlanos) {
             const ativoItem = it.ativo !== false;
             if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
             const kitGeral = ehFerramentaCriacaoGeral(it.tag);
-            const podeUsar = itemPodeUsar(it) && (!!it.periciaUso || kitGeral);
+            const periciasUsoItem = periciaUsoComoArray(it.periciaUso);
+            const podeUsar = itemPodeUsar(it) && (!!periciasUsoItem.length || kitGeral);
             const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
             const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
             const ehArmaItem = ehArma(it.tag);
@@ -4293,8 +4309,8 @@ function renderizarInventario(modificadoresPlanos) {
             const equipadaItem = !!it.equipada;
             const podeEquipar = itemPodeEquipar(it);
             const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
-            const periciaLabel = it.periciaUso
-                ? ` · Usa: ${escapeHtml(it.periciaUso)}`
+            const periciaLabel = periciasUsoItem.length
+                ? ` · Usa: ${escapeHtml(periciasUsoItem.join(", "))}`
                 : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
             const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
             const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
@@ -4329,7 +4345,7 @@ function renderizarInventario(modificadoresPlanos) {
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
                     ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : `Rolar d20 + ${it.periciaUso}`) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
+                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
                     ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
@@ -6602,27 +6618,53 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // dados-manual.js).
     const mostraPericia = tagTemPericiaUso(tagKey);
     const exigePericia = tagExigePericiaUso(tagKey);
+    const multiPericia = ehTagMultiPericia(tagKey);
     el.modalCampoPericiaUso.style.display = mostraPericia ? "flex" : "none";
     if (mostraPericia) {
-        const labelPericiaUso = document.querySelector('label[for="modal-pericia-uso"]');
-        if (labelPericiaUso) labelPericiaUso.textContent = exigePericia ? "Perícia vinculada (obrigatória)" : "Perícia vinculada (opcional)";
+        if (el.modalLabelPericiaUso) el.modalLabelPericiaUso.textContent = exigePericia ? "Perícia vinculada (obrigatória)" : "Perícia vinculada (opcional)";
         const opcoes = periciasVinculaveisPorTag(tagKey);
-        el.modalPericiaUso.innerHTML = "";
-        if (!exigePericia) {
-            const optNenhuma = document.createElement("option");
-            optNenhuma.value = "";
-            optNenhuma.innerText = "Nenhuma (sem rolagem automática de \"Usar\")";
-            el.modalPericiaUso.appendChild(optNenhuma);
+        el.modalPericiaUso.style.display = multiPericia ? "none" : "";
+        el.modalPericiaUsoCheckboxes.style.display = multiPericia ? "flex" : "none";
+        el.hintPericiaUsoMultipla.style.display = multiPericia ? "block" : "none";
+        if (multiPericia) {
+            // Eletrônico: um item pode servir pra mais de uma perícia ao
+            // mesmo tempo (ex.: Hacking e Programação juntos) — por isso
+            // vira checkbox em vez de select de escolha única (ver
+            // ehTagMultiPericia em dados-manual.js).
+            const marcadasAtuais = periciaUsoComoArray(periciaUsoAtual);
+            el.modalPericiaUsoCheckboxes.innerHTML = "";
+            opcoes.forEach(nome => {
+                const id = `modal-pericia-uso-cb-${nome.replace(/\s+/g, "-")}`;
+                const label = document.createElement("label");
+                label.className = "checkbox-inline";
+                label.style.display = "block";
+                const input = document.createElement("input");
+                input.type = "checkbox";
+                input.id = id;
+                input.value = nome;
+                input.checked = marcadasAtuais.includes(nome);
+                label.appendChild(input);
+                label.appendChild(document.createTextNode(` ${nome}`));
+                el.modalPericiaUsoCheckboxes.appendChild(label);
+            });
+        } else {
+            el.modalPericiaUso.innerHTML = "";
+            if (!exigePericia) {
+                const optNenhuma = document.createElement("option");
+                optNenhuma.value = "";
+                optNenhuma.innerText = "Nenhuma (sem rolagem automática de \"Usar\")";
+                el.modalPericiaUso.appendChild(optNenhuma);
+            }
+            opcoes.forEach(nome => {
+                const opt = document.createElement("option");
+                opt.value = nome;
+                opt.innerText = nome;
+                el.modalPericiaUso.appendChild(opt);
+            });
+            el.modalPericiaUso.value = (periciaUsoAtual && opcoes.includes(periciaUsoAtual))
+                ? periciaUsoAtual
+                : (exigePericia ? opcoes[0] : "");
         }
-        opcoes.forEach(nome => {
-            const opt = document.createElement("option");
-            opt.value = nome;
-            opt.innerText = nome;
-            el.modalPericiaUso.appendChild(opt);
-        });
-        el.modalPericiaUso.value = (periciaUsoAtual && opcoes.includes(periciaUsoAtual))
-            ? periciaUsoAtual
-            : (exigePericia ? opcoes[0] : "");
     }
     // Ferramenta de Criação (geral) — ver ehFerramentaCriacaoGeral em
     // dados-manual.js: não tem select de perícia (não fica travada numa
@@ -6936,6 +6978,19 @@ function lerConfigArmaDoModal(periciaUso, calibre) {
     };
 }
 
+// Lê o(s) valor(es) de perícia vinculada do modal do item — array (só
+// as marcadas) pra tags multi-perícia (eletrônico, ver ehTagMultiPericia
+// em dados-manual.js), string única (ou null) pras demais. Usada tanto
+// na criação/edição de item de ficha quanto no Banco Global de Itens.
+function lerPericiaUsoDoModal(tag) {
+    if (!tagTemPericiaUso(tag)) return null;
+    if (ehTagMultiPericia(tag)) {
+        const marcadas = Array.from(el.modalPericiaUsoCheckboxes.querySelectorAll("input[type=checkbox]:checked")).map(cb => cb.value);
+        return marcadas.length ? marcadas : null;
+    }
+    return el.modalPericiaUso.value || null;
+}
+
 async function salvarItemDoModal(id) {
     const nome = el.modalNome.value.trim();
     const tag = el.modalTag.value;
@@ -6943,7 +6998,7 @@ async function salvarItemDoModal(id) {
     if (!tag) { toast("Toda item precisa de uma tag do sistema.", "erro"); return; }
 
     const exigePericia = tagExigePericiaUso(tag);
-    const periciaUso = tagTemPericiaUso(tag) ? (el.modalPericiaUso.value || null) : null;
+    const periciaUso = lerPericiaUsoDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7063,7 +7118,7 @@ async function salvarItemBancoDoModal(id) {
     if (!tag) { toast("Todo item precisa de uma tag do sistema.", "erro"); return; }
 
     const exigePericia = tagExigePericiaUso(tag);
-    const periciaUso = tagTemPericiaUso(tag) ? (el.modalPericiaUso.value || null) : null;
+    const periciaUso = lerPericiaUsoDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
