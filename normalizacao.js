@@ -166,6 +166,10 @@ export function normalizarInventario(lista) {
             // Itens que já existiam antes dessa trava nascem desequipados
             // (padrão seguro: o jogador precisa equipar explicitamente).
             equipada: it.equipada ?? false,
+            // Equipável: além de arma (sempre equipável por natureza —
+            // ver ehArma em itemEhEquipavel, inventario.js), qualquer
+            // outro item pode ser marcado como tal no modal do item.
+            equipavel: it.equipavel ?? false,
             arma: it.arma || null,
             periciaUso: it.periciaUso || null,
             classeProtecao: it.classeProtecao || null,

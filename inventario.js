@@ -67,24 +67,35 @@ export function calcularCargaAtual(fichaAtual, modificadoresPlanos = []) {
     };
 }
 
+// Item "equipável": armas SEMPRE são (ehArma(tag)), e qualquer outro
+// item pode ganhar a mesma trava marcando o checkbox "Item equipável"
+// no modal (item.equipavel) — mesmo mecanismo do inventário: precisa
+// estar "Levando consigo" E equipado pra poder ser "usado".
+export function itemEhEquipavel(item) {
+    return ehArma(item.tag) || !!item.equipavel;
+}
+
 export function itemPodeUsar(item) {
     // Regra de ouro do inventário: só dá pra "usar" item/arma que está
-    // na categoria "levando consigo". Armas (ehArma(tag)) têm uma trava
-    // a mais: precisam estar EQUIPADAS (item.equipada) — carregar uma
-    // arma na mochila não é o mesmo que estar empunhando ela pronta pra
-    // golpear. É o que permite a manobra "Desarmar" ter algo de verdade
-    // pra tirar do alvo (ver resolverDesarmar em ficha.js). Itens que
-    // não são arma (kit médico, gadgets, etc.) não passam por essa
+    // na categoria "levando consigo". Itens equipáveis (armas ou
+    // qualquer item marcado como tal — ver itemEhEquipavel acima) têm
+    // uma trava a mais: precisam estar EQUIPADOS (item.equipada) —
+    // carregar algo na mochila não é o mesmo que estar com ele
+    // equipado e pronto pra usar. É o que permite a manobra "Desarmar"
+    // ter algo de verdade pra tirar do alvo (ver resolverDesarmar em
+    // ficha.js — continua restrito a armas de verdade lá). Itens não
+    // equipáveis (kit médico, gadgets, etc.) não passam por essa
     // trava — só precisam estar "levando consigo".
     if (item.categoria !== "levando") return false;
-    if (ehArma(item.tag) && !item.equipada) return false;
+    if (itemEhEquipavel(item) && !item.equipada) return false;
     return true;
 }
 
-// Só faz sentido equipar/desequipar uma arma que está "levando
-// consigo" (não dá pra empunhar algo que ficou em casa).
+// Só faz sentido equipar/desequipar um item equipável (arma ou
+// qualquer item marcado como tal) que está "levando consigo" (não dá
+// pra equipar algo que ficou em casa).
 export function itemPodeEquipar(item) {
-    return ehArma(item.tag) && item.categoria === "levando";
+    return itemEhEquipavel(item) && item.categoria === "levando";
 }
 
 export function listaArmasInventario(fichaAtual) {

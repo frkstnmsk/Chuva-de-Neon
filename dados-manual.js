@@ -646,7 +646,7 @@ export function bonusEsquivaBoxe(nivelBoxe) {
 // agrupamentos que já existem no manual (as mesmas opções de perícia de
 // função do Mecânico e do Pilantra) em vez de inventar listas novas.
 // ---------------------------------------------------------------------
-export const PERICIAS_ELETRONICO = ["Hacking"];
+export const PERICIAS_ELETRONICO = ["Hacking", "Programação"];
 // Ferramenta de Criação "geral" (manual pg. 71): usada nas perícias de
 // Ofícios Utilitários, Armeiro, Mecânica Automotiva, Explosivos e
 // Eletrônica — TODAS elas de uma vez, é o que torna o kit "geral" (o

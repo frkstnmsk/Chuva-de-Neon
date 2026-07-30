@@ -43,7 +43,7 @@ import {
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
-    calcularCargaAtual, itemPodeUsar, itemPodeEquipar, listaArmasInventario,
+    calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
     listaCarregadoresInventario, listaProjeteisInventario
 } from "./inventario.js";
 import {
@@ -284,6 +284,8 @@ const el = {
     modalNivel: document.getElementById("modal-nivel"),
     modalCampoTag: document.getElementById("modal-campo-tag"),
     modalTag: document.getElementById("modal-tag"),
+    modalCampoEquipavel: document.getElementById("modal-campo-equipavel"),
+    modalEquipavel: document.getElementById("modal-equipavel"),
     modalCampoNivelTag: document.getElementById("modal-campo-nivel-tag"),
     modalNivelTag: document.getElementById("modal-nivel-tag"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
@@ -1241,16 +1243,16 @@ async function alternarAtivoEntidade(lista, id, novoValor) {
     }
 }
 
-// Equipar/desequipar uma arma do inventário — só arma equipada pode ser
-// usada em combate (ver itemPodeUsar em inventario.js) e é o que a
-// manobra "Desarmar" de fato retira do alvo (ver resolverDesarmar).
+// Equipar/desequipar um item do inventário — só item equipado pode ser
+// usado (ver itemPodeUsar em inventario.js); pra armas, também é o que
+// a manobra "Desarmar" de fato retira do alvo (ver resolverDesarmar).
 async function alternarEquipadaItem(id, novoValor) {
     if (!idAtivo()) return;
     try {
         await update(ref(db, `${caminhoBase()}/inventario/${id}`), { equipada: novoValor });
-        toast(novoValor ? "Arma equipada." : "Arma desequipada.");
+        toast(novoValor ? "Item equipado." : "Item desequipado.");
     } catch (e) {
-        toast("Não foi possível atualizar a arma. Tente de novo.", "erro");
+        toast("Não foi possível atualizar o item. Tente de novo.", "erro");
     }
 }
 
@@ -4287,6 +4289,7 @@ function renderizarInventario(modificadoresPlanos) {
             const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
             const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
             const ehArmaItem = ehArma(it.tag);
+            const ehEquipavelItem = itemEhEquipavel(it);
             const equipadaItem = !!it.equipada;
             const podeEquipar = itemPodeEquipar(it);
             const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
@@ -4325,8 +4328,8 @@ function renderizarInventario(modificadoresPlanos) {
                 </div>
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
-                    ${ehArmaItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? "🗡️ Equipada" : "○ Desequipada"}</button>` : ""}
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : `Rolar d20 + ${it.periciaUso}`) : (ehArmaItem && !equipadaItem ? "Equipe a arma pra poder usá-la" : "Sem perícia vinculada")}">Usar</button>
+                    ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
+                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : `Rolar d20 + ${it.periciaUso}`) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
                     ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
@@ -4369,7 +4372,7 @@ function renderizarInventario(modificadoresPlanos) {
                 if (!novaCategoria) return;
                 if (isMestre) {
                     const dados = { categoria: novaCategoria };
-                    if (novaCategoria !== "levando" && ehArmaItem && equipadaItem) dados.equipada = false;
+                    if (novaCategoria !== "levando" && ehEquipavelItem && equipadaItem) dados.equipada = false;
                     await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
                     toast(`${it.nome} movido.`);
                 } else {
@@ -6313,12 +6316,14 @@ function prepararModalItem(existente, ehBanco) {
         el.modalPeso.value = existente.peso ?? 0;
         if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
         atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade });
+        el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
         if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
         atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null);
+        el.modalEquipavel.checked = false;
     }
 
     // Autocompletar pelo Banco Global — só ao CRIAR um item novo dentro
@@ -6354,6 +6359,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
                 atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade });
+                el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
             });
@@ -6536,6 +6542,15 @@ function lerReducaoDanoDoModal() {
 }
 
 function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual) {
+    // Equipável — checkbox independente da tag (qualquer item pode ser
+    // marcado como equipável, não só armas). Some pra tag "Arma": arma
+    // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
+    // inventario.js), então o checkbox ali seria redundante/confuso.
+    // Some também sem tag nenhuma escolhida ainda.
+    const podeMarcarEquipavel = !!tagKey && tagKey !== "arma";
+    el.modalCampoEquipavel.style.display = podeMarcarEquipavel ? "flex" : "none";
+    if (!podeMarcarEquipavel) el.modalEquipavel.checked = false;
+
     const temNivel = tagTemNivel(tagKey);
     el.modalCampoNivelTag.style.display = temNivel ? "flex" : "none";
     if (temNivel) el.modalNivelTag.value = nivelTag || 1;
@@ -6989,6 +7004,13 @@ async function salvarItemDoModal(id) {
         arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null,
         carregador,
         projetil,
+        // Equipável (checkbox independente da tag — ver atualizarCamposPorTag):
+        // arma já é sempre equipável por natureza, então o checkbox some e
+        // fica implicitamente false aqui (itemEhEquipavel ainda cobre arma
+        // via ehArma, ver inventario.js). "equipada" preserva o estado atual
+        // (senão editar qualquer outro campo do item desequiparia sem querer).
+        equipavel: tag !== "arma" ? !!el.modalEquipavel.checked : false,
+        equipada: existenteItem.equipada ?? false,
         // Material de criação: tipo/qualidade/quantidade em estoque —
         // ver atualizarCamposPorTag. Itens antigos que só tinham a
         // marcação implícita (feita de leve em abrirModalEscolherMateriais,
@@ -7089,6 +7111,9 @@ async function salvarItemBancoDoModal(id) {
         arma: armaConfig,
         carregador,
         projetil,
+        // Equipável — molde do Banco Global; item criado a partir dele
+        // já nasce com essa marcação (ver salvarItemDoModal).
+        equipavel: tag !== "arma" ? !!el.modalEquipavel.checked : false,
         // Molde do Banco Global de material: guarda tipo/qualidade como
         // referência, mas a quantidade em estoque é zerada — ela é
         // específica de cada ficha, não faz sentido "herdar estoque"
