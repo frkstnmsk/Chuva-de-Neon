@@ -26,6 +26,29 @@ function nivelDaPericia(pericias, nome) {
     return entrada ? (Number(entrada.nivel) || 0) : 0;
 }
 
+// Normaliza texto pra comparação tolerante a acento/caixa (ex.: "Frágil",
+// "fragil", "FRÁGIL" batem todos igual).
+function normalizarTexto(txt) {
+    return String(txt || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+}
+
+// Desvantagem "Frágil" (manual pg. 18): cadastrada como entrada
+// freeform em `desvantagens` (sem código/id fixo — o jogador digita o
+// nome), então a detecção é por texto normalizado, batendo tanto
+// "Frágil" quanto variações de caixa/acento. Só conta entradas ativas
+// (`ativo !== false` — mesma regra usada em coletarModificadores, ver
+// regras.js).
+const MULTIPLICADOR_DANO_FRAGIL = 2; // dobro do dano recebido (manual pg. 18: +100%)
+function temDesvantagemFragil(desvantagens) {
+    return Object.values(desvantagens || {}).some(
+        (d) => d && d.ativo !== false && normalizarTexto(d.nome) === "fragil"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Padrão de vida — valores semanais fixos do manual (pg. 105-106).
 // ---------------------------------------------------------------------
@@ -128,6 +151,14 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         const nomeAlvo = (raw.config && raw.config.nomeExibicao) || alvoId;
         const pvAtual = (raw.dados && raw.dados.pvAtual !== null && raw.dados.pvAtual !== undefined) ? Number(raw.dados.pvAtual) : 0;
         const inventario = raw.inventario || {};
+        // Desvantagem Frágil (manual pg. 18): dobra o dano recebido de
+        // qualquer tipo de ataque. Aplicada sobre o dano BRUTO do golpe
+        // (mesmo ponto do pipeline em que o Acerto Crítico dobra o dano
+        // em ficha.js, ANTES da redução de armadura), pra empilhar de
+        // forma consistente com qualquer outro multiplicador de dano já
+        // embutido em danoBruto (crítico, queima-roupa, etc.).
+        const ehFragil = temDesvantagemFragil(raw.desvantagens);
+        const brutoComFragil = ehFragil ? brutoNum * MULTIPLICADOR_DANO_FRAGIL : brutoNum;
         const reducao = tipoDanoKey ? Object.values(inventario)
             .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano)
                 && (localArmadura == null || it.localProtegido === localArmadura))
@@ -135,10 +166,13 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
                 const entrada = it.reducoesDano.find(r => r.tipo === tipoDanoKey);
                 return acc + (entrada ? Number(entrada.valor) || 0 : 0);
             }, 0) : 0;
-        const danoFinal = Math.max(0, brutoNum - reducao);
+        const brutoComFragilArredondado = Math.round(brutoComFragil);
+        const danoFinal = Math.max(0, brutoComFragilArredondado - reducao);
         const novoPv = pvAtual - danoFinal;
         await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
-        return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv };
+        // danoBruto exibido já inclui o +50% de Frágil (quando aplicável),
+        // pra bater com a conta "bruto - redução = final" mostrada no Log.
+        return { nomeAlvo, danoBruto: brutoComFragilArredondado, fragil: ehFragil, reducao, danoFinal, novoPv };
     }
 
     const snap = await get(ref(db, caminhoMesa(`npcs/${alvoId}`)));

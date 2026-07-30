@@ -729,14 +729,30 @@ export function ehFerramentaCriacaoGeral(tagKey) {
     return tagKey === "ferramenta_criacao";
 }
 
-// Tags cujo item precisa de uma perícia vinculada pra ter ação de "Usar"
-// com rolagem automática (armas, eletrônicos, ferramentas de criação —
-// química e biomecânica — e destraves — manual pg. 49-50 e regras de
-// teste de perícia). Ferramenta de Criação GERAL fica de fora desta
-// lista de propósito — ver ehFerramentaCriacaoGeral acima: ela não trava
-// numa perícia só na criação, então não "exige" escolher uma aqui.
-export function tagExigePericiaUso(tagKey) {
+// Tags cujo item TEM a opção de perícia vinculada (mostra o campo no
+// modal) — armas, eletrônicos, ferramentas de criação (química e
+// biomecânica) e destraves.
+export function tagTemPericiaUso(tagKey) {
     return tagKey === "arma" || tagKey === "eletronico" ||
+        tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
+        tagKey === "destrave";
+}
+
+// Tags cujo item PRECISA de uma perícia vinculada pra ter ação de "Usar"
+// com rolagem automática (armas, ferramentas de criação — química e
+// biomecânica — e destraves — manual pg. 49-50 e regras de teste de
+// perícia). Ferramenta de Criação GERAL fica de fora desta lista de
+// propósito — ver ehFerramentaCriacaoGeral acima: ela não trava numa
+// perícia só na criação, então não "exige" escolher uma aqui.
+//
+// Eletrônico também fica de fora: nem todo item eletrônico serve pra
+// Hackear (ex.: uma lanterna, um carregador) — o campo continua
+// disponível (ver tagTemPericiaUso acima) pra quem QUISER vincular
+// Hacking a um item específico, mas deixar sem perícia vinculada
+// também é válido (o item só não ganha o botão "Usar" com rolagem
+// automática).
+export function tagExigePericiaUso(tagKey) {
+    return tagKey === "arma" ||
         tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
         tagKey === "destrave";
 }

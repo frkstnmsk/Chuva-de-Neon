@@ -19,7 +19,7 @@ import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
-    tagExigePericiaUso, periciasVinculaveisPorTag,
+    tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
     CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
@@ -3337,11 +3337,15 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // cheio, sem reação nenhuma do alvo. "🔫 X foi baleado!" deixa isso
     // bem claro no Log/tela pra quem está acompanhando o combate.
     const notaBaleado = ehFogo ? ` 🔫 ${nomeAlvo} foi baleado!` : "";
+    // Desvantagem Frágil (manual pg. 18): já aplicada dentro de
+    // aplicarDano (mestre.js) sobre o dano bruto, antes da redução de
+    // armadura — aqui só sinaliza no Log que o multiplicador entrou.
+    const notaFragil = resultadoDano.fragil ? ` 🩹 ${nomeAlvo} é FRÁGIL — dano recebido dobrado!` : "";
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaFragil}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaFragil}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
@@ -6572,21 +6576,38 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         el.modalMaterialQuantidade.value = (materialConfigAtual && materialConfigAtual.quantidade) ?? 1;
     }
 
-    // Perícia vinculada — obrigatória em armas, eletrônicos, ferramentas
-    // de criação (geral e química) e destraves (é ela que o botão "Usar"
-    // do inventário rola).
+    // Perícia vinculada — o campo aparece em armas, eletrônicos,
+    // ferramentas de criação (química e biomecânica) e destraves (é ela
+    // que o botão "Usar" do inventário rola), mas só é OBRIGATÓRIA em
+    // armas, ferramentas de criação química/biomecânica e destraves.
+    // Eletrônico fica de fora da obrigatoriedade: nem todo item
+    // eletrônico serve pra Hackear (uma lanterna, um carregador...) —
+    // por isso ganha a opção "Nenhuma", deixando o item sem o botão
+    // "Usar" com rolagem automática (ver tagExigePericiaUso em
+    // dados-manual.js).
+    const mostraPericia = tagTemPericiaUso(tagKey);
     const exigePericia = tagExigePericiaUso(tagKey);
-    el.modalCampoPericiaUso.style.display = exigePericia ? "flex" : "none";
-    if (exigePericia) {
+    el.modalCampoPericiaUso.style.display = mostraPericia ? "flex" : "none";
+    if (mostraPericia) {
+        const labelPericiaUso = document.querySelector('label[for="modal-pericia-uso"]');
+        if (labelPericiaUso) labelPericiaUso.textContent = exigePericia ? "Perícia vinculada (obrigatória)" : "Perícia vinculada (opcional)";
         const opcoes = periciasVinculaveisPorTag(tagKey);
         el.modalPericiaUso.innerHTML = "";
+        if (!exigePericia) {
+            const optNenhuma = document.createElement("option");
+            optNenhuma.value = "";
+            optNenhuma.innerText = "Nenhuma (sem rolagem automática de \"Usar\")";
+            el.modalPericiaUso.appendChild(optNenhuma);
+        }
         opcoes.forEach(nome => {
             const opt = document.createElement("option");
             opt.value = nome;
             opt.innerText = nome;
             el.modalPericiaUso.appendChild(opt);
         });
-        el.modalPericiaUso.value = (periciaUsoAtual && opcoes.includes(periciaUsoAtual)) ? periciaUsoAtual : opcoes[0];
+        el.modalPericiaUso.value = (periciaUsoAtual && opcoes.includes(periciaUsoAtual))
+            ? periciaUsoAtual
+            : (exigePericia ? opcoes[0] : "");
     }
     // Ferramenta de Criação (geral) — ver ehFerramentaCriacaoGeral em
     // dados-manual.js: não tem select de perícia (não fica travada numa
@@ -6907,7 +6928,7 @@ async function salvarItemDoModal(id) {
     if (!tag) { toast("Toda item precisa de uma tag do sistema.", "erro"); return; }
 
     const exigePericia = tagExigePericiaUso(tag);
-    const periciaUso = exigePericia ? el.modalPericiaUso.value : null;
+    const periciaUso = tagTemPericiaUso(tag) ? (el.modalPericiaUso.value || null) : null;
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7020,7 +7041,7 @@ async function salvarItemBancoDoModal(id) {
     if (!tag) { toast("Todo item precisa de uma tag do sistema.", "erro"); return; }
 
     const exigePericia = tagExigePericiaUso(tag);
-    const periciaUso = exigePericia ? el.modalPericiaUso.value : null;
+    const periciaUso = tagTemPericiaUso(tag) ? (el.modalPericiaUso.value || null) : null;
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7193,28 +7214,45 @@ function configurarCalendario() {
                 temperatura: Number(el.calEditTemp.value) || 0,
                 clima: el.calEditClima.value
             };
-            await salvarCalendario(novo);
-            // Atualiza a variável local NA HORA, sem esperar o listener
-            // ouvirCalendario ecoar de volta do servidor (assíncrono, não
-            // é instantâneo). Sem isso, clicar em "Passar o dia" logo
-            // depois de "Salvar calendário" corria o risco de pegar
-            // calendarioAtual ainda com o valor ANTIGO (o de antes deste
-            // salvamento) e avançar 1 dia a partir dele — sobrescrevendo
-            // a data que acabou de ser salva com "data antiga + 1 dia".
-            calendarioAtual = novo;
-            toast("Calendário atualizado.");
+            try {
+                await salvarCalendario(novo);
+                // Atualiza a variável local NA HORA, sem esperar o listener
+                // ouvirCalendario ecoar de volta do servidor (assíncrono,
+                // não é instantâneo). Sem isso, clicar em "Passar o dia"
+                // logo depois de "Salvar calendário" corria o risco de
+                // pegar calendarioAtual ainda com o valor ANTIGO (o de
+                // antes deste salvamento) e avançar 1 dia a partir dele —
+                // sobrescrevendo a data que acabou de ser salva com "data
+                // antiga + 1 dia".
+                calendarioAtual = novo;
+                toast("Calendário atualizado.");
+            } catch (err) {
+                // Antes essa falha era silenciosa (sem try/catch, sem
+                // toast nenhum) — dava a impressão de ter salvo (a tela
+                // nem sempre refletia isso na hora) quando na verdade
+                // NADA tinha ido pro banco, e "Passar o dia" continuava
+                // avançando a partir da última data que realmente estava
+                // salva lá (por isso "voltava" pra data antiga).
+                console.error(err);
+                toast(`Falha ao salvar o calendário: ${err.message || err}`, "erro");
+            }
         });
 
         el.btnPassarDia.addEventListener("click", async () => {
             if (!calendarioAtual) return;
-            const fichasParaPopup = todasAsFichasCache;
-            const { calendario, virouDomingo, popups } = await passarODia(calendarioAtual, fichasParaPopup);
-            // Mesmo motivo do handler de "Salvar calendário" acima: evita
-            // que um segundo clique rápido em "Passar o dia" (ou um clique
-            // em "Salvar calendário" logo em seguida) use a versão antiga
-            // do dia, de antes deste avanço.
-            calendarioAtual = calendario;
-            toast(virouDomingo ? "Dia avançado — caiu Domingo!" : "Dia avançado.");
+            try {
+                const fichasParaPopup = todasAsFichasCache;
+                const { calendario, virouDomingo, popups } = await passarODia(calendarioAtual, fichasParaPopup);
+                // Mesmo motivo do handler de "Salvar calendário" acima:
+                // evita que um segundo clique rápido em "Passar o dia" (ou
+                // um clique em "Salvar calendário" logo em seguida) use a
+                // versão antiga do dia, de antes deste avanço.
+                calendarioAtual = calendario;
+                toast(virouDomingo ? "Dia avançado — caiu Domingo!" : "Dia avançado.");
+            } catch (err) {
+                console.error(err);
+                toast(`Falha ao passar o dia: ${err.message || err}`, "erro");
+            }
         });
     }
 }
