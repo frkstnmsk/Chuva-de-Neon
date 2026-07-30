@@ -768,6 +768,14 @@
      mexer direto no Firebase). -->
 <button type="button" id="btn-reviver-godmode" class="btn-red godmode-revive-btn" style="display:none;" title="Zera mortoDeVez e devolve 1 PV/Energia">💀 Reviver (Godmode)</button>
 
+<!-- Easter egg: botão invisível no canto inferior esquerdo. Ao clicar,
+     mostra um overlay de tela cheia sem nenhum botão de fechar — só dá
+     pra sair atualizando a página (ver #btn-easter-egg em ficha.js). -->
+<button type="button" id="btn-easter-egg" class="easter-egg-btn" aria-hidden="true" tabindex="-1"></button>
+<div class="overlay-easter-egg" id="overlay-easter-egg" style="display:none;">
+    <h1>haha frkstnmsk</h1>
+</div>
+
 <div id="toast"></div>
 
 <script type="module" src="ficha.js"></script>

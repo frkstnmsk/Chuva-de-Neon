@@ -1163,6 +1163,48 @@
 .overlay-morte.definitiva .overlay-morte-conteudo h1 { color: var(--neon-red); }
 .overlay-morte.definitiva .overlay-morte-botao { display: none; }
 
+/* ---------- Easter egg (botão invisível + overlay sem saída) ---------- */
+/* Botão invisível no canto inferior esquerdo da tela — sem borda, sem
+   fundo, sem cursor especial, só ocupando uma área clicável mesmo.
+   Não deve aparecer nada visualmente ali, é pra ser "achado" sem querer. */
+.easter-egg-btn {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    z-index: 50;
+    cursor: default;
+    -webkit-tap-highlight-color: transparent;
+}
+/* Overlay que cobre a tela inteira e não tem nenhum jeito de fechar por
+   fora — só atualizando a página mesmo. Reaproveita a mesma lógica
+   visual do overlay de morte (bloqueia tudo por baixo). */
+.overlay-easter-egg {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 5, 5, 0.97);
+    backdrop-filter: blur(3px);
+    padding: 24px;
+    text-align: center;
+}
+.overlay-easter-egg h1 {
+    font-family: var(--font-display, var(--font-mono));
+    font-size: clamp(2rem, 9vw, 3.6rem);
+    color: var(--neon-lime);
+    text-shadow: 0 0 18px rgba(163, 255, 18, 0.65), 0 0 40px rgba(163, 255, 18, 0.35);
+    letter-spacing: 2px;
+    margin: 0;
+}
+
 /* Botão flutuante "Reviver (Godmode)" — só aparece pro Mestre em
    Godmode quando a ficha aberta está morta (ver #btn-reviver-godmode
    em ficha.html e verificarMorte() em ficha.js). */

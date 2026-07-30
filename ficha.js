@@ -238,6 +238,8 @@ const el = {
     btnNaoQueroMorrer: document.getElementById("btn-nao-quero-morrer"),
     overlayMorteResultado: document.getElementById("overlay-morte-resultado"),
     btnReviverGodmode: document.getElementById("btn-reviver-godmode"),
+    btnEasterEgg: document.getElementById("btn-easter-egg"),
+    overlayEasterEgg: document.getElementById("overlay-easter-egg"),
     listaPericias: document.getElementById("lista-pericias"),
     btnAddPericia: document.getElementById("btn-add-pericia"),
     listaVantagens: document.getElementById("lista-vantagens"),
@@ -454,6 +456,16 @@ async function init() {
 
     el.btnNaoQueroMorrer.addEventListener("click", tentarReanimacao);
     el.btnReviverGodmode.addEventListener("click", reviverGodmode);
+
+    // Easter egg: botão invisível no canto inferior esquerdo. Sem
+    // confirmação, sem toast — só mostra o overlay. Não existe handler
+    // pra escondê-lo de novo de propósito (ver overlay-easter-egg em
+    // ficha.html): a única saída é atualizar a página.
+    if (el.btnEasterEgg && el.overlayEasterEgg) {
+        el.btnEasterEgg.addEventListener("click", () => {
+            el.overlayEasterEgg.style.display = "flex";
+        });
+    }
 
     if (isMestre) {
         el.painelMestreSeletor.style.display = "flex";
