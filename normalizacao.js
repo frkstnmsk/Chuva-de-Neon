@@ -160,6 +160,13 @@ export function normalizarInventario(lista) {
             tag: it.tag || "geral",
             nivelTag: it.nivelTag ?? null,
             peso: it.peso ?? 0,
+            // Quantidade genérica (ver tagTemQuantidadeGeral em
+            // dados-manual.js): pesoUnitario só existe pra tags que
+            // usam esse esquema — pra elas, peso acima já é o TOTAL
+            // (pesoUnitario × quantidade), calculado e gravado no
+            // momento de salvar o item.
+            pesoUnitario: it.pesoUnitario ?? null,
+            quantidade: it.quantidade ?? null,
             categoria: it.categoria || "levando",
             // Armas precisam estar equipadas (empunhadas) pra serem
             // usadas em combate — ver itemPodeUsar em inventario.js.
@@ -183,7 +190,15 @@ export function normalizarInventario(lista) {
             reducoesDano: Array.isArray(it.reducoesDano) ? it.reducoesDano : [],
             localProtegido: it.localProtegido || null,
             carregador: it.carregador || null,
-            projetil: it.projetil || null
+            projetil: it.projetil || null,
+            // Materiais de Criação (tag "material") — estavam faltando
+            // aqui, então eram apagados a cada recarga da ficha (mesma
+            // classe de bug que ehSaldo/saldoValor tinham antes de
+            // entrar nessa lista). Ver uso em ficha.js (materialTipo,
+            // qualidadesDoMaterial, agruparMateriaisPorTipo etc.).
+            materialTipo: it.materialTipo ?? null,
+            materialQualidade: it.materialQualidade ?? null,
+            materialQuantidade: it.materialQuantidade ?? null
         };
     }
     return out;

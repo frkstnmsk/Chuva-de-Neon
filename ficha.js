@@ -20,8 +20,8 @@ import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
-    ehTagMultiPericia, periciaUsoComoArray,
-    ehTagQuePodeSerSaldo, idSaldoDeItem, ehIdSaldoDeItem, idItemDoSaldo, todosOsSaldos,
+    ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
+    ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, todosOsSaldos,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
     CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
@@ -46,7 +46,7 @@ import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./nor
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
-    listaCarregadoresInventario, listaProjeteisInventario
+    listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado
 } from "./inventario.js";
 import {
     estadoInicialCriacao, funcaoDe, calcularPontosAtributoTotais,
@@ -318,7 +318,11 @@ const el = {
     modalCampoMaterialQuantidade: document.getElementById("modal-campo-material-quantidade"),
     modalMaterialQuantidade: document.getElementById("modal-material-quantidade"),
     modalCampoPeso: document.getElementById("modal-campo-peso"),
+    modalLabelPeso: document.getElementById("modal-label-peso"),
     modalPeso: document.getElementById("modal-peso"),
+    modalCampoQuantidade: document.getElementById("modal-campo-quantidade"),
+    modalQuantidade: document.getElementById("modal-quantidade"),
+    modalQuantidadePesoTotal: document.getElementById("modal-quantidade-peso-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
     modalConfigArma: document.getElementById("modal-config-arma"),
@@ -1100,11 +1104,12 @@ function renderizarSaldos() {
     const saldos = todosOsSaldos(fichaAtual);
     el.financasSaldosGrid.innerHTML = "";
     saldos.forEach((s) => {
+        const domId = s.id.replace(/[^a-zA-Z0-9_-]/g, "_");
         const campo = document.createElement("div");
         campo.className = "campo";
         campo.innerHTML = `
-            <label for="saldo-${s.id}">${escapeHtml(s.nome)}</label>
-            <input type="number" id="saldo-${s.id}" data-saldo-id="${s.id}">
+            <label for="saldo-${domId}">${escapeHtml(s.nome)}</label>
+            <input type="number" id="saldo-${domId}" data-saldo-id="${s.id}">
         `;
         const input = campo.querySelector("input");
         if (document.activeElement !== input) input.value = s.valor ?? 0;
@@ -2055,6 +2060,36 @@ async function recarregarArma(armaId, armaItem) {
     fichaAtual.inventario[armaId] = armaAtualizada;
     await update(ref(db, `${caminhoBase()}/inventario/${armaId}/arma`), armaAtualizada.arma);
     toast(`${armaItem.nome} recarregada com ${novoCarregador.nome} (${novoCarregador.carregador.municaoAtual}/${novoCarregador.carregador.capacidadeMax}).`);
+}
+
+// ---------------------------------------------------------------------
+// "Retirar carregador" de uma arma: apenas desanexa o carregador atual
+// (arma.carregadorId volta pra null) sem trocar por outro. O carregador
+// em si nunca deixou de existir no inventário — ele só ficava escondido
+// da lista principal enquanto estava anexado (ver carregadorEstaAnexado
+// em inventario.js); ao desanexar, ele volta a aparecer normalmente,
+// já com a munição que tinha dentro dele.
+// ---------------------------------------------------------------------
+async function retirarCarregadorArma(armaId, armaItem) {
+    if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
+    if (ehCalibreEscopeta(armaItem.calibre)) {
+        toast("Escopeta (12 gauge) não usa carregador — ela dispara direto do estoque de munição.", "erro");
+        return;
+    }
+    const carregadorId = armaItem.arma && armaItem.arma.carregadorId;
+    const carregador = carregadorId ? fichaAtual.inventario?.[carregadorId] : null;
+    if (!carregadorId || !carregador) {
+        toast("Esta arma já está sem carregador anexado.", "erro");
+        return;
+    }
+
+    const armaAtualizada = { ...armaItem, arma: { ...armaItem.arma, carregadorId: null } };
+    fichaAtual.inventario[armaId] = armaAtualizada;
+    await update(ref(db, `${caminhoBase()}/inventario/${armaId}/arma`), armaAtualizada.arma);
+
+    const municao = carregador.carregador?.municaoAtual ?? 0;
+    const capacidade = carregador.carregador?.capacidadeMax ?? 0;
+    toast(`${carregador.nome} retirado de ${armaItem.nome} e devolvido ao inventário (${municao}/${capacidade}).`);
 }
 
 // "Usar" um item/arma do inventário: rola d20 + o total da perícia
@@ -4286,7 +4321,13 @@ function renderizarInventario(modificadoresPlanos) {
     });
 
     const itens = Object.entries(fichaAtual.inventario || {});
-    const itensCategoria = itens.filter(([, it]) => it.categoria === categoriaInventarioAtiva);
+    // Carregador anexado a uma arma some da lista principal — ele virou
+    // parte da arma (ver carregadorEstaAnexado em inventario.js); a
+    // munição dele continua aparecendo junto da própria arma.
+    const itensCategoria = itens.filter(([id, it]) =>
+        it.categoria === categoriaInventarioAtiva &&
+        !(ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id))
+    );
     const pesoCategoria = pesoTotalPorCategoria(fichaAtual, categoriaInventarioAtiva);
 
     el.inventarioListas.innerHTML = "";
@@ -4326,6 +4367,7 @@ function renderizarInventario(modificadoresPlanos) {
                 : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
             const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
             const saldoLabel = it.ehSaldo ? ` · Saldo: CN$ ${Number(it.saldoValor) || 0}` : "";
+            const quantidadeLabel = (it.quantidade && it.quantidade > 1) ? ` (x${it.quantidade})` : "";
             const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
             const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
                 ? ` · Reduz: ${it.reducoesDano.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")}`
@@ -4335,11 +4377,14 @@ function renderizarInventario(modificadoresPlanos) {
                 ? ` · Munição: ${it.carregador.municaoAtual || 0}/${it.carregador.capacidadeMax || 0}`
                 : "";
             const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
+            const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
+            const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
+            const armaEstaCarregadaItem = ehFogo && !escopeta && !!carregadorAnexadoObjItem;
             const carregadorAnexadoLabel = (ehFogo && it.arma)
                 ? (escopeta
                     ? ` · Munição em estoque: ${municaoEscopetaDisponivel(it.calibre)} (sem carregador)`
-                    : (it.arma.carregadorId && fichaAtual.inventario?.[it.arma.carregadorId]
-                        ? ` · Carregador: ${escapeHtml(fichaAtual.inventario[it.arma.carregadorId].nome)} (${fichaAtual.inventario[it.arma.carregadorId].carregador?.municaoAtual || 0}/${fichaAtual.inventario[it.arma.carregadorId].carregador?.capacidadeMax || 0})`
+                    : (carregadorAnexadoObjItem
+                        ? ` · Carregador: ${escapeHtml(carregadorAnexadoObjItem.nome)} (${carregadorAnexadoObjItem.carregador?.municaoAtual || 0}/${carregadorAnexadoObjItem.carregador?.capacidadeMax || 0})`
                         : " · Sem carregador anexado"))
                 : "";
             // Tooltip do carregador: só aparece ao passar o mouse por cima,
@@ -4353,13 +4398,15 @@ function renderizarInventario(modificadoresPlanos) {
             li.innerHTML = `
                 <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
                     <span class="entity-nome">${escapeHtml(it.nome)}</span>
-                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
+                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
                 </div>
                 <div class="entity-badges">
+                    ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
                     ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
                     <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
                     ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
                     ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
                     <select class="select-transferir"></select>
@@ -4433,6 +4480,15 @@ function renderizarInventario(modificadoresPlanos) {
                 });
             }
 
+            const btnRetirarCarregador = li.querySelector(".btn-retirar-carregador-item");
+            if (btnRetirarCarregador) {
+                btnRetirarCarregador.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    if (!armaEstaCarregadaItem) return;
+                    await retirarCarregadorArma(id, it);
+                });
+            }
+
             const btnCarregar = li.querySelector(".btn-carregar-item");
             if (btnCarregar) {
                 btnCarregar.addEventListener("click", async (e) => {
@@ -4501,9 +4557,11 @@ function renderizarCombate() {
                     ${cfg.efeitoExtra ? `<span class="entity-sub">Efeito extra: ${escapeHtml(cfg.efeitoExtra)}</span>` : ""}
                 </div>
                 <div class="entity-badges">
+                    ${(ehFogo && !escopeta && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
                     <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${podeEquiparArma ? (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
                     <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
                 </div>
             `;
             li.querySelector(".btn-toggle-equipada").addEventListener("click", (e) => {
@@ -4521,6 +4579,14 @@ function renderizarCombate() {
                 btnRecarregarCombate.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     await recarregarArma(arma.id, arma);
+                });
+            }
+            const btnRetirarCarregadorCombate = li.querySelector(".btn-retirar-carregador-item");
+            if (btnRetirarCarregadorCombate) {
+                btnRetirarCarregadorCombate.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    if (!carregadorAnexado) return;
+                    await retirarCarregadorArma(arma.id, arma);
                 });
             }
             li.addEventListener("click", () => abrirModalEdicao("inventario", arma.id));
@@ -6153,6 +6219,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoClasseProtecao.style.display = "none";
     el.modalCampoLocalProtegido.style.display = "none";
     el.modalCampoPeso.style.display = "none";
+    el.modalCampoQuantidade.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
     el.modalCampoMaterialTipo.style.display = "none";
     el.modalCampoMaterialQualidade.style.display = "none";
@@ -6342,16 +6409,16 @@ function prepararModalItem(existente, ehBanco) {
     if (existente) {
         el.modalNome.value = existente.nome || "";
         el.modalTag.value = existente.tag || "";
-        el.modalPeso.value = existente.peso ?? 0;
+        el.modalPeso.value = existente.pesoUnitario ?? existente.peso ?? 0;
         if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade);
         el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
         if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null);
         el.modalEquipavel.checked = false;
     }
 
@@ -6384,10 +6451,10 @@ function configurarAutocompleteItemBanco(ativo) {
             div.addEventListener("click", () => {
                 el.modalNome.value = it.nome;
                 el.modalTag.value = it.tag || "";
-                el.modalPeso.value = it.peso ?? 0;
+                el.modalPeso.value = it.pesoUnitario ?? it.peso ?? 0;
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade);
                 el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
@@ -6570,7 +6637,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma": arma
     // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
@@ -6692,6 +6759,21 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         el.modalItemSaldoValor.value = saldoValorAtual ?? 0;
         el.modalItemSaldoValorBloco.style.display = ehSaldoAtual ? "block" : "none";
     }
+
+    // Quantidade genérica ("tenho N desse item") — mesmo esquema que
+    // munição já usa (Peso total = Peso unitário × Quantidade), agora
+    // pra qualquer item (ver tagTemQuantidadeGeral em dados-manual.js).
+    // Quando ativa, o campo "Peso" vira "Peso unitário" e o total é
+    // recalculado ao vivo (ver listener de modal-peso/modal-quantidade
+    // logo abaixo da função).
+    const temQuantidade = tagKey && tagTemQuantidadeGeral(tagKey);
+    el.modalCampoQuantidade.style.display = temQuantidade ? "flex" : "none";
+    if (el.modalLabelPeso) el.modalLabelPeso.textContent = temQuantidade ? "Peso unitário (kg)" : "Peso (kg)";
+    if (temQuantidade) {
+        el.modalQuantidade.value = Math.max(1, Number(quantidadeAtual) || 1);
+        atualizarPesoTotalModal();
+    }
+
     // Ferramenta de Criação (geral) — ver ehFerramentaCriacaoGeral em
     // dados-manual.js: não tem select de perícia (não fica travada numa
     // só), só um aviso explicando que a escolha é feita ao usar o item.
@@ -6735,11 +6817,28 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null);
 });
 
 document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
     document.getElementById("modal-item-saldo-valor-bloco").style.display = e.target.checked ? "block" : "none";
+});
+
+// Recalcula e mostra o "Peso total" (Peso unitário × Quantidade) ao
+// vivo, enquanto o jogador digita — ver tagTemQuantidadeGeral em
+// dados-manual.js. Só é chamada quando o campo de quantidade está
+// visível (item de uma tag que aceita quantidade genérica).
+function atualizarPesoTotalModal() {
+    const unitario = Math.max(0, Number(el.modalPeso.value) || 0);
+    const quantidade = Math.max(1, Number(el.modalQuantidade.value) || 1);
+    el.modalQuantidadePesoTotal.textContent = `Peso total: ${(unitario * quantidade).toFixed(2).replace(/\.?0+$/, "") || "0"} kg`;
+}
+document.getElementById("modal-peso")?.addEventListener("input", () => {
+    if (el.modalCampoQuantidade.style.display !== "none") atualizarPesoTotalModal();
+});
+document.getElementById("modal-quantidade")?.addEventListener("input", () => {
+    if (Number(el.modalQuantidade.value) < 1) el.modalQuantidade.value = 1;
+    atualizarPesoTotalModal();
 });
 
 // Repopula o select de Qualidade conforme o Tipo de material escolhido
@@ -7033,6 +7132,21 @@ function lerSaldoDoItemDoModal(tag) {
     return { ehSaldo: true, saldoValor: Number(el.modalItemSaldoValor.value) || 0 };
 }
 
+// Lê peso e quantidade do modal e devolve o trio pronto pra gravar no
+// item: `peso` continua sendo o peso TOTAL do registro (é o que
+// pesoTotalPorCategoria e o resto do código já somam/leem direto, sem
+// precisar saber de quantidade) — pra tags sem quantidade genérica
+// (projétil/material/carregador, ver tagTemQuantidadeGeral em
+// dados-manual.js) ele é só o valor digitado, igual sempre foi.
+function lerPesoEQuantidadeDoModal(tag) {
+    const pesoDigitado = Math.max(0, Number(el.modalPeso.value) || 0);
+    if (!tagTemQuantidadeGeral(tag)) {
+        return { peso: pesoDigitado, pesoUnitario: null, quantidade: null };
+    }
+    const quantidade = Math.max(1, Math.round(Number(el.modalQuantidade.value)) || 1);
+    return { peso: +(pesoDigitado * quantidade).toFixed(2), pesoUnitario: pesoDigitado, quantidade };
+}
+
 async function salvarItemDoModal(id) {
     const nome = el.modalNome.value.trim();
     const tag = el.modalTag.value;
@@ -7042,6 +7156,7 @@ async function salvarItemDoModal(id) {
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
     const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
+    const { peso, pesoUnitario, quantidade } = lerPesoEQuantidadeDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7092,7 +7207,9 @@ async function salvarItemDoModal(id) {
         ativo: existenteItem.ativo ?? true,
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
-        peso: Number(el.modalPeso.value) || 0,
+        peso,
+        pesoUnitario,
+        quantidade,
         categoria: el.modalCategoriaItem.value || "levando",
         periciaUso,
         ehSaldo,
@@ -7165,6 +7282,7 @@ async function salvarItemBancoDoModal(id) {
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
     const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
+    const { peso, pesoUnitario, quantidade } = lerPesoEQuantidadeDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7203,7 +7321,9 @@ async function salvarItemBancoDoModal(id) {
         modificadores: lerModificadoresDoModal(),
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
-        peso: Number(el.modalPeso.value) || 0,
+        peso,
+        pesoUnitario,
+        quantidade,
         periciaUso,
         ehSaldo,
         saldoValor,

@@ -98,6 +98,18 @@ export function itemPodeEquipar(item) {
     return itemEhEquipavel(item) && item.categoria === "levando";
 }
 
+// Um carregador "anexado" (dentro de uma arma) some da lista principal
+// do inventário — ele deixou de ser um item solto pra virar parte da
+// arma. Continua existindo normalmente nos dados (fichaAtual.inventario),
+// só não aparece mais na lista; a munição dele é mostrada junto da
+// própria arma. Percorre todas as armas do inventário procurando qual
+// delas tem esse carregador anexado (arma.carregadorId).
+export function carregadorEstaAnexado(fichaAtual, carregadorId) {
+    if (!carregadorId) return false;
+    return Object.values(fichaAtual.inventario || {})
+        .some(it => ehArma(it.tag) && it.arma && it.arma.carregadorId === carregadorId);
+}
+
 export function listaArmasInventario(fichaAtual) {
     return Object.entries(fichaAtual.inventario || {})
         .filter(([, it]) => ehArma(it.tag))

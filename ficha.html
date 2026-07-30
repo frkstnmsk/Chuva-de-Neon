@@ -511,8 +511,13 @@
             <input type="number" id="modal-material-quantidade" min="0" step="1" value="1">
         </div>
         <div class="modal-field" id="modal-campo-peso" style="display:none;">
-            <label for="modal-peso">Peso (kg)</label>
+            <label for="modal-peso" id="modal-label-peso">Peso (kg)</label>
             <input type="number" id="modal-peso" min="0" step="0.1" value="0">
+        </div>
+        <div class="modal-field" id="modal-campo-quantidade" style="display:none;">
+            <label for="modal-quantidade">Quantidade</label>
+            <input type="number" id="modal-quantidade" min="1" step="1" value="1">
+            <p class="hint" id="modal-quantidade-peso-total">Peso total: 0 kg</p>
         </div>
         <div class="modal-field" id="modal-campo-categoria-item" style="display:none;">
             <label for="modal-categoria-item">Categoria do inventário</label>

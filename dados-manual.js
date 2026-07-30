@@ -301,6 +301,19 @@ export function tagExigeQuantidadeProjetil(tagKey) {
     return ehProjetil(tagKey);
 }
 
+// Quantidade genérica ("tenho 3 desse item") — igual a como munição já
+// funciona (Peso total = Peso unitário × Quantidade), só que pra
+// qualquer item, não só projétil. Fica de fora das tags que já têm o
+// próprio jeito de contar "quanto tem": Projétil (rounds — reload é
+// item por item, cada carregador puxa dali) e Material de criação
+// (estoque com qualidade, ver materialQuantidade). Carregador também
+// fica de fora: cada um guarda seu próprio estado de munição atual
+// (municaoAtual), então "empilhar" vários no mesmo registro quebraria
+// esse controle por unidade.
+export function tagTemQuantidadeGeral(tagKey) {
+    return !ehProjetil(tagKey) && tagKey !== "material" && !ehCarregador(tagKey);
+}
+
 // ---------------------------------------------------------------------
 // Classes de Proteção Balística (manual pg. 53) — indicam até qual
 // calibre um colete aguenta com eficácia, e (aqui) também o calibre de
@@ -654,7 +667,7 @@ export const PERICIAS_ELETRONICO = ["Hacking", "Programação"];
 // trava numa perícia só na criação (ver ehFerramentaCriacaoGeral abaixo
 // e tagExigePericiaUso/periciasVinculaveisPorTag logo a seguir) — quem
 // escolhe é o jogador na hora de "Usar" o kit (ver
-// abrirModalEscolherPericiaFerramentaGeral em ficha.js).
+// abrirModalEscolherPericiaItem em ficha.js).
 // Química e Biomecânica ficam de fora de propósito — cada uma usa um
 // kit próprio (Ferramentas de Criação Química, pg. 92; e Ferramenta de
 // Criação Biomecânica), com receita igual mas item/perícia distintos.

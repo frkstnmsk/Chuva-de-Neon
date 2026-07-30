@@ -1179,7 +1179,7 @@ export async function abrirReacaoPendente(dados) {
 // escolha: "esquivar" | "bloquear" | "aparar" | "nenhuma".
 // "esquivar" anula o golpe (dano 0). "bloquear" reduz o dano pela
 // metade, exceto se o tipo de dano for perfurante (comum ou especial),
-// que ignora bloqueio. "aparar" é a única que exige teste: `dadosAparar`
+// que ignora bloqueio. "aparar" é a única que exige teste: `dadosExtra`
 // já vem com o resultado da rolagem (feita no cliente de quem defende,
 // que tem acesso aos próprios dados/perícias) — dificuldade = pontuação
 // do atacante no teste de ataque (r.resultadoAtaque, manual). Sucesso
@@ -1206,7 +1206,7 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // desarmado" — revalida no servidor (mesma regra já aplicada na UI,
     // que só oferece perícias desarmadas quando o golpe recebido não é
     // de arma branca).
-    if (escolha === "aparar" && r.ataqueArmaBranca && dadosAparar && !PERICIAS_ARMA_BRANCA.includes(dadosAparar.periciaEscolhida)) {
+    if (escolha === "aparar" && r.ataqueArmaBranca && dadosExtra && !PERICIAS_ARMA_BRANCA.includes(dadosExtra.periciaEscolhida)) {
         escolha = "nenhuma";
     }
 
