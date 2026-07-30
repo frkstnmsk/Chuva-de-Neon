@@ -172,6 +172,12 @@ export function normalizarInventario(lista) {
             equipavel: it.equipavel ?? false,
             arma: it.arma || null,
             periciaUso: it.periciaUso || null,
+            // Carteira digital (só em Eletrônico — ver ehTagQuePodeSerSaldo
+            // em dados-manual.js): saldoValor só importa quando ehSaldo é
+            // true, mas preserva o valor mesmo assim (evita perder o
+            // histórico se o jogador desmarcar e marcar de novo).
+            ehSaldo: it.ehSaldo ?? false,
+            saldoValor: it.saldoValor ?? 0,
             classeProtecao: it.classeProtecao || null,
             calibre: it.calibre || null,
             reducoesDano: Array.isArray(it.reducoesDano) ? it.reducoesDano : [],

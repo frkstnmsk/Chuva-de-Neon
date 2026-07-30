@@ -17,7 +17,7 @@ import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calenda
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo } from "./dados-manual.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
@@ -1388,6 +1388,14 @@ export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId) {
     const custoBase = custoSemanalPadraoDeVida(fichaAtual.dados.padraoDeVida);
     const extras = Object.values(fichaAtual.gastosExtras || {}).reduce((acc, g) => acc + (Number(g.valor) || 0), 0);
     const total = custoBase + extras;
+    if (ehIdSaldoDeItem(saldoId)) {
+        const itemId = idItemDoSaldo(saldoId);
+        const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || { saldoValor: 0 };
+        const atual = Number(item.saldoValor) || 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - total });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { ultimoPagamentoCustoVida: Date.now() });
+        return total;
+    }
     const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
     const atual = Number(saldo.valor) || 0;
     await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - total });
@@ -1437,9 +1445,16 @@ export async function confirmarAcaoPendente(acao) {
 
     } else if (tipo === "gastar_dinheiro") {
         const saldoId = payload.saldoId;
-        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
-        const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - Number(payload.valor || 0) });
+        if (ehIdSaldoDeItem(saldoId)) {
+            const itemId = idItemDoSaldo(saldoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - Number(payload.valor || 0) });
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - Number(payload.valor || 0) });
+        }
 
     } else if (tipo === "dar_item") {
         const snapItem = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));

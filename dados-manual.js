@@ -773,6 +773,49 @@ export function periciaUsoComoArray(periciaUso) {
     return Array.isArray(periciaUso) ? periciaUso.filter(Boolean) : [periciaUso];
 }
 
+// Alguns Eletrônicos guardam dinheiro digital (moedas e notas virtuais
+// — um pendrive com cripto, um celular com app de banco). Esses itens
+// podem ser marcados (it.ehSaldo) pra funcionar como mais uma "conta"
+// de dinheiro da ficha, com valor próprio (it.saldoValor), ao lado dos
+// saldos fixos (sujo/limpo/bolso) e customizados. Os ids desses saldos
+// "de item" usam o prefixo PREFIXO_SALDO_ITEM pra não colidir com os
+// ids normais e pra dar pra rastrear de volta o item de origem — ver
+// idSaldoDeItem / ehIdSaldoDeItem / idItemDoSaldo e todosOsSaldos.
+export function ehTagQuePodeSerSaldo(tagKey) {
+    return tagKey === "eletronico";
+}
+
+export const PREFIXO_SALDO_ITEM = "item:";
+
+export function idSaldoDeItem(itemId) {
+    return `${PREFIXO_SALDO_ITEM}${itemId}`;
+}
+
+export function ehIdSaldoDeItem(saldoId) {
+    return typeof saldoId === "string" && saldoId.startsWith(PREFIXO_SALDO_ITEM);
+}
+
+export function idItemDoSaldo(saldoId) {
+    return ehIdSaldoDeItem(saldoId) ? saldoId.slice(PREFIXO_SALDO_ITEM.length) : null;
+}
+
+// Lista unificada de saldos pra exibir/escolher em qualquer lugar da
+// ficha (grid de Finanças, dropdown de "de onde sai" o gasto, origem do
+// pagamento semanal): junta os saldos normais (fichaAtual.saldos) com
+// os saldos guardados em itens marcados como carteira digital.
+export function todosOsSaldos(fichaAtual) {
+    const saldosFicha = Object.entries(fichaAtual.saldos || {}).map(([id, s]) => ({
+        id, nome: s.nome, valor: Number(s.valor) || 0, fixo: !!s.fixo, deItem: false
+    }));
+    const saldosItem = Object.entries(fichaAtual.inventario || {})
+        .filter(([, it]) => it.ehSaldo)
+        .map(([itemId, it]) => ({
+            id: idSaldoDeItem(itemId), nome: `${it.nome} (carteira digital)`,
+            valor: Number(it.saldoValor) || 0, fixo: false, deItem: true, itemId
+        }));
+    return [...saldosFicha, ...saldosItem];
+}
+
 export function periciasVinculaveisPorTag(tagKey) {
     switch (tagKey) {
         // "Sem Perícia" fica só aqui (não entra em PERICIAS_ARMA_COMBATE

@@ -21,6 +21,7 @@ import {
     ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray,
+    ehTagQuePodeSerSaldo, idSaldoDeItem, ehIdSaldoDeItem, idItemDoSaldo, todosOsSaldos,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
     CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
@@ -295,6 +296,10 @@ const el = {
     modalPericiaUso: document.getElementById("modal-pericia-uso"),
     modalPericiaUsoCheckboxes: document.getElementById("modal-pericia-uso-checkboxes"),
     hintPericiaUsoMultipla: document.getElementById("hint-pericia-uso-multipla"),
+    modalCampoItemSaldo: document.getElementById("modal-campo-item-saldo"),
+    modalItemEhSaldo: document.getElementById("modal-item-eh-saldo"),
+    modalItemSaldoValorBloco: document.getElementById("modal-item-saldo-valor-bloco"),
+    modalItemSaldoValor: document.getElementById("modal-item-saldo-valor"),
     modalCampoClasseProtecao: document.getElementById("modal-campo-classe-protecao"),
     modalLabelClasseProtecao: document.getElementById("modal-label-classe-protecao"),
     modalClasseProtecao: document.getElementById("modal-classe-protecao"),
@@ -1092,14 +1097,14 @@ function renderizarFinancas() {
 // Mestre pode digitar direto aqui — jogador só vê o valor e usa
 // "Gastar dinheiro" (que vira pedido de aprovação).
 function renderizarSaldos() {
-    const saldos = fichaAtual.saldos || {};
+    const saldos = todosOsSaldos(fichaAtual);
     el.financasSaldosGrid.innerHTML = "";
-    Object.entries(saldos).forEach(([id, s]) => {
+    saldos.forEach((s) => {
         const campo = document.createElement("div");
         campo.className = "campo";
         campo.innerHTML = `
-            <label for="saldo-${id}">${escapeHtml(s.nome)}</label>
-            <input type="number" id="saldo-${id}" data-saldo-id="${id}">
+            <label for="saldo-${s.id}">${escapeHtml(s.nome)}</label>
+            <input type="number" id="saldo-${s.id}" data-saldo-id="${s.id}">
         `;
         const input = campo.querySelector("input");
         if (document.activeElement !== input) input.value = s.valor ?? 0;
@@ -1111,16 +1116,16 @@ function renderizarSaldos() {
 // Popula o dropdown "de onde sai" (gastar dinheiro) com os saldos
 // atuais da ficha, preservando a escolha atual quando possível.
 function renderizarOpcoesOrigemGasto() {
-    const saldos = fichaAtual.saldos || {};
+    const saldos = todosOsSaldos(fichaAtual);
     const escolhaAnterior = el.financasGastarOrigem.value;
     el.financasGastarOrigem.innerHTML = "";
-    Object.entries(saldos).forEach(([id, s]) => {
+    saldos.forEach((s) => {
         const opt = document.createElement("option");
-        opt.value = id;
+        opt.value = s.id;
         opt.innerText = s.nome;
         el.financasGastarOrigem.appendChild(opt);
     });
-    if (saldos[escolhaAnterior]) el.financasGastarOrigem.value = escolhaAnterior;
+    if (saldos.some(s => s.id === escolhaAnterior)) el.financasGastarOrigem.value = escolhaAnterior;
 }
 
 function configurarFinancas() {
@@ -1129,8 +1134,15 @@ function configurarFinancas() {
     document.addEventListener("input", (e) => {
         const saldoId = e.target.dataset && e.target.dataset.saldoId;
         if (!saldoId || !fichaAtualId || !isMestre) return;
-        if (!fichaAtual.saldos || !fichaAtual.saldos[saldoId]) return;
         const valor = Number(e.target.value) || 0;
+        if (ehIdSaldoDeItem(saldoId)) {
+            const itemId = idItemDoSaldo(saldoId);
+            if (!fichaAtual.inventario || !fichaAtual.inventario[itemId]) return;
+            fichaAtual.inventario[itemId].saldoValor = valor;
+            agendarSalvamento(`inventario/${itemId}/saldoValor`, valor);
+            return;
+        }
+        if (!fichaAtual.saldos || !fichaAtual.saldos[saldoId]) return;
         fichaAtual.saldos[saldoId].valor = valor;
         agendarSalvamento(`saldos/${saldoId}/valor`, valor);
     });
@@ -1168,7 +1180,7 @@ function configurarFinancas() {
         const valor = Number(el.financasGastarValor.value) || 0;
         if (valor <= 0) { toast("Informe um valor de gasto maior que zero.", "erro"); return; }
         const saldoId = el.financasGastarOrigem.value;
-        const saldo = fichaAtual.saldos && fichaAtual.saldos[saldoId];
+        const saldo = todosOsSaldos(fichaAtual).find(s => s.id === saldoId);
         if (!saldo) { toast("Escolha um saldo válido.", "erro"); return; }
         const saldoAtual = Number(saldo.valor) || 0;
         if (valor > saldoAtual) { toast("Valor maior que o saldo disponível.", "erro"); return; }
@@ -4313,6 +4325,7 @@ function renderizarInventario(modificadoresPlanos) {
                 ? ` · Usa: ${escapeHtml(periciasUsoItem.join(", "))}`
                 : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
             const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
+            const saldoLabel = it.ehSaldo ? ` · Saldo: CN$ ${Number(it.saldoValor) || 0}` : "";
             const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
             const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
                 ? ` · Reduz: ${it.reducoesDano.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")}`
@@ -4340,7 +4353,7 @@ function renderizarInventario(modificadoresPlanos) {
             li.innerHTML = `
                 <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
                     <span class="entity-nome">${escapeHtml(it.nome)}</span>
-                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
+                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
                 </div>
                 <div class="entity-badges">
                     ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
@@ -6331,14 +6344,14 @@ function prepararModalItem(existente, ehBanco) {
         el.modalTag.value = existente.tag || "";
         el.modalPeso.value = existente.peso ?? 0;
         if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade });
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor);
         el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
         if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0);
         el.modalEquipavel.checked = false;
     }
 
@@ -6374,7 +6387,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalPeso.value = it.peso ?? 0;
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade });
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor);
                 el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
@@ -6557,7 +6570,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma": arma
     // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
@@ -6666,6 +6679,19 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
                 : (exigePericia ? opcoes[0] : "");
         }
     }
+
+    // Carteira digital — só faz sentido em Eletrônico (um pendrive com
+    // cripto, um celular com app de banco...). Independente da perícia
+    // vinculada acima: um item pode guardar dinheiro sem servir pra
+    // Hackear/Programar, e vice-versa. Ver ehTagQuePodeSerSaldo e
+    // todosOsSaldos em dados-manual.js.
+    const podeSerSaldo = ehTagQuePodeSerSaldo(tagKey);
+    el.modalCampoItemSaldo.style.display = podeSerSaldo ? "flex" : "none";
+    if (podeSerSaldo) {
+        el.modalItemEhSaldo.checked = !!ehSaldoAtual;
+        el.modalItemSaldoValor.value = saldoValorAtual ?? 0;
+        el.modalItemSaldoValorBloco.style.display = ehSaldoAtual ? "block" : "none";
+    }
     // Ferramenta de Criação (geral) — ver ehFerramentaCriacaoGeral em
     // dados-manual.js: não tem select de perícia (não fica travada numa
     // só), só um aviso explicando que a escolha é feita ao usar o item.
@@ -6709,7 +6735,11 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0);
+});
+
+document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
+    document.getElementById("modal-item-saldo-valor-bloco").style.display = e.target.checked ? "block" : "none";
 });
 
 // Repopula o select de Qualidade conforme o Tipo de material escolhido
@@ -6991,6 +7021,18 @@ function lerPericiaUsoDoModal(tag) {
     return el.modalPericiaUso.value || null;
 }
 
+// Lê se o item foi marcado como carteira digital e, se sim, o saldo
+// atual — só se aplica a tags que podem ser saldo (eletrônico, ver
+// ehTagQuePodeSerSaldo em dados-manual.js). Retorna { ehSaldo, saldoValor }
+// já prontos pra gravar no item (ehSaldo false/undefined não devem
+// deixar saldoValor lixo sobrando de uma marcação anterior).
+function lerSaldoDoItemDoModal(tag) {
+    if (!ehTagQuePodeSerSaldo(tag) || !el.modalItemEhSaldo.checked) {
+        return { ehSaldo: false, saldoValor: null };
+    }
+    return { ehSaldo: true, saldoValor: Number(el.modalItemSaldoValor.value) || 0 };
+}
+
 async function salvarItemDoModal(id) {
     const nome = el.modalNome.value.trim();
     const tag = el.modalTag.value;
@@ -6999,6 +7041,7 @@ async function salvarItemDoModal(id) {
 
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
+    const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7052,6 +7095,8 @@ async function salvarItemDoModal(id) {
         peso: Number(el.modalPeso.value) || 0,
         categoria: el.modalCategoriaItem.value || "levando",
         periciaUso,
+        ehSaldo,
+        saldoValor,
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
@@ -7119,6 +7164,7 @@ async function salvarItemBancoDoModal(id) {
 
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
+    const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -7159,6 +7205,8 @@ async function salvarItemBancoDoModal(id) {
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         peso: Number(el.modalPeso.value) || 0,
         periciaUso,
+        ehSaldo,
+        saldoValor,
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
@@ -8124,7 +8172,7 @@ function configurarAvisoCustoVida() {
     el.custoVidaConfirmar.addEventListener("click", async () => {
         if (!fichaAtual || !fichaAtualId) return;
         const saldoId = el.custoVidaOrigem.value;
-        const saldo = fichaAtual.saldos && fichaAtual.saldos[saldoId];
+        const saldo = todosOsSaldos(fichaAtual).find(s => s.id === saldoId);
         if (!saldo) { toast("Escolha um saldo válido.", "erro"); return; }
         const total = await pagarCustoSemanal(fichaAtualId, fichaAtual, saldoId);
         toast(`Pago CN$ ${total} (${saldo.nome}).`);
@@ -8145,11 +8193,11 @@ function abrirModalCustoVida() {
         ? `Gasto semanal total: CN$ ${total}.`
         : `Defina um padrão de vida no Perfil antes de pagar (gasto atual considera só extras: CN$ ${total}).`;
 
-    const saldos = fichaAtual.saldos || {};
+    const saldos = todosOsSaldos(fichaAtual);
     el.custoVidaOrigem.innerHTML = "";
-    Object.entries(saldos).forEach(([id, s]) => {
+    saldos.forEach((s) => {
         const opt = document.createElement("option");
-        opt.value = id;
+        opt.value = s.id;
         opt.innerText = s.nome;
         el.custoVidaOrigem.appendChild(opt);
     });
