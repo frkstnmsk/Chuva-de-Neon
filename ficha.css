@@ -317,6 +317,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 10px;
     cursor: pointer;
     transition: background 0.15s ease;
@@ -339,6 +340,14 @@
     flex-direction: column;
     gap: 2px;
     overflow: hidden;
+    /* Base mínima de espaço garantida pro nome/detalhes do item — sem
+       isso, quando `.entity-badges` tinha muitos botões (ex: arma com
+       Recarregar + Retirar carregador + Usar...), o flexbox espremia
+       este bloco até 0px de largura (efeito colateral de overflow:hidden
+       no cálculo de "min-width: auto" do flexbox) e o nome/infos do
+       item sumiam por completo, sobrando só os botões. */
+    flex: 1 1 200px;
+    min-width: 160px;
 }
 .entity-list .entity-nome {
     font-family: var(--font-display);
@@ -360,6 +369,13 @@
     flex-wrap: wrap;
     justify-content: flex-end;
 }
+/* Em telas estreitas, se os botões forem pra uma linha própria (por
+   causa do flex-wrap acima), fica mais legível alinhados à esquerda,
+   embaixo do nome, em vez de "flutuando" à direita. */
+@media (max-width: 600px) {
+    .entity-list .entity-badges { justify-content: flex-start; width: 100%; }
+}
+
 .mod-pill {
     font-family: var(--font-mono);
     font-size: 0.68rem;

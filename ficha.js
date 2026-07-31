@@ -7446,6 +7446,19 @@ async function excluirEntidadeAtual() {
 // =====================================================================
 
 function configurarCalendario() {
+    // Campo de texto (não type="number") de propósito — em boa parte dos
+    // teclados numéricos de celular, o <input type="number"> não mostra
+    // a tecla de "-", tornando impossível digitar temperatura negativa.
+    // Aqui só filtra o que é digitado pra aceitar dígitos e um sinal de
+    // menos opcional na frente (ex: "-5", "12").
+    if (el.calEditTemp) {
+        el.calEditTemp.addEventListener("input", () => {
+            const negativo = el.calEditTemp.value.trim().startsWith("-");
+            const digitos = el.calEditTemp.value.replace(/[^0-9]/g, "");
+            el.calEditTemp.value = (negativo ? "-" : "") + digitos;
+        });
+    }
+
     ouvirCalendario((cal) => {
         if (!cal) return;
         calendarioAtual = cal;

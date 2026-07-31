@@ -149,7 +149,25 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         if (!snap.exists()) throw new Error("Ficha do alvo não encontrada.");
         const raw = snap.val();
         const nomeAlvo = (raw.config && raw.config.nomeExibicao) || alvoId;
-        const pvAtual = (raw.dados && raw.dados.pvAtual !== null && raw.dados.pvAtual !== undefined) ? Number(raw.dados.pvAtual) : 0;
+        // Quando pvAtual ainda não foi definido (ficha nova/em criação,
+        // ainda sem dano registrado), o padrão tem que ser o PV MÁXIMO
+        // calculado — nunca 0. Usar 0 aqui fazia qualquer dano aplicado
+        // a um personagem ainda em criação "matar" ele na hora, mesmo
+        // sem nunca ter perdido PV de verdade (a mesma convenção de
+        // "sem dano registrado = PV cheio" já usada em toda parte,
+        // ex: calcularEstadoSaude em regras.js).
+        const dadosRaw = raw.dados || {};
+        let pvMaximoRaw = 0;
+        if (dadosRaw.pvAtual === null || dadosRaw.pvAtual === undefined) {
+            const fichaNormalizada = normalizarFicha(raw);
+            const modificadoresRaw = coletarModificadores(fichaNormalizada);
+            const derivadosRaw = calcularDerivados(fichaNormalizada.dados, modificadoresRaw);
+            const bonusExtraRaw = Number(dadosRaw.pvBonusExtra) || 0;
+            const totalCalculadoRaw = Math.round(derivadosRaw.recursos.pv.total) + bonusExtraRaw;
+            const overrideRaw = dadosRaw.pvMaximoOverride;
+            pvMaximoRaw = (overrideRaw !== null && overrideRaw !== undefined && overrideRaw !== "") ? (Number(overrideRaw) || 0) : totalCalculadoRaw;
+        }
+        const pvAtual = (dadosRaw.pvAtual !== null && dadosRaw.pvAtual !== undefined) ? Number(dadosRaw.pvAtual) : pvMaximoRaw;
         const inventario = raw.inventario || {};
         // Desvantagem Frágil (manual pg. 18): dobra o dano recebido de
         // qualquer tipo de ataque. Aplicada sobre o dano BRUTO do golpe
@@ -179,7 +197,9 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     if (!snap.exists()) throw new Error("NPC alvo não encontrado.");
     const npc = snap.val();
     const nomeAlvo = npc.nome || "NPC";
-    const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : 0;
+    // Mesma correção do ramo de ficha logo acima: sem pvAtual definido,
+    // o padrão é o PV máximo do NPC (npc.pvs), não 0.
+    const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : (Number(npc.pvs) || 0);
     // NPCs não têm armadura detalhada por parte do corpo — reducoesDano
     // deles continua valendo pra qualquer local mirado (simplificação;
     // só a ficha de jogador tem localProtegido por item).
