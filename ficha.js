@@ -1279,13 +1279,47 @@ async function alternarAtivoEntidade(lista, id, novoValor) {
 // Equipar/desequipar um item do inventário — só item equipado pode ser
 // usado (ver itemPodeUsar em inventario.js); pra armas, também é o que
 // a manobra "Desarmar" de fato retira do alvo (ver resolverDesarmar).
-async function alternarEquipadaItem(id, novoValor) {
+//
+// EQUIPAR (não desequipar) durante combate com iniciativa ativo gasta 1
+// ação do turno — mesmo Sistema de Aprovação do Mestre usado pro resto
+// das ações (ver checarConsumoDeAcao/criarAcaoPendente): jogador manda
+// o gasto pro Mestre aprovar, e Mestre (controlando a própria ficha ou
+// um NPC em modoNpc) gasta na hora. Fora de combate com iniciativa, ou
+// desequipar, continua sendo ação livre.
+async function alternarEquipadaItem(id, novoValor, nomeItem) {
     if (!idAtivo()) return;
+
+    let consumo = { participanteId: null, direto: false, extraCQC: false };
+    if (novoValor) {
+        consumo = checarConsumoDeAcao(true, false);
+        if (!consumo) return;
+    }
+
     try {
         await update(ref(db, `${caminhoBase()}/inventario/${id}`), { equipada: novoValor });
-        toast(novoValor ? "Item equipado." : "Item desequipado.");
     } catch (e) {
         toast("Não foi possível atualizar o item. Tente de novo.", "erro");
+        return;
+    }
+
+    if (!consumo.participanteId) {
+        toast(novoValor ? "Item equipado." : "Item desequipado.");
+        return;
+    }
+
+    if (consumo.direto) {
+        await consumirAcaoCombate(consumo.participanteId);
+        toast("Item equipado — 1 ação consumida.");
+    } else {
+        const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador,
+            detalhe: `${nomeJogador} equipou ${nomeItem || "um item"} e quer gastar 1 ação do turno.`,
+            payload: { participanteId: consumo.participanteId, extraCQC: false, ehArmaFogo: false }
+        });
+        toast("Item equipado — gasto de ação enviado pro Mestre aprovar.");
     }
 }
 
@@ -4435,7 +4469,7 @@ function renderizarInventario(modificadoresPlanos) {
                 btnToggleEquipada.addEventListener("click", (e) => {
                     e.stopPropagation();
                     if (!podeEquipar) return;
-                    alternarEquipadaItem(id, !equipadaItem);
+                    alternarEquipadaItem(id, !equipadaItem, it.nome);
                 });
             }
             const selectTransferir = li.querySelector(".select-transferir");
@@ -4579,7 +4613,7 @@ function renderizarCombate() {
             li.querySelector(".btn-toggle-equipada").addEventListener("click", (e) => {
                 e.stopPropagation();
                 if (!podeEquiparArma) return;
-                alternarEquipadaItem(arma.id, !equipadaArma);
+                alternarEquipadaItem(arma.id, !equipadaArma, arma.nome);
             });
             li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
                 e.stopPropagation();
@@ -9199,8 +9233,10 @@ function montarGerenciadorCombate(corpoOriginal) {
         if (!selectFichaAdd.value) { toast("Escolha uma ficha.", "erro"); return; }
         const jaEsta = Object.values((combateAtivoCache && combateAtivoCache.participantes) || {}).some(p => p.tipo === "ficha" && p.refId === selectFichaAdd.value);
         if (jaEsta) { toast("Essa ficha já está no combate.", "erro"); return; }
-        await adicionarParticipanteCombate({ tipo: "ficha", refId: selectFichaAdd.value, nome: nomeDeFicha(selectFichaAdd.value) });
-        toast("Jogador adicionado ao combate.");
+        const resultado = await adicionarParticipanteCombate({ tipo: "ficha", refId: selectFichaAdd.value, nome: nomeDeFicha(selectFichaAdd.value) });
+        toast(resultado && resultado.entrouComIniciativa
+            ? `Jogador adicionado ao combate já em andamento — iniciativa ${resultado.iniciativa}, já entrou na fila.`
+            : "Jogador adicionado ao combate.");
     });
     corpo.append(selectFichaAdd, btnAddFicha);
 
@@ -9229,8 +9265,10 @@ function montarGerenciadorCombate(corpoOriginal) {
         const jaEsta = Object.values((combateAtivoCache && combateAtivoCache.participantes) || {}).some(p => p.tipo === "npc" && p.refId === selectNpcAdd.value);
         if (jaEsta) { toast("Esse NPC já está no combate.", "erro"); return; }
         const nomeOpt = selectNpcAdd.options[selectNpcAdd.selectedIndex].innerText;
-        await adicionarParticipanteCombate({ tipo: "npc", refId: selectNpcAdd.value, nome: nomeOpt });
-        toast("NPC adicionado ao combate.");
+        const resultado = await adicionarParticipanteCombate({ tipo: "npc", refId: selectNpcAdd.value, nome: nomeOpt });
+        toast(resultado && resultado.entrouComIniciativa
+            ? `NPC adicionado ao combate já em andamento — iniciativa ${resultado.iniciativa}, já entrou na fila.`
+            : "NPC adicionado ao combate.");
     });
     corpo.append(selectNpcAdd, btnAddNpc);
 
@@ -9264,8 +9302,10 @@ function montarGerenciadorCombate(corpoOriginal) {
         areaNovoNpcCombate.innerHTML = "";
         montarFormularioNpcDetalhado(areaNovoNpcCombate, null, async (novoId, nome) => {
             if (novoId) {
-                await adicionarParticipanteCombate({ tipo: "npc", refId: novoId, nome });
-                toast(`${nome} criado e adicionado ao combate.`);
+                const resultado = await adicionarParticipanteCombate({ tipo: "npc", refId: novoId, nome });
+                toast(resultado && resultado.entrouComIniciativa
+                    ? `${nome} criado e adicionado ao combate já em andamento — iniciativa ${resultado.iniciativa}, já entrou na fila.`
+                    : `${nome} criado e adicionado ao combate.`);
             }
             mostrarFormNovoNpcCombate();
         });

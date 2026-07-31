@@ -501,11 +501,81 @@ export function ouvirCombateAtivo(callback) {
     });
 }
 
+// Se o combate ainda não teve a iniciativa rolada (Mestre só está
+// montando a lista de participantes antes de clicar "Iniciar Combate"),
+// mantém o comportamento de sempre: entra na lista pelada, sem
+// iniciativa, e rola junto com todo mundo quando o Mestre iniciar.
+//
+// Mas se o combate JÁ está rolando (ordemTurnos existe e não está
+// vazio) — ex: um jogador entra na cena no meio do tiroteio, ou o
+// Mestre traz um NPC de reforço no meio da rodada — o recém-chegado
+// precisa da própria rolagem de iniciativa (1d20 + Agilidade, mesma
+// fórmula/stats de iniciarIniciativaCombate) pra já entrar na fila de
+// turnos, em vez de ficar parado esperando o próximo combate pra agir.
 export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
+    const snapAtual = await get(ref(db, caminhoMesa("combateAtivo")));
+    const estadoAtual = snapAtual.exists() ? snapAtual.val() : {};
+    const iniciativaJaRolada = !!(estadoAtual.ativo && Array.isArray(estadoAtual.ordemTurnos) && estadoAtual.ordemTurnos.length);
+
     await update(ref(db, caminhoMesa("combateAtivo")), { ativo: true });
     const novaRef = push(ref(db, caminhoMesa("combateAtivo/participantes")));
-    await set(novaRef, { tipo, refId, nome: nome || refId });
-    return novaRef.key;
+    const participanteId = novaRef.key;
+    const base = { tipo, refId, nome: nome || refId };
+
+    if (!iniciativaJaRolada) {
+        await set(novaRef, base);
+        return { id: participanteId, entrouComIniciativa: false };
+    }
+
+    // Mesma combinação Godmode + "ignorar penalidade de saúde" usada em
+    // iniciarIniciativaCombate/avancarTurnoCombate — a rolagem tardia
+    // tem que respeitar o mesmo Godmode que já vale pro resto do combate.
+    const [snapGodmode, snapIgnorarSaude] = await Promise.all([
+        get(ref(db, caminhoMesa("godmode"))),
+        get(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")))
+    ]);
+    const godmodeAtivo = snapGodmode.exists() ? !!snapGodmode.val() : false;
+    const ignorarPenalidadeSaude = godmodeAtivo && (snapIgnorarSaude.exists() ? !!snapIgnorarSaude.val() : false);
+
+    const stats = await calcularStatsCombateParticipante(base, ignorarPenalidadeSaude);
+    const rolagemBruta = rolarD20();
+    const acoesMax = calcularAcoesMax(stats.velocidade);
+    // Bônus automático de Karatê Cobra Kai (manual pg. 22) continua
+    // valendo pra quem entra depois. Os bônus condicionais de CQC
+    // (nível 2/4 — dependem de uma escolha narrativa feita ANTES da
+    // rolagem, ver participantesElegiveisCQCIniciativa) ficam de fora
+    // dessa entrada tardia, já que ela não passa pela modal de
+    // pré-iniciativa; o Mestre pode ajustar na mão se for o caso.
+    const bonusCobraKai = bonusCobraKaiIniciativa(stats.nivelCobraKai);
+
+    const participanteCompleto = {
+        ...base,
+        ...stats,
+        rolagemBruta,
+        iniciativa: rolagemBruta + stats.modAgilidade + bonusCobraKai,
+        bonusCQCIniciativa: false,
+        bonusCobraKaiIniciativa: bonusCobraKai,
+        acoesMax,
+        acoes: acoesMax,
+        dispararAvancarDisponivel: false,
+        dispararAvancarUsado: false,
+        acoesExtraCQCMax: 0,
+        acoesExtraCQC: 0,
+        esquivasDisponiveis: 0
+    };
+
+    await set(novaRef, participanteCompleto);
+
+    // Reordena a fila inteira com o recém-chegado incluído (mesmo
+    // critério de ordenarPorIniciativa: maior iniciativa age primeiro,
+    // empate decide pelo modAgilidade). `turnoAtual` é guardado pelo id,
+    // não pelo índice, então quem já estava agindo não perde a vez só
+    // porque a lista mudou de posição.
+    const participantesAtualizados = { ...(estadoAtual.participantes || {}), [participanteId]: participanteCompleto };
+    const novaOrdem = ordenarPorIniciativa(participantesAtualizados);
+    await update(ref(db, caminhoMesa("combateAtivo")), { ordemTurnos: novaOrdem });
+
+    return { id: participanteId, entrouComIniciativa: true, iniciativa: participanteCompleto.iniciativa };
 }
 
 export async function removerParticipanteCombate(participanteId) {
