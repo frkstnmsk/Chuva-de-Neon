@@ -8,10 +8,14 @@
 /* Caixa fixa "VOCÊ ESTÁ EM COMBATE!" */
 .combate-alerta-fixo {
   position: fixed;
-  top: 12px;
+  /* Fica ENCOSTADA embaixo da topbar (mesma variável usada pelo painel
+     de info do topo em ficha.css) — em vez de sobrepor top:12px, que
+     ficava atrás da topbar (z-index 4000) e nunca aparecia de verdade
+     pro jogador, mesmo com o elemento existindo certinho no DOM. */
+  top: calc(var(--topbar-h, 90px) + 8px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 999;
+  z-index: 4500;
   background: var(--neon-red);
   color: #fff;
   text-transform: uppercase;
