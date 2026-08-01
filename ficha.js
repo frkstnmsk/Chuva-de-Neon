@@ -142,6 +142,12 @@ const CAMPOS_PERICIA_BLOQUEADOS_FORA_DE_EDICAO = true;
 // ---------------------------------------------------------------------
 let fichaAtualId = isMestre ? "" : sessao.idLimpo;
 let fichaAtual = null; // snapshot completo vindo do Firebase
+// Guarda o PV atual da última sincronização (e de qual ficha/NPC era)
+// só pra detectar queda de PV entre um snapshot e outro e disparar o
+// efeito de tela (flash + tremor) de "acabou de levar dano" — ver
+// dispararEfeitoDanoSeCaiu() logo abaixo de ativarSincronizacao().
+let pvAtualUltimaSync = undefined;
+let idUltimaSyncEfeitoDano = null;
 // "Atuar como NPC" (só Mestre): quando ativo, a tela inteira da Ficha
 // passa a ler/escrever em `npcs/{npcAtualId}` em vez de `fichas/{id}`
 // — ver caminhoBase() e ativarSincronizacao(). Permite ao Mestre usar a
@@ -170,6 +176,11 @@ let ultimoAvisoCustoVida = null; // último valor visto de `avisoCustoVida` no F
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
 let combateNpcFormVisivel = false; // controla se o formulário de "Criar novo NPC" está aberto dentro do Gerenciador de Combate
 let painelIniciativaJogadorAberto = false; // controla se o modal "Gerenciador de Combate do Jogador" está na tela
+// Ações Rápidas (item 16): guarda as últimas ações de combate DIFERENTES
+// que o jogador usou (ex.: "Faca" e "Esquivar"), pra montar os botões
+// grandes/redondos flutuantes que repetem a ação com 1 clique — ver
+// registrarAcaoRapida/renderizarAcoesRapidas mais abaixo.
+let historicoAcoesRapidas = [];
 let pendentesCache = []; // fila de Ações Pendentes (compartilhada)
 let contadorPendentesAnterior = 0; // pra detectar chegada de pedido novo e disparar alerta
 
@@ -234,11 +245,25 @@ const el = {
     btnSalvar: document.getElementById("btn-salvar"),
     saveStatus: document.getElementById("save-status"),
     tabsNav: document.getElementById("tabs-nav"),
+    tabsFixadas: document.getElementById("tabs-fixadas"),
+    tabsMaisWrap: document.getElementById("tabs-mais-wrap"),
+    tabsMaisBtn: document.getElementById("tabs-mais-btn"),
+    tabsMaisMenu: document.getElementById("tabs-mais-menu"),
+    tabsEditarBtn: document.getElementById("tabs-editar-btn"),
+    tabsModoBtn: document.getElementById("tabs-modo-btn"),
     gridAtributosPrimarios: document.getElementById("grid-atributos-primarios"),
     gridAtributosSecundarios: document.getElementById("grid-atributos-secundarios"),
     gridRecursos: document.getElementById("grid-recursos"),
     estadoSaudeBadge: document.getElementById("estado-saude-badge"),
     estadoEnergiaBadge: document.getElementById("estado-energia-badge"),
+    vitalPvFill: document.getElementById("vital-pv-fill"),
+    vitalPvNumero: document.getElementById("vital-pv-numero"),
+    vitalEnergiaFill: document.getElementById("vital-energia-fill"),
+    vitalEnergiaNumero: document.getElementById("vital-energia-numero"),
+    vitalEquipados: document.getElementById("vital-equipados"),
+    efeitoDanoOverlay: document.getElementById("efeito-dano-overlay"),
+    acoesRapidasFlutuante: document.getElementById("acoes-rapidas-flutuante"),
+    acoesRapidasLista: document.getElementById("acoes-rapidas-lista"),
     overlayMorte: document.getElementById("overlay-morte"),
     overlayMorteTitulo: document.getElementById("overlay-morte-titulo"),
     overlayMorteTexto: document.getElementById("overlay-morte-texto"),
@@ -431,6 +456,14 @@ function toast(msg, tipo = "ok") {
     setTimeout(() => div.remove(), 3600);
 }
 
+// Lucide substitui cada <i data-lucide="nome"></i> por um <svg> — só
+// precisa rodar de novo depois de qualquer innerHTML novo que tenha
+// desses marcadores (ela ignora o que já foi processado, então chamar
+// à toa não tem custo real).
+function atualizarIcones() {
+    if (window.lucide?.createIcons) window.lucide.createIcons();
+}
+
 // ---------------------------------------------------------------------
 // Inicialização
 // ---------------------------------------------------------------------
@@ -443,6 +476,7 @@ async function init() {
 
     montarGridsEstaticas();
     montarAbas();
+    gerenciarLayoutAbas();
     montarSelectsFixos();
 
     // Regra de ouro financeira/inventário: só o Mestre pode adicionar
@@ -702,6 +736,8 @@ function ativarSincronizacao() {
         }
         el.nomeFichaAtiva.innerText = ((fichaAtual.config.nomeExibicao || fichaAtualId).toUpperCase()) + (modoNpc ? " (NPC)" : "");
 
+        dispararEfeitoDanoSeCaiu();
+
         aplicarVisibilidadeAbasNpc();
 
         verificarCriacaoPendente();
@@ -735,6 +771,42 @@ function marcarSincronizado() {
     el.saveStatus.innerText = "sincronizado em tempo real";
 }
 
+// Compara o PV atual desta sincronização com o da anterior (mesma
+// ficha/NPC) e, se caiu, dispara o efeito de tela de "acabou de levar
+// dano" (flash vermelho + tremor — ver dispararEfeitoDano). Reseta a
+// comparação sempre que troca de ficha/NPC (Mestre atuando por
+// outro personagem, por exemplo) pra não disparar o efeito à toa na
+// primeira carga.
+function dispararEfeitoDanoSeCaiu() {
+    const idAtual = modoNpc ? npcAtualId : fichaAtualId;
+    if (idAtual !== idUltimaSyncEfeitoDano) {
+        idUltimaSyncEfeitoDano = idAtual;
+        pvAtualUltimaSync = Number(fichaAtual?.dados?.pvAtual);
+        return;
+    }
+    const pvNovo = Number(fichaAtual?.dados?.pvAtual);
+    if (Number.isFinite(pvAtualUltimaSync) && Number.isFinite(pvNovo) && pvNovo < pvAtualUltimaSync) {
+        dispararEfeitoDano();
+    }
+    pvAtualUltimaSync = pvNovo;
+}
+
+// Efeito de tela rápido (flash vermelho + tremor) quando o personagem
+// leva dano — além do texto que já aparece no Log de Dados/toast.
+function dispararEfeitoDano() {
+    if (el.efeitoDanoOverlay) {
+        el.efeitoDanoOverlay.classList.remove("efeito-dano-ativo");
+        void el.efeitoDanoOverlay.offsetWidth; // força reflow pra poder re-disparar a animação em dano seguido
+        el.efeitoDanoOverlay.classList.add("efeito-dano-ativo");
+    }
+    if (el.app) {
+        el.app.classList.remove("efeito-dano-tremor");
+        void el.app.offsetWidth;
+        el.app.classList.add("efeito-dano-tremor");
+        setTimeout(() => el.app.classList.remove("efeito-dano-tremor"), 420);
+    }
+}
+
 // Pausa o listener do onValue durante uma sequência de múltiplos updates
 // pro Firebase, evitando que cada update intermediário dispare uma
 // re-renderização com estado parcial. Sempre usar em par com retornarSync().
@@ -746,7 +818,7 @@ function retornarSync() { if (_pausarListener > 0) _pausarListener--; }
 // =====================================================================
 
 function montarAbas() {
-    const botoes = el.tabsNav.querySelectorAll(".tab-btn");
+    const botoes = el.tabsNav.querySelectorAll(".tab-btn[data-tab]");
     botoes.forEach(btn => {
         btn.addEventListener("click", () => {
             botoes.forEach(b => b.classList.remove("active"));
@@ -755,6 +827,192 @@ function montarAbas() {
             document.querySelector(`.tab-panel[data-tab="${btn.dataset.tab}"]`).classList.add("active");
         });
     });
+}
+
+// =====================================================================
+// LAYOUT DAS ABAS: modo "fileira" (tudo visível, como sempre foi) vs.
+// modo "compacto" (o jogador escolhe quais ficam sempre fixas e o resto
+// vai pro menu "Mais"), com arrastar-e-soltar pra mover abas entre as
+// duas zonas. Funciona com mouse e touch (Pointer Events). A escolha é
+// salva no navegador (localStorage), por isso é por aparelho/navegador,
+// não por personagem.
+// =====================================================================
+const CHAVE_ABAS_MODO = "cdn_abas_modo";
+const CHAVE_ABAS_FIXADAS = "cdn_abas_fixadas";
+const CHAVE_ABAS_MAIS = "cdn_abas_mais_ordem";
+const ABAS_FIXADAS_PADRAO = ["perfil", "atributos", "pericias", "inventario", "combate"];
+
+function gerenciarLayoutAbas() {
+    if (!el.tabsNav || !el.tabsFixadas || !el.tabsMaisMenu || !el.tabsMaisWrap || !el.tabsEditarBtn || !el.tabsModoBtn) return;
+
+    const todosBotoes = [...el.tabsNav.querySelectorAll(".tab-btn[data-tab]")];
+    const mapaBotoes = {};
+    todosBotoes.forEach(b => { mapaBotoes[b.dataset.tab] = b; });
+    let modoAtual = "fileira";
+
+    function lerLS(chave) {
+        try { return localStorage.getItem(chave); } catch { return null; }
+    }
+    function lerListaSalva(chave, padrao) {
+        const bruto = lerLS(chave);
+        if (!bruto) return padrao;
+        try {
+            const lista = JSON.parse(bruto);
+            return Array.isArray(lista) ? lista.filter(k => mapaBotoes[k]) : padrao;
+        } catch { return padrao; }
+    }
+    function salvar() {
+        try {
+            localStorage.setItem(CHAVE_ABAS_MODO, modoAtual);
+            localStorage.setItem(CHAVE_ABAS_FIXADAS, JSON.stringify([...el.tabsFixadas.children].map(b => b.dataset.tab)));
+            localStorage.setItem(CHAVE_ABAS_MAIS, JSON.stringify([...el.tabsMaisMenu.children].map(b => b.dataset.tab)));
+        } catch { /* localStorage indisponível (modo privado etc.) — só não persiste */ }
+    }
+
+    function atualizarVisibilidadeMais() {
+        el.tabsMaisWrap.style.display = (modoAtual === "compacto" && el.tabsMaisMenu.children.length) ? "" : "none";
+    }
+
+    function sairModoEdicao() {
+        el.tabsNav.classList.remove("editando");
+        el.tabsEditarBtn.innerHTML = '<i data-lucide="move"></i> Organizar';
+        el.tabsEditarBtn.classList.remove("ativo");
+        el.tabsMaisWrap.classList.remove("aberto");
+        atualizarVisibilidadeMais();
+        atualizarIcones();
+    }
+
+    function aplicarModo(modo) {
+        modoAtual = modo;
+        sairModoEdicao();
+
+        if (modo === "fileira") {
+            [...el.tabsMaisMenu.children].forEach(b => el.tabsFixadas.appendChild(b));
+            el.tabsEditarBtn.disabled = true;
+            el.tabsModoBtn.innerHTML = '<i data-lucide="layout-grid"></i> Compacto';
+            el.tabsModoBtn.classList.add("ativo");
+        } else {
+            const fixadasSalvas = lerListaSalva(CHAVE_ABAS_FIXADAS, ABAS_FIXADAS_PADRAO);
+            const maisSalvas = lerListaSalva(
+                CHAVE_ABAS_MAIS,
+                todosBotoes.map(b => b.dataset.tab).filter(k => !fixadasSalvas.includes(k))
+            );
+            fixadasSalvas.forEach(k => mapaBotoes[k] && el.tabsFixadas.appendChild(mapaBotoes[k]));
+            maisSalvas.forEach(k => { if (mapaBotoes[k] && !fixadasSalvas.includes(k)) el.tabsMaisMenu.appendChild(mapaBotoes[k]); });
+            // Qualquer aba que não caiu em nenhuma das duas listas salvas
+            // (ex.: uma aba nova que não existia quando o jogador salvou a
+            // preferência) cai no "Mais" por padrão, pra não sumir.
+            todosBotoes.forEach(b => {
+                if (!el.tabsFixadas.contains(b) && !el.tabsMaisMenu.contains(b)) el.tabsMaisMenu.appendChild(b);
+            });
+            el.tabsEditarBtn.disabled = false;
+            el.tabsModoBtn.innerHTML = '<i data-lucide="rows-3"></i> Fileira';
+            el.tabsModoBtn.classList.remove("ativo");
+        }
+        atualizarVisibilidadeMais();
+        aplicarVisibilidadeAbasNpc();
+        salvar();
+        atualizarIcones();
+    }
+
+    el.tabsModoBtn.addEventListener("click", () => {
+        aplicarModo(modoAtual === "fileira" ? "compacto" : "fileira");
+    });
+
+    el.tabsEditarBtn.addEventListener("click", () => {
+        if (modoAtual !== "compacto") return;
+        if (el.tabsNav.classList.contains("editando")) {
+            sairModoEdicao();
+            salvar();
+        } else {
+            el.tabsNav.classList.add("editando");
+            el.tabsMaisWrap.classList.remove("aberto");
+            el.tabsEditarBtn.innerHTML = '<i data-lucide="check"></i> Concluir';
+            el.tabsEditarBtn.classList.add("ativo");
+            atualizarIcones();
+        }
+    });
+
+    // Dropdown do "Mais" (só relevante fora do modo de organizar, onde a
+    // caixa fica sempre aberta via CSS pra dar pra soltar abas nela).
+    el.tabsMaisBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        el.tabsMaisWrap.classList.toggle("aberto");
+    });
+    el.tabsMaisMenu.addEventListener("click", (e) => {
+        if (e.target.closest(".tab-btn")) el.tabsMaisWrap.classList.remove("aberto");
+    });
+    document.addEventListener("click", (e) => {
+        if (!el.tabsMaisWrap.classList.contains("aberto")) return;
+        if (el.tabsMaisWrap.contains(e.target)) return;
+        el.tabsMaisWrap.classList.remove("aberto");
+    });
+
+    // ---- Arrastar-e-soltar (mouse + touch, via Pointer Events) ----
+    let arrastando = null, arrastoIniciado = false, xInicial = 0, yInicial = 0;
+
+    function containerNoPonto(x, y) {
+        const alvo = document.elementFromPoint(x, y);
+        if (!alvo) return null;
+        if (alvo === el.tabsFixadas || alvo === el.tabsMaisMenu) return alvo;
+        return alvo.closest(".tabs-fixadas, .tabs-mais-menu");
+    }
+    function posicaoDeInsercao(container, x, y) {
+        const itens = [...container.children].filter(c => c !== arrastando && c.classList.contains("tab-btn"));
+        let melhor = null, menorDist = Infinity;
+        itens.forEach(item => {
+            const r = item.getBoundingClientRect();
+            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+            const d = Math.hypot(x - cx, y - cy);
+            if (d < menorDist) { menorDist = d; melhor = { item, cx }; }
+        });
+        if (!melhor) return null;
+        return x < melhor.cx ? melhor.item : melhor.item.nextElementSibling;
+    }
+    function onPointerMoveArrastar(e) {
+        if (!arrastando) return;
+        if (!arrastoIniciado) {
+            if (Math.hypot(e.clientX - xInicial, e.clientY - yInicial) < 6) return;
+            arrastoIniciado = true;
+            arrastando.classList.add("arrastando");
+        }
+        const container = containerNoPonto(e.clientX, e.clientY) || arrastando.parentElement;
+        const ref = posicaoDeInsercao(container, e.clientX, e.clientY);
+        if (ref) container.insertBefore(arrastando, ref); else container.appendChild(arrastando);
+    }
+    function onPointerUpArrastar(e) {
+        if (!arrastando) return;
+        const btn = arrastando;
+        if (arrastoIniciado) {
+            // Engole o próximo clique (soltar o botão dispara "click" em
+            // seguida) pra não trocar de aba sem querer só por causa do arrasto.
+            btn.addEventListener("click", (ce) => { ce.stopPropagation(); ce.preventDefault(); }, { once: true, capture: true });
+        }
+        btn.classList.remove("arrastando");
+        btn.releasePointerCapture?.(e.pointerId);
+        btn.removeEventListener("pointermove", onPointerMoveArrastar);
+        btn.removeEventListener("pointerup", onPointerUpArrastar);
+        btn.removeEventListener("pointercancel", onPointerUpArrastar);
+        arrastando = null;
+        arrastoIniciado = false;
+        atualizarVisibilidadeMais();
+        salvar();
+    }
+    el.tabsNav.addEventListener("pointerdown", (e) => {
+        if (!el.tabsNav.classList.contains("editando")) return;
+        const btn = e.target.closest(".tab-btn[data-tab]");
+        if (!btn) return;
+        arrastando = btn;
+        arrastoIniciado = false;
+        xInicial = e.clientX;
+        yInicial = e.clientY;
+        btn.setPointerCapture(e.pointerId);
+        btn.addEventListener("pointermove", onPointerMoveArrastar);
+        btn.addEventListener("pointerup", onPointerUpArrastar);
+        btn.addEventListener("pointercancel", onPointerUpArrastar);
+    });
+
+    aplicarModo(lerLS(CHAVE_ABAS_MODO) || "fileira");
 }
 
 // Abas que não fazem sentido pra um NPC (finanças, treinamento/estudo,
@@ -1053,6 +1311,7 @@ function renderizarTudo() {
     verificarMorte();
     renderizarPericias(modificadoresPlanos);
     renderizarInventario(modificadoresPlanos);
+    renderizarItensEquipadosTopo();
     renderizarCombate();
     renderizarVantagensDesvantagens();
     renderizarEspecializacoes();
@@ -1468,6 +1727,8 @@ function renderizarAtributos(modificadoresPlanos) {
     const estadoEnergia = calcularEstadoEnergia(d.energiaAtual, energiaMaximoTotal, ignorarPenalidadeSaude);
     renderizarEstadoEnergia(estadoEnergia);
 
+    renderizarBarrasVitaisTopo(d.pvAtual, pvMaximoTotal, estadoSaude, d.energiaAtual, energiaMaximoTotal, estadoEnergia);
+
     // Secundários calculados
     ATRIBUTOS_SECUNDARIOS.forEach(attr => {
         const span = document.querySelector(`[data-attr-secundario-valor="${attr.key}"]`);
@@ -1483,6 +1744,62 @@ function renderizarAtributos(modificadoresPlanos) {
     window._ultimosModificadores = modificadoresPlanos;
     window._estadoSaudeAtual = estadoSaude; // usado por penalidadeTestesAtual() nas rolagens
     window._estadoEnergiaAtual = estadoEnergia; // usado por penalidadeEnergiaParaPericia() nas rolagens
+}
+
+// Barrinhas de PV/Energia no topo da ficha (sempre visíveis, sem precisar
+// rolar até "Recursos vitais"). A cor NÃO é um percentual solto — segue
+// exatamente os mesmos estados de calcularEstadoSaude/calcularEstadoEnergia
+// (regras.js) que já definem Machucado/Muito Machucado e Energia
+// Baixa/Crítica em qualquer outro lugar da ficha: saudável = verde,
+// Machucado/Energia Baixa = amarela, Muito Machucado/Energia
+// Crítica/Morte = vermelha. Isso já embute o efeito da perícia
+// Tolerância, que empurra o limiar de Muito Machucado de 1/3 pra 1/4 do
+// PV máximo (ver LIMIAR_MUITO_MACHUCADO_COM_TOLERANCIA) — como o estado
+// já vem calculado assim de fora, a barra automaticamente segue junto.
+function renderizarBarrasVitaisTopo(pvAtual, pvMax, estadoSaude, energiaAtual, energiaMax, estadoEnergia) {
+    const corPorEstado = estado => {
+        if (!estado) return null;
+        if (estado === "machucado" || estado === "energia_baixa") return "vital-cor-media";
+        if (estado === "muito_machucado" || estado === "energia_critica" || estado === "morte") return "vital-cor-critica";
+        return null;
+    };
+    const aplicarBarra = (fillEl, numeroEl, atualBruto, max, classeCor) => {
+        if (!fillEl || !numeroEl) return;
+        const atual = (atualBruto === null || atualBruto === undefined) ? max : Number(atualBruto);
+        const maxSeguro = Number(max) || 0;
+        const pct = maxSeguro > 0 ? Math.max(0, Math.min(100, (atual / maxSeguro) * 100)) : 0;
+        fillEl.style.width = `${pct}%`;
+        fillEl.classList.remove("vital-cor-media", "vital-cor-critica");
+        if (classeCor) fillEl.classList.add(classeCor);
+        numeroEl.innerText = `${Math.round(atual)}/${Math.round(maxSeguro)}`;
+    };
+    aplicarBarra(el.vitalPvFill, el.vitalPvNumero, pvAtual, pvMax, corPorEstado(estadoSaude && estadoSaude.estado));
+    aplicarBarra(el.vitalEnergiaFill, el.vitalEnergiaNumero, energiaAtual, energiaMax, corPorEstado(estadoEnergia && estadoEnergia.estado));
+
+    // Destaque de "muito ferido": a ficha inteira ganha uma borda vermelha
+    // pulsando bem devagar quando o estado é grave (Muito Machucado ou
+    // Energia Crítica) — mesma leitura das barras acima, só que dá pra
+    // notar mesmo sem estar olhando pro topo. Morte já tem seu próprio
+    // overlay cobrindo a tela, então não precisa duplicar o alerta aqui.
+    const estadoGrave = (estadoSaude && estadoSaude.estado === "muito_machucado")
+        || (estadoEnergia && estadoEnergia.estado === "energia_critica");
+    if (el.app) el.app.classList.toggle("ficha-muito-ferido", !!estadoGrave);
+}
+
+// Lista de itens equipados agora (armas equipadas + qualquer outro item
+// marcado como equipável e equipado — ver itemEhEquipavel/inventario.js),
+// mostrada como pilulazinhas ao lado das barras de PV/Energia no topo.
+function renderizarItensEquipadosTopo() {
+    if (!el.vitalEquipados) return;
+    const inventario = (fichaAtual && fichaAtual.inventario) ? fichaAtual.inventario : {};
+    const equipados = Object.values(inventario).filter(it => it && it.categoria === "levando" && itemEhEquipavel(it) && it.equipada);
+    if (!equipados.length) {
+        el.vitalEquipados.innerHTML = `<span class="vital-equipado-vazio">Nada equipado</span>`;
+        return;
+    }
+    el.vitalEquipados.innerHTML = equipados
+        .map(it => `<span class="vital-equipado-pill">${ehArma(it.tag) ? "🗡️" : "✅"} ${escapeHtml(it.nome)}</span>`)
+        .join("");
 }
 
 // Atualiza o badge de aviso "Machucado"/"Muito Machucado" (some quando o
@@ -4694,7 +5011,7 @@ function renderizarCombate() {
                 <div class="entity-badges">
                     ${(ehFogo && !escopeta && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
                     <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${podeEquiparArma ? (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
+                    <button type="button" class="btn-usar-item btn-blue" data-quick-key="arma:${escapeHtml(arma.id)}" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
                 </div>
@@ -4707,6 +5024,7 @@ function renderizarCombate() {
             li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
                 e.stopPropagation();
                 if (!podeUsar) return;
+                registrarAcaoRapida(`arma:${arma.id}`, arma.nome, "swords");
                 await iniciarUsoItem(arma, modificadoresPlanos);
             });
             const btnRecarregarCombate = li.querySelector(".btn-recarregar-item");
@@ -4784,21 +5102,25 @@ function renderizarManobrasCombate() {
         // "Quebrar ossos" — exclusiva de Jiu Jitsu nível 4+, sem
         // rolagem (automática contra quem já está Imobilizado por você).
         const ehQuebrarOssosJJ = m.nome === "Quebrar ossos";
+        // data-quick-key: chave estável ("manobra:<nome da manobra>:<pericia>")
+        // usada pelas Ações Rápidas flutuantes (item 16) pra reencontrar
+        // este mesmo botão depois e repetir o clique — ver
+        // registrarAcaoRapida/renderizarAcoesRapidas.
         const periciasHtml = ehEsquivar
-            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" data-quick-key="manobra:${escapeHtml(m.nome)}:Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
             : (ehArremessar || ehImobilizar)
-            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="CQC" title="Rolar d20 + CQC">CQC 🎲</button>`
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="CQC" data-quick-key="manobra:${escapeHtml(m.nome)}:CQC" title="Rolar d20 + CQC">CQC 🎲</button>`
             : ehImobilizarJJ
-            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Jiu Jitsu" title="Rolar d20 + Jiu Jitsu">Jiu Jitsu 🎲</button>
-               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Força" title="Rolar d20 + Força">Força 🎲</button>
-               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Destreza" title="Rolar d20 + Destreza">Destreza 🎲</button>`
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Jiu Jitsu" data-quick-key="manobra:${escapeHtml(m.nome)}:Jiu Jitsu" title="Rolar d20 + Jiu Jitsu">Jiu Jitsu 🎲</button>
+               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Força" data-quick-key="manobra:${escapeHtml(m.nome)}:Força" title="Rolar d20 + Força">Força 🎲</button>
+               <button type="button" class="btn-pericia-golpe" data-pericia-golpe="Destreza" data-quick-key="manobra:${escapeHtml(m.nome)}:Destreza" title="Rolar d20 + Destreza">Destreza 🎲</button>`
             : ehQuebrarOssosJJ
-            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Quebrar Ossos" title="Aplicar dano automático de Quebrar ossos">Quebrar ossos 🦴</button>`
+            ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Quebrar Ossos" data-quick-key="manobra:${escapeHtml(m.nome)}:Quebrar Ossos" title="Aplicar dano automático de Quebrar ossos">Quebrar ossos 🦴</button>`
             : m.pericias.map(nomePericia => {
                 const entrada = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === nomePericia);
                 if (!entrada) return `<span class="manobra-pericia-texto">${escapeHtml(nomePericia)}</span>`;
-                return `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="${escapeHtml(nomePericia)}" title="Rolar d20 + ${nomePericia}">${escapeHtml(nomePericia)} 🎲</button>`;
-            }).join(", ") + ` <button type="button" class="btn-pericia-golpe btn-ghost" data-pericia-golpe="Sem Perícia" title="Rolar sem perícia treinada (-1 fixo)">Sem Perícia 🎲</button>`;
+                return `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="${escapeHtml(nomePericia)}" data-quick-key="manobra:${escapeHtml(m.nome)}:${escapeHtml(nomePericia)}" title="Rolar d20 + ${nomePericia}">${escapeHtml(nomePericia)} 🎲</button>`;
+            }).join(", ") + ` <button type="button" class="btn-pericia-golpe btn-ghost" data-pericia-golpe="Sem Perícia" data-quick-key="manobra:${escapeHtml(m.nome)}:Sem Perícia" title="Rolar sem perícia treinada (-1 fixo)">Sem Perícia 🎲</button>`;
 
         // Boxe dá bônus passivo pra esquivar desarmado (+2) e contra
         // armas brancas (+1) — manual pg. 22. Mostramos o bônus já
@@ -4835,6 +5157,19 @@ function renderizarManobrasCombate() {
         li.querySelectorAll("[data-pericia-golpe]").forEach(btn => {
             btn.addEventListener("click", async (e) => {
                 e.stopPropagation();
+
+                // Ações Rápidas (item 16): registra ESTA manobra+perícia
+                // como a mais recente usada, pra atualizar os botões
+                // flutuantes. Feito aqui em cima, antes de qualquer
+                // validação abaixo, porque body.combate-bloqueio-ativo já
+                // impede o clique de sequer chegar aqui fora do turno.
+                if (btn.dataset.quickKey) {
+                    const periciaClicada = btn.dataset.periciaGolpe;
+                    const rotulo = periciaClicada && periciaClicada !== "Sem Perícia"
+                        ? `${m.nome} · ${periciaClicada}`
+                        : m.nome;
+                    registrarAcaoRapida(btn.dataset.quickKey, rotulo, ehEsquivar ? "shield" : "swords");
+                }
 
                 if (ehEsquivar) {
                     await executarManobraEsquivar(modificadoresPlanos);
@@ -7758,6 +8093,7 @@ function configurarCombateAtivo() {
         if (!isMestre) {
             renderizarAlertaIniciativaCombate();
             travarAcoesForaDoTurno();
+            renderizarAcoesRapidas();
             if (painelIniciativaJogadorAberto) montarPainelIniciativaJogador();
         }
         avaliarReacaoPendente();
@@ -8240,6 +8576,71 @@ function travarAcoesForaDoTurno() {
 }
 
 // ---------------------------------------------------------------------
+// Ações Rápidas (item 16): botões grandes/redondos flutuantes com as
+// últimas 2 ações de combate DIFERENTES que o jogador usou (ex.: "Faca"
+// e "Esquivar"), pra não precisar procurar o botão de novo na lista de
+// armas/manobras a cada turno.
+//
+// Cada botão aqui NÃO reimplementa a ação — ele só acha o botão
+// original (o mesmo `<button>` da aba Combate, marcado com
+// data-quick-key na hora de renderizar) e clica nele de novo. Isso
+// significa que ele herda de graça exatamente o mesmo comportamento do
+// botão original, incluindo:
+//   - a trava "só funciona no seu turno" (classe CSS
+//     body.combate-bloqueio-ativo, ver combate.css, + a validação real
+//     dentro de checarConsumoDeAcao, que sempre roda de novo e barra
+//     com um toast se o clique acontecer fora do turno por qualquer
+//     motivo);
+//   - o gasto da ação NÃO é automático pro jogador — assim como o
+//     botão original, ele só CRIA um pedido de "gastar 1 ação do
+//     turno" na fila de Ações Pendentes do Mestre (ver criarAcaoPendente
+//     em resolverAtaque/executarManobraEsquivar/etc.), que o Mestre
+//     ainda precisa aprovar pra ação ser realmente consumida. Só quando
+//     é o próprio Mestre controlando um NPC é que algumas ações (ataque
+//     corpo a corpo/arma branca) descontam a ação na hora — mas nesse
+//     caso o botão flutuante nem aparece, já que ele só é exibido pro
+//     jogador (ver !isMestre logo abaixo em renderizarAcoesRapidas).
+// ---------------------------------------------------------------------
+function registrarAcaoRapida(key, label, icone) {
+    if (!key) return;
+    historicoAcoesRapidas = historicoAcoesRapidas.filter(a => a.key !== key);
+    historicoAcoesRapidas.unshift({ key, label, icone: icone || "zap" });
+    historicoAcoesRapidas = historicoAcoesRapidas.slice(0, 2);
+    renderizarAcoesRapidas();
+}
+
+function renderizarAcoesRapidas() {
+    if (!el.acoesRapidasFlutuante || !el.acoesRapidasLista) return;
+
+    if (isMestre || !combateComIniciativaAtivo() || historicoAcoesRapidas.length === 0) {
+        el.acoesRapidasFlutuante.style.display = "none";
+        return;
+    }
+
+    el.acoesRapidasFlutuante.style.display = "flex";
+    el.acoesRapidasLista.innerHTML = historicoAcoesRapidas.map(a => `
+        <button type="button" class="acao-rapida-btn" data-repetir-acao="${escapeHtml(a.key)}" title="Repetir: ${escapeHtml(a.label)}">
+            <i data-lucide="${a.icone}"></i>
+            <span class="acao-rapida-label">${escapeHtml(a.label)}</span>
+        </button>
+    `).join("");
+
+    el.acoesRapidasLista.querySelectorAll("[data-repetir-acao]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const chave = btn.dataset.repetirAcao;
+            const alvo = document.querySelector(`[data-quick-key="${CSS.escape(chave)}"]`);
+            if (!alvo) {
+                toast("Essa ação não está mais disponível na ficha (item ou manobra sumiu).", "erro");
+                return;
+            }
+            alvo.click();
+        });
+    });
+
+    atualizarIcones();
+}
+
+// ---------------------------------------------------------------------
 // "Gerenciador de Combate do Jogador" — modal com a ordem de iniciativa
 // completa, destacando quem está no turno.
 // ---------------------------------------------------------------------
@@ -8544,12 +8945,14 @@ function configurarPopupTreinamento() {
 // =====================================================================
 
 function configurarPainelMestre() {
+    // Painel encostado na direita (mesmo tratamento do Gerenciador de
+    // Combate): dá pra ver e usar a ficha atrás enquanto ele está aberto.
+    // Fecha só pelo botão "Fechar".
     el.btnAbrirMestre.addEventListener("click", () => {
         el.modalMestre.classList.add("active");
         el.mestreCorpo.innerHTML = "";
     });
     el.mestreFechar.addEventListener("click", () => el.modalMestre.classList.remove("active"));
-    el.modalMestre.addEventListener("click", (e) => { if (e.target === el.modalMestre) el.modalMestre.classList.remove("active"); });
 
     document.querySelectorAll(".mestre-acao").forEach(btn => {
         btn.addEventListener("click", () => abrirAcaoMestre(btn.dataset.acao));
@@ -9134,6 +9537,48 @@ function criarInput(tipo, placeholder) {
 }
 
 // ---------------------------------------------------------------------
+// Scroll infinito genérico: em vez de jogar a lista inteira no DOM de
+// uma vez (o Banco Global de Itens/Receitas só cresce com o tempo),
+// renderiza só a primeira leva (tamanhoPagina) e vai completando o
+// resto conforme o usuário rola pra perto do fim — mesma ideia do feed
+// do Instagram. Usa um IntersectionObserver numa "sentinela" invisível
+// no fim da lista: quando ela entra na área visível do container que
+// rola de verdade (scrollRoot), carrega mais um lote.
+// ---------------------------------------------------------------------
+function montarListaComScrollInfinito({ container, scrollRoot, itens, renderItem, tamanhoPagina = 20, mensagemVazia = "Nada encontrado.", contadorEl = null }) {
+    container.innerHTML = "";
+    if (contadorEl) contadorEl.innerText = "";
+    if (!itens.length) {
+        container.innerHTML = `<p class="hint">${mensagemVazia}</p>`;
+        return;
+    }
+
+    let carregados = 0;
+    const sentinela = document.createElement("div");
+    sentinela.className = "scroll-infinito-sentinela";
+    container.appendChild(sentinela);
+
+    const observer = new IntersectionObserver((entradas) => {
+        if (entradas.some(e => e.isIntersecting)) carregarMais();
+    }, { root: scrollRoot || null, rootMargin: "300px" });
+
+    function carregarMais() {
+        const proximos = itens.slice(carregados, carregados + tamanhoPagina);
+        proximos.forEach(it => container.insertBefore(renderItem(it), sentinela));
+        carregados += proximos.length;
+        if (contadorEl) {
+            contadorEl.innerText = carregados < itens.length
+                ? `Mostrando ${carregados} de ${itens.length} — role pra ver mais`
+                : `${itens.length} no total`;
+        }
+        if (carregados >= itens.length) observer.disconnect();
+    }
+
+    carregarMais();
+    if (carregados < itens.length) observer.observe(sentinela);
+}
+
+// ---------------------------------------------------------------------
 // Painel do Mestre — "Biblioteca de Itens Salvos" (Banco Global).
 // Lista todo mundo que já foi salvo (de dentro de uma ficha, com o
 // checkbox marcado, ou criado direto aqui) e deixa criar um item do
@@ -9144,46 +9589,55 @@ function montarPainelBibliotecaItens(corpo) {
     busca.style.marginBottom = "10px";
     corpo.appendChild(busca);
 
+    const contador = document.createElement("span");
+    contador.className = "hint-inline scroll-infinito-contador";
+    corpo.appendChild(contador);
+
     const lista = document.createElement("div");
     lista.style.display = "flex";
     lista.style.flexDirection = "column";
     lista.style.gap = "8px";
     corpo.appendChild(lista);
 
+    const renderCardItem = (it) => {
+        const card = document.createElement("div");
+        card.className = "npc-card";
+        const origem = it.origemFichaId ? `Salvo a partir da ficha de ${escapeHtml(it.origemFichaId)}` : "Cadastrado direto na Biblioteca";
+        card.innerHTML = `
+            <strong>${escapeHtml(it.nome)}</strong>
+            <span>${escapeHtml(rotuloTag(it.tag))}${it.nivelTag ? ` (nível ${it.nivelTag})` : ""} · ${it.peso ?? 0} kg</span>
+            ${it.arma ? `<span>Dano base: ${it.arma.danoBase ?? 0}</span>` : ""}
+            <span class="hint-inline">${escapeHtml(origem)}</span>
+        `;
+        const linhaBtns = document.createElement("div");
+        linhaBtns.className = "modal-btns";
+        const btnEditar = document.createElement("button");
+        btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar";
+        btnEditar.addEventListener("click", () => abrirModalEdicao("itensGlobais", it.id));
+        const btnExcluir = document.createElement("button");
+        btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir";
+        btnExcluir.addEventListener("click", async () => {
+            if (!confirm(`Excluir "${it.nome}" do Banco Global?`)) return;
+            await excluirItemBanco(it.id);
+            toast("Item removido do Banco Global.");
+        });
+        linhaBtns.append(btnEditar, btnExcluir);
+        card.appendChild(linhaBtns);
+        return card;
+    };
+
     const renderLista = () => {
         const filtro = busca.value.trim().toLowerCase();
         const itens = itensGlobaisCache
             .filter(it => !filtro || (it.nome || "").toLowerCase().includes(filtro))
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
-        lista.innerHTML = "";
-        if (!itens.length) {
-            lista.innerHTML = `<p class="hint">Nenhum item no Banco Global ainda.</p>`;
-        }
-        itens.forEach(it => {
-            const card = document.createElement("div");
-            card.className = "npc-card";
-            const origem = it.origemFichaId ? `Salvo a partir da ficha de ${escapeHtml(it.origemFichaId)}` : "Cadastrado direto na Biblioteca";
-            card.innerHTML = `
-                <strong>${escapeHtml(it.nome)}</strong>
-                <span>${escapeHtml(rotuloTag(it.tag))}${it.nivelTag ? ` (nível ${it.nivelTag})` : ""} · ${it.peso ?? 0} kg</span>
-                ${it.arma ? `<span>Dano base: ${it.arma.danoBase ?? 0}</span>` : ""}
-                <span class="hint-inline">${escapeHtml(origem)}</span>
-            `;
-            const linhaBtns = document.createElement("div");
-            linhaBtns.className = "modal-btns";
-            const btnEditar = document.createElement("button");
-            btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar";
-            btnEditar.addEventListener("click", () => abrirModalEdicao("itensGlobais", it.id));
-            const btnExcluir = document.createElement("button");
-            btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir";
-            btnExcluir.addEventListener("click", async () => {
-                if (!confirm(`Excluir "${it.nome}" do Banco Global?`)) return;
-                await excluirItemBanco(it.id);
-                toast("Item removido do Banco Global.");
-            });
-            linhaBtns.append(btnEditar, btnExcluir);
-            card.appendChild(linhaBtns);
-            lista.appendChild(card);
+        montarListaComScrollInfinito({
+            container: lista,
+            scrollRoot: el.modalMestre,
+            itens,
+            renderItem: renderCardItem,
+            mensagemVazia: "Nenhum item no Banco Global ainda.",
+            contadorEl: contador
         });
     };
     busca.addEventListener("input", renderLista);
@@ -9208,45 +9662,54 @@ function montarPainelBibliotecaReceitas(corpo) {
     busca.style.marginBottom = "10px";
     corpo.appendChild(busca);
 
+    const contador = document.createElement("span");
+    contador.className = "hint-inline scroll-infinito-contador";
+    corpo.appendChild(contador);
+
     const lista = document.createElement("div");
     lista.style.display = "flex";
     lista.style.flexDirection = "column";
     lista.style.gap = "8px";
     corpo.appendChild(lista);
 
+    const renderCardReceita = (r) => {
+        const card = document.createElement("div");
+        card.className = "npc-card";
+        card.innerHTML = `
+            <strong>${escapeHtml(r.nome)}</strong>
+            <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}${(r.dificuldadeArmar || r.dificuldadeArmar === 0) ? ` · Dificuldade de armar ${r.dificuldadeArmar}` : ""}</span>
+            ${formatarIngredientes(r) ? `<span class="hint-inline">Materiais: ${escapeHtml(formatarIngredientes(r))}</span>` : ""}
+            <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
+        `;
+        const linhaBtns = document.createElement("div");
+        linhaBtns.className = "modal-btns";
+        const btnEditar = document.createElement("button");
+        btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar";
+        btnEditar.addEventListener("click", () => abrirModalCriarReceita(r));
+        const btnExcluir = document.createElement("button");
+        btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir";
+        btnExcluir.addEventListener("click", async () => {
+            if (!confirm(`Excluir a receita "${r.nome}" do Banco Global?`)) return;
+            await excluirReceitaBanco(r.id);
+            toast("Receita removida do Banco Global.");
+        });
+        linhaBtns.append(btnEditar, btnExcluir);
+        card.appendChild(linhaBtns);
+        return card;
+    };
+
     const renderLista = () => {
         const filtro = busca.value.trim().toLowerCase();
         const receitas = receitasGlobaisCache
             .filter(r => !filtro || (r.nome || "").toLowerCase().includes(filtro))
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
-        lista.innerHTML = "";
-        if (!receitas.length) {
-            lista.innerHTML = `<p class="hint">Nenhuma receita no Banco Global ainda.</p>`;
-        }
-        receitas.forEach(r => {
-            const card = document.createElement("div");
-            card.className = "npc-card";
-            card.innerHTML = `
-                <strong>${escapeHtml(r.nome)}</strong>
-                <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}${(r.dificuldadeArmar || r.dificuldadeArmar === 0) ? ` · Dificuldade de armar ${r.dificuldadeArmar}` : ""}</span>
-                ${formatarIngredientes(r) ? `<span class="hint-inline">Materiais: ${escapeHtml(formatarIngredientes(r))}</span>` : ""}
-                <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
-            `;
-            const linhaBtns = document.createElement("div");
-            linhaBtns.className = "modal-btns";
-            const btnEditar = document.createElement("button");
-            btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar";
-            btnEditar.addEventListener("click", () => abrirModalCriarReceita(r));
-            const btnExcluir = document.createElement("button");
-            btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir";
-            btnExcluir.addEventListener("click", async () => {
-                if (!confirm(`Excluir a receita "${r.nome}" do Banco Global?`)) return;
-                await excluirReceitaBanco(r.id);
-                toast("Receita removida do Banco Global.");
-            });
-            linhaBtns.append(btnEditar, btnExcluir);
-            card.appendChild(linhaBtns);
-            lista.appendChild(card);
+        montarListaComScrollInfinito({
+            container: lista,
+            scrollRoot: el.modalMestre,
+            itens: receitas,
+            renderItem: renderCardReceita,
+            mensagemVazia: "Nenhuma receita no Banco Global ainda.",
+            contadorEl: contador
         });
     };
     busca.addEventListener("input", renderLista);

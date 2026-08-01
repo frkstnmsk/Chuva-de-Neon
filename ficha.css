@@ -51,6 +51,138 @@
 }
 .sync-indicator.offline { color: var(--neon-red); text-shadow: 0 0 8px rgba(239, 68, 68, 0.7); }
 
+/* ---------- Barras de PV/Energia + equipados (topbar, centralizado) ---------- */
+.topbar-vitals {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 0 auto;
+}
+.vital-bar-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.vital-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.vital-bar-label {
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    width: 22px;
+    flex-shrink: 0;
+}
+.vital-bar-track {
+    width: 130px;
+    height: 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+.vital-bar-fill {
+    height: 100%;
+    width: 100%;
+    border-radius: 6px;
+    background: var(--neon-lime);
+    box-shadow: 0 0 8px rgba(163, 230, 53, 0.6);
+    transition: width 0.35s ease, background-color 0.35s ease, box-shadow 0.35s ease;
+}
+.vital-bar-fill.vital-cor-media {
+    background: var(--neon-gold);
+    box-shadow: 0 0 8px rgba(250, 204, 21, 0.6);
+}
+.vital-bar-fill.vital-cor-critica {
+    background: var(--neon-red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
+}
+.vital-bar-numero {
+    font-size: 0.75rem;
+    color: #fff;
+    min-width: 52px;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+}
+.vital-equipados {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    max-width: 260px;
+}
+.vital-equipado-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--neon-purple);
+    color: var(--neon-purple);
+    background: rgba(139, 92, 246, 0.08);
+    white-space: nowrap;
+}
+.vital-equipado-vazio {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    font-style: italic;
+}
+@media (max-width: 720px) {
+    .topbar-vitals { justify-content: flex-start; margin: 0; width: 100%; order: 3; }
+}
+
+/* ---------- Destaque "muito ferido" (Muito Machucado / Energia Crítica) ---------- */
+.ficha-muito-ferido {
+    border-radius: 18px;
+    animation: ficha-muito-ferido-pulso 2.6s ease-in-out infinite;
+}
+@keyframes ficha-muito-ferido-pulso {
+    0%, 100% { box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.55), 0 0 14px rgba(239, 68, 68, 0.25); }
+    50% { box-shadow: inset 0 0 0 4px rgba(239, 68, 68, 0.95), 0 0 34px rgba(239, 68, 68, 0.55); }
+}
+
+/* ---------- Efeito ao levar dano (flash + tremor) ---------- */
+.efeito-dano-overlay {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle, rgba(239, 68, 68, 0) 0%, rgba(239, 68, 68, 0.4) 100%);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 9999;
+}
+.efeito-dano-overlay.efeito-dano-ativo {
+    animation: efeito-dano-flash 0.5s ease-out;
+}
+@keyframes efeito-dano-flash {
+    0% { opacity: 0; }
+    12% { opacity: 1; }
+    100% { opacity: 0; }
+}
+.app-shell.efeito-dano-tremor {
+    animation: efeito-dano-shake 0.4s ease-in-out;
+}
+@keyframes efeito-dano-shake {
+    0%, 100% { transform: translateX(0); }
+    15%, 55% { transform: translateX(-6px); }
+    30%, 70% { transform: translateX(6px); }
+    45% { transform: translateX(-3px); }
+    85% { transform: translateX(3px); }
+}
+
+/* ---------- Scroll infinito (Banco Global de Itens/Receitas) ---------- */
+.scroll-infinito-sentinela {
+    height: 1px;
+}
+.scroll-infinito-contador {
+    display: block;
+    margin: -4px 0 10px 0;
+}
+
 #painel-mestre-seletor { display: flex; gap: 8px; flex-wrap: wrap; }
 #painel-mestre-seletor select { min-width: 220px; }
 
@@ -118,8 +250,10 @@
 .tabs-nav {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: 4px;
     padding: 8px;
+    position: relative;
 }
 .tab-btn {
     border: none;
@@ -132,6 +266,117 @@
     background: var(--neon-purple);
     color: #fff;
     box-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
+}
+
+/* Zona das abas fixadas — em modo "fileira" recebe todas as 12; em modo
+   "compacto" só as que o jogador escolheu deixar sempre à vista. */
+.tabs-fixadas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex: 1;
+}
+
+/* Menu "Mais" — dropdown com as abas que não estão fixadas. Some sozinho
+   em modo fileira (não faz sentido escondendo nada). */
+.tabs-mais-wrap { position: relative; }
+.tabs-mais-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 2px;
+    padding: 10px 18px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.75rem;
+}
+.tabs-mais-btn:hover { background: rgba(255,255,255,0.06); box-shadow: none; color: var(--text-main); }
+.tabs-mais-wrap.aberto .tabs-mais-btn { background: rgba(139, 92, 246, 0.15); color: var(--text-main); }
+.tabs-mais-seta { width: 12px; height: 12px; transition: transform 0.15s ease; }
+.tabs-mais-wrap.aberto .tabs-mais-seta { transform: rotate(180deg); }
+.tabs-mais-menu {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 220px;
+    padding: 6px;
+    background: var(--panel-bg);
+    border: var(--border-style);
+    border-radius: 4px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    z-index: 40;
+}
+.tabs-mais-menu .tab-btn { text-align: left; width: 100%; }
+.tabs-mais-wrap.aberto .tabs-mais-menu { display: flex; }
+
+/* Botões de controle (Organizar / Fileira) — sempre no canto da barra */
+.tabs-controles {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.tabs-controle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.65rem;
+    padding: 6px 10px;
+}
+.tabs-controle-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-main); box-shadow: none; }
+.tabs-controle-btn.ativo {
+    border-color: var(--neon-lime);
+    color: var(--neon-lime);
+    background: rgba(163, 230, 53, 0.08);
+}
+.tabs-controle-btn:disabled { opacity: 0.3; }
+
+/* Modo de organizar (arrastar abas) — as duas zonas ficam visíveis e
+   marcadas com borda tracejada, o menu "Mais" vira uma faixa fixa (não
+   um dropdown) pra dar pra soltar as abas nela. */
+.tabs-nav.editando .tabs-fixadas,
+.tabs-nav.editando .tabs-mais-menu {
+    border: 1px dashed rgba(163, 230, 53, 0.5);
+    border-radius: 6px;
+    padding: 8px;
+    min-height: 42px;
+}
+.tabs-nav.editando .tabs-mais-menu {
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+    width: 100%;
+    min-width: 0;
+    box-shadow: none;
+    order: 3;
+}
+.tabs-nav.editando .tabs-mais-menu .tab-btn { width: auto; text-align: center; }
+.tabs-nav.editando .tabs-mais-wrap { display: block !important; flex-basis: 100%; }
+.tabs-nav.editando .tabs-mais-btn { display: none; }
+.tabs-nav.editando::before {
+    content: "Arraste as abas entre as duas caixas pra escolher quais ficam sempre à vista";
+    flex-basis: 100%;
+    order: -1;
+    font-size: 0.68rem;
+    color: var(--neon-lime);
+    padding: 0 2px 4px;
+}
+.tabs-nav.editando .tab-btn { cursor: grab; }
+.tab-btn.arrastando { opacity: 0.45; cursor: grabbing; }
+
+@media (max-width: 600px) {
+    .tabs-controles { margin-left: 0; flex-basis: 100%; }
 }
 
 .tab-panel { display: none; padding: 26px; flex-direction: column; gap: 4px; }
@@ -570,7 +815,7 @@
 }
 .pendentes-lateral-btn:hover { background: rgba(239, 68, 68, 0.12); }
 .pendentes-lateral-btn.aberto { left: 320px; }
-.pendentes-lateral-icone { line-height: 1; }
+.pendentes-lateral-icone { width: 22px; height: 22px; }
 .badge-pendentes-lateral {
     position: absolute;
     top: -6px;
@@ -671,6 +916,47 @@
     font-size: 0.95rem;
 }
 .drawer-combate-corpo {
+    display: flex;
+    flex-direction: column;
+    overflow-y: visible;
+}
+
+/* ---------- Painel do Mestre: painel encostado na direita ----------
+   Mesmo padrão do Gerenciador de Combate — ver comentário lá em cima. */
+.drawer-mestre {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 640px;
+    max-width: 94vw;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--neon-red);
+    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
+    z-index: 5000;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+}
+.drawer-mestre.active { transform: translateX(0); }
+.drawer-mestre-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: var(--border-style);
+}
+.drawer-mestre-topo h4 {
+    color: var(--neon-red);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.95rem;
+}
+.drawer-mestre-corpo {
     display: flex;
     flex-direction: column;
     overflow-y: visible;
@@ -986,18 +1272,17 @@
     color: var(--text-dim);
     margin-top: -6px;
 }
-/* `#mestre-corpo` mora dentro de `.modal-content`, que é
+/* `#mestre-corpo` e `#combate-mestre-corpo` moram dentro dos painéis
+   laterais (`.drawer-mestre` / `.drawer-combate`), que são
    `display:flex; flex-direction:column; overflow-y:auto`. Sem um
    `min-height: 0` explícito aqui, o bug clássico do flexbox entra em
    ação: um item de flex-column recusa encolher abaixo da altura do
-   próprio conteúdo (min-height:auto por padrão), então o `overflow-y`
-   do `.modal-content` nunca chega a ativar de verdade com formulários
-   grandes (ex: a mini-ficha de NPC) — o "Fechar" (`.modal-btns`, o
-   próximo irmão) acaba pintado no meio do conteúdo, sem nenhuma
-   rolagem de fato acontecendo. Dar a `#mestre-corpo` seu PRÓPRIO
-   scroll interno (com altura máxima e min-height:0) resolve isso: ele
-   rola por conta própria e `.modal-btns` fica sempre visível, colado
-   logo depois dele, nunca sobreposto.
+   próprio conteúdo (min-height:auto por padrão), então formulários
+   grandes (ex: a mini-ficha de NPC) empurrariam o painel inteiro pra
+   baixo do viewport em vez de rolar. Dar a `#mestre-corpo` seu PRÓPRIO
+   scroll interno (com altura máxima e min-height:0) resolve isso: o
+   cabeçalho e a grade de botões ficam sempre fixos no topo, visíveis,
+   e só o conteúdo dinâmico rola por conta própria.
 */
 #mestre-corpo, #combate-mestre-corpo {
     display: flex; flex-direction: column; gap: 10px;

@@ -52,6 +52,18 @@ body {
 
 a { color: var(--neon-blue); }
 
+/* ---------- Ícones (Lucide) ----------
+   Tamanho padrão pros ícones SVG que a lucide.createIcons() gera a
+   partir de <i data-lucide="..."></i>. Ajusta sozinho junto com o texto
+   ao redor, sem depender de fonte de emoji do sistema/navegador. */
+svg.lucide {
+    width: 16px;
+    height: 16px;
+    stroke-width: 2.2;
+    vertical-align: -3px;
+    flex-shrink: 0;
+}
+
 /* ---------- Tipografia genérica ---------- */
 h1, h2, h3, h4 { font-family: var(--font-display); }
 

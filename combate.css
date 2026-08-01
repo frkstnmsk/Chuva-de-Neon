@@ -53,11 +53,103 @@
    ------------------------------------------------------------ */
 body.combate-bloqueio-ativo .btn-rolar,
 body.combate-bloqueio-ativo .btn-pericia-golpe,
-body.combate-bloqueio-ativo .btn-usar-item {
+body.combate-bloqueio-ativo .btn-usar-item,
+body.combate-bloqueio-ativo .acao-rapida-btn {
   opacity: 0.35;
   cursor: not-allowed !important;
   pointer-events: none;
   filter: grayscale(0.6);
+}
+
+/* ------------------------------------------------------------
+   Ações Rápidas (item 16): caixinha flutuante num canto da tela com
+   botões grandes e redondos pras últimas 2 ações de combate DIFERENTES
+   que o jogador usou (ex.: "Faca" e "Esquivar"). Cada botão aqui é só
+   um atalho: o clique dispara o clique do botão original (arma/manobra
+   na aba Combate) — então a trava "só no seu turno" E o fato do gasto
+   de ação NÃO ser automático (vira pedido pro Mestre aprovar na fila
+   de Ações Pendentes, ver ficha.js) já vêm de graça, sem duplicar
+   nenhuma regra aqui.
+   ------------------------------------------------------------ */
+.acoes-rapidas-flutuante {
+  /* Canto INFERIOR ESQUERDO, de propósito: o canto inferior direito já
+     é ocupado pelo Log de Dados (#log-dados, ficha.css, 300x380px) e
+     pelo container de Toast (#toast, style.css) — colocar aqui em cima
+     ia sobrepor os dois. O botão de Ações Pendentes (esquerda, meio da
+     tela) e o Log/Toast (direita) são exclusivos do Mestre ou ficam
+     mais acima, então o canto inferior esquerdo fica livre pro
+     jogador. `bottom: 60px` (em vez de encostado no rodapé) evita a
+     área do botão invisível de easter egg (#btn-easter-egg, 46x46 no
+     canto 0,0 — ver style.css). */
+  position: fixed;
+  left: 14px;
+  bottom: 60px;
+  z-index: 997;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.acoes-rapidas-titulo {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  background: var(--panel-bg);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.acoes-rapidas-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.acao-rapida-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  border: 1px solid var(--neon-purple);
+  background: var(--panel-bg);
+  color: var(--neon-purple);
+  box-shadow: 0 0 14px rgba(139, 92, 246, 0.35);
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.15s ease;
+}
+
+.acao-rapida-btn:hover {
+  background: rgba(139, 92, 246, 0.15);
+  transform: scale(1.05);
+}
+
+.acao-rapida-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.acao-rapida-label {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  max-width: 54px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .acoes-rapidas-flutuante { left: 8px; bottom: 70px; }
+  .acao-rapida-btn { width: 54px; height: 54px; }
 }
 
 /* Painel/modal do jogador */

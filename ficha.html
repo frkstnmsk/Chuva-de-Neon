@@ -20,17 +20,31 @@
      tudo, é uma caixa que desliza a partir da borda esquerda, com o
      resto da ficha continuando visível e clicável por trás. -->
 <button id="btn-pendentes-lateral" class="pendentes-lateral-btn" type="button" style="display:none;" title="Ações Pendentes">
-    <span class="pendentes-lateral-icone">⚑</span>
+    <i data-lucide="clipboard-list" class="pendentes-lateral-icone"></i>
     <span id="badge-pendentes-lateral" class="badge-pendentes-lateral" style="display:none;"></span>
 </button>
 
 <aside id="drawer-pendentes" class="drawer-pendentes">
     <div class="drawer-pendentes-topo">
         <h4>Ações Pendentes</h4>
-        <button id="drawer-pendentes-fechar" class="btn-ghost" type="button">✕</button>
+        <button id="drawer-pendentes-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i></button>
     </div>
     <div id="drawer-pendentes-corpo" class="drawer-pendentes-corpo"></div>
 </aside>
+
+<div id="efeito-dano-overlay" class="efeito-dano-overlay"></div>
+
+<!-- ===================== AÇÕES RÁPIDAS (últimas 2 ações de combate, botões redondos flutuantes) ===================== -->
+<!-- Só aparece em combate com iniciativa ativo, pro jogador (não pro
+     Mestre). Fica no canto INFERIOR ESQUERDO de propósito — o inferior
+     direito já é do Log de Dados + Toast (ver combate.css). Cada botão
+     só repete o clique no botão original correspondente (arma/manobra),
+     então herda de graça a trava de turno/ação que esses botões já
+     têm. -->
+<div id="acoes-rapidas-flutuante" class="acoes-rapidas-flutuante" style="display:none;">
+    <span class="acoes-rapidas-titulo">Últimas ações</span>
+    <div id="acoes-rapidas-lista" class="acoes-rapidas-lista"></div>
+</div>
 
 <div id="app" class="app-shell" style="display:none;">
 
@@ -39,6 +53,26 @@
         <div class="topbar-id">
             <span class="eyebrow">Caminhante ativo</span>
             <h1 id="nome-ficha-ativa">—</h1>
+        </div>
+
+        <div class="topbar-vitals" id="topbar-vitals">
+            <div class="vital-bar-group">
+                <div class="vital-bar-row" data-vital="pv">
+                    <span class="vital-bar-label">PV</span>
+                    <div class="vital-bar-track">
+                        <div class="vital-bar-fill" id="vital-pv-fill"></div>
+                    </div>
+                    <span class="vital-bar-numero" id="vital-pv-numero">—/—</span>
+                </div>
+                <div class="vital-bar-row" data-vital="energia">
+                    <span class="vital-bar-label">EN</span>
+                    <div class="vital-bar-track">
+                        <div class="vital-bar-fill" id="vital-energia-fill"></div>
+                    </div>
+                    <span class="vital-bar-numero" id="vital-energia-numero">—/—</span>
+                </div>
+            </div>
+            <div class="vital-equipados" id="vital-equipados" title="Itens equipados"></div>
         </div>
 
         <div class="topbar-actions">
@@ -128,19 +162,33 @@
             </div>
 
             <!-- ===================== ABAS ===================== -->
+            <!-- Estrutura em 2 zonas (fixadas / "Mais") pra dar pra
+                 arrastar abas entre elas — ver gerenciarLayoutAbas() em
+                 ficha.js. O botão "Fileira" desliga essa separação e
+                 volta a mostrar tudo numa fileira só, como era antes. -->
             <nav class="tabs-nav panel" id="tabs-nav">
-                <button class="tab-btn active" data-tab="perfil" type="button">Perfil</button>
-                <button class="tab-btn" data-tab="financas" type="button">Finanças</button>
-                <button class="tab-btn" data-tab="atributos" type="button">Atributos</button>
-                <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
-                <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
-                <button class="tab-btn" data-tab="combate" type="button">Combate</button>
-                <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
-                <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
-                <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
-                <button class="tab-btn" data-tab="receitas" type="button">Receitas</button>
-                <button class="tab-btn" data-tab="darknet" type="button">Dark Net</button>
-                <button class="tab-btn" data-tab="notas" type="button">Determinações / Notas</button>
+                <div class="tabs-fixadas" id="tabs-fixadas">
+                    <button class="tab-btn active" data-tab="perfil" type="button">Perfil</button>
+                    <button class="tab-btn" data-tab="financas" type="button">Finanças</button>
+                    <button class="tab-btn" data-tab="atributos" type="button">Atributos</button>
+                    <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
+                    <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
+                    <button class="tab-btn" data-tab="combate" type="button">Combate</button>
+                    <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
+                    <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
+                    <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
+                    <button class="tab-btn" data-tab="receitas" type="button">Receitas</button>
+                    <button class="tab-btn" data-tab="darknet" type="button">Dark Net</button>
+                    <button class="tab-btn" data-tab="notas" type="button">Determinações / Notas</button>
+                </div>
+                <div class="tabs-mais-wrap" id="tabs-mais-wrap" style="display:none;">
+                    <button class="tabs-mais-btn" id="tabs-mais-btn" type="button">Mais <i data-lucide="chevron-down" class="tabs-mais-seta"></i></button>
+                    <div class="tabs-mais-menu" id="tabs-mais-menu"></div>
+                </div>
+                <div class="tabs-controles">
+                    <button class="tabs-controle-btn" id="tabs-editar-btn" type="button" title="Arraste as abas pra fixar ou esconder em &quot;Mais&quot;"><i data-lucide="move"></i> Organizar</button>
+                    <button class="tabs-controle-btn" id="tabs-modo-btn" type="button" title="Alternar entre abas organizadas e todas em fileira"><i data-lucide="rows-3"></i> Fileira</button>
+                </div>
             </nav>
 
             <main class="tab-panels">
@@ -636,33 +684,34 @@
     </div>
 </div>
 
-<!-- ===================== MODAL: PAINEL DO MESTRE ===================== -->
-<div class="modal-overlay" id="modal-mestre">
-    <div class="modal-content modal-largo">
+<!-- ===================== PAINEL DO MESTRE (painel lateral direito) ===================== -->
+<!-- Mesmo tratamento do Gerenciador de Combate: painel encostado na
+     borda, sem backdrop cobrindo a tela, pra dar pra ver a ficha e o
+     painel ao mesmo tempo. -->
+<aside class="drawer-mestre" id="modal-mestre">
+    <div class="drawer-mestre-topo">
         <h4>Painel do Mestre</h4>
-        <div class="mestre-grid">
-            <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
-            <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
-            <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
-            <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
-            <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
-            <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
-            <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
-            <label class="godmode-toggle">
-                <input type="checkbox" id="chk-godmode">
-                Godmode (ignora trava de edição)
-            </label>
-            <label class="godmode-toggle godmode-suboption">
-                <input type="checkbox" id="chk-godmode-ignorar-saude">
-                Ignorar penalidade de Machucado/Muito Machucado (requer Godmode ativo)
-            </label>
-        </div>
-        <div id="mestre-corpo"></div>
-        <div class="modal-btns">
-            <button id="mestre-fechar" class="btn-ghost" type="button">Fechar</button>
-        </div>
+        <button id="mestre-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i> Fechar</button>
     </div>
-</div>
+    <div class="mestre-grid">
+        <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
+        <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
+        <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
+        <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
+        <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
+        <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
+        <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
+        <label class="godmode-toggle">
+            <input type="checkbox" id="chk-godmode">
+            Godmode (ignora trava de edição)
+        </label>
+        <label class="godmode-toggle godmode-suboption">
+            <input type="checkbox" id="chk-godmode-ignorar-saude">
+            Ignorar penalidade de Machucado/Muito Machucado (requer Godmode ativo)
+        </label>
+    </div>
+    <div id="mestre-corpo" class="drawer-mestre-corpo"></div>
+</aside>
 
 <!-- ===================== GERENCIADOR DE COMBATE (painel lateral direito) ===================== -->
 <!-- Não é mais um modal de tela cheia: fica encostado na borda direita e
@@ -671,7 +720,7 @@
 <aside class="drawer-combate" id="modal-combate-mestre">
     <div class="drawer-combate-topo">
         <h4>Gerenciador de Combate</h4>
-        <button id="combate-mestre-fechar" class="btn-ghost" type="button">Fechar</button>
+        <button id="combate-mestre-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i> Fechar</button>
     </div>
     <div id="combate-mestre-corpo" class="drawer-combate-corpo"></div>
 </aside>
@@ -795,6 +844,11 @@
 
 <div id="toast"></div>
 
+<!-- Ícones (Lucide) — biblioteca gratuita carregada direto da CDN, sem
+     precisar baixar nenhum arquivo de ícone. Os elementos com
+     data-lucide="nome-do-icone" viram SVG automaticamente quando
+     lucide.createIcons() roda (ver atualizarIcones() em ficha.js). -->
+<script src="https://unpkg.com/lucide@latest"></script>
 <script type="module" src="ficha.js"></script>
 </body>
 </html>
