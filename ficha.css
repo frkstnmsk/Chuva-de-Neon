@@ -17,18 +17,31 @@
     max-width: 1320px;
     margin: 0 auto;
     padding: 20px;
+    padding-top: calc(var(--topbar-h, 90px) + 20px);
     display: flex;
     flex-direction: column;
     gap: 16px;
 }
 
-/* ---------- Topbar ---------- */
+/* ---------- Topbar ----------
+   Fixa no topo da tela (a barra de vida/energia precisa estar sempre
+   visível, mesmo com a página rolada). A altura real é medida em JS
+   (ver ajustarEspacoTopbar em ficha.js) pra empurrar o conteúdo abaixo
+   dela na medida certa, já que ela quebra linha em telas menores. */
 .topbar {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: 1320px;
+    z-index: 4000;
+    border-radius: 0 0 14px 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 18px 22px;
+    padding: 14px 22px;
     flex-wrap: wrap;
 }
 .topbar-id h1 {
@@ -186,6 +199,51 @@
 #painel-mestre-seletor { display: flex; gap: 8px; flex-wrap: wrap; }
 #painel-mestre-seletor select { min-width: 220px; }
 
+/* ---------- Painel de info do topo (janela deslizante) ----------
+   Guarda o que não precisa ficar sempre visível na topbar fixa: cargo,
+   mesa, godmode, seletor de ficha/NPC do Mestre, indicador de sincronia
+   e os botões de Painel do Mestre / Gerenciador de Combate. Abre a
+   partir do botão de menu (#btn-abrir-info-topo), encostado no topo
+   direito, sem escurecer o resto da ficha. A posição "top" real é
+   ajustada em JS (ver ajustarEspacoTopbar em ficha.js) pra ficar sempre
+   colada logo abaixo da topbar, mesmo quando ela quebra linha. */
+.painel-info-topo {
+    position: fixed;
+    top: calc(var(--topbar-h, 90px) + 8px);
+    right: 16px;
+    z-index: 3999;
+    width: 320px;
+    max-width: 90vw;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transform: translateY(-10px);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.painel-info-topo.aberto {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.painel-info-topo-linha {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.painel-info-topo-botoes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.painel-info-topo-botoes .btn-red { width: 100%; }
+@media (max-width: 520px) {
+    .painel-info-topo { right: 8px; left: 8px; width: auto; max-width: none; }
+}
+
 /* ---------- Corpo: calendário lateral + conteúdo ---------- */
 .app-body {
     display: grid;
@@ -206,7 +264,7 @@
     flex-direction: column;
     gap: 4px;
     position: sticky;
-    top: 20px;
+    top: calc(var(--topbar-h, 90px) + 20px);
 }
 .calendario-campo {
     display: flex;
@@ -1528,7 +1586,7 @@
 }
 
 @media (max-width: 600px) {
-    .app-shell { padding: 12px; }
+    .app-shell { padding: 12px; padding-top: calc(var(--topbar-h, 90px) + 12px); }
     .tab-panel { padding: 18px; }
 }
 

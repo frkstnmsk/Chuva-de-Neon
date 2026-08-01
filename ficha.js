@@ -242,6 +242,9 @@ const el = {
     modalCombateMestre: document.getElementById("modal-combate-mestre"),
     combateMestreCorpo: document.getElementById("combate-mestre-corpo"),
     combateMestreFechar: document.getElementById("combate-mestre-fechar"),
+    topbar: document.querySelector(".topbar"),
+    btnAbrirInfoTopo: document.getElementById("btn-abrir-info-topo"),
+    painelInfoTopo: document.getElementById("painel-info-topo"),
     btnSalvar: document.getElementById("btn-salvar"),
     saveStatus: document.getElementById("save-status"),
     tabsNav: document.getElementById("tabs-nav"),
@@ -551,6 +554,7 @@ async function init() {
     } else {
         ativarSincronizacao();
     }
+    configurarPainelInfoTopo();
 
     // Cada chamada abaixo é isolada: se uma falhar (ex: permissão negada
     // num nó do banco), as outras continuam configurando seus listeners
@@ -8969,6 +8973,51 @@ function configurarPainelMestre() {
         montarGerenciadorCombate(el.combateMestreCorpo);
     });
     el.combateMestreFechar.addEventListener("click", () => el.modalCombateMestre.classList.remove("active"));
+}
+
+// A topbar agora é fixa no topo (pra barra de vida/energia ficar sempre
+// visível), mas sua altura varia (quebra linha em telas menores, muda
+// conforme itens equipados etc.). Essa função mede a altura real e guarda
+// numa CSS var (--topbar-h) que o resto do CSS usa pra empurrar o
+// conteúdo abaixo dela e posicionar o painel de info do topo. Roda no
+// carregamento, no resize da janela e sempre que a topbar mudar de
+// tamanho sozinha (ResizeObserver cobre a quebra de linha dos itens
+// equipados sem precisar recalcular manualmente em cada render).
+function ajustarEspacoTopbar() {
+    if (!el.topbar) return;
+    const altura = el.topbar.offsetHeight;
+    if (altura > 0) {
+        document.documentElement.style.setProperty("--topbar-h", altura + "px");
+    }
+}
+
+// Botão de menu (☰) na topbar fixa: abre uma janela deslizante encostada
+// no topo direito com tudo que não precisa ficar sempre visível — cargo,
+// mesa, godmode, seletor de ficha/NPC do Mestre, indicador de sincronia
+// e os botões de Painel do Mestre / Gerenciador de Combate. Mesmo padrão
+// de "clicar fora fecha" da gaveta de Ações Pendentes.
+function configurarPainelInfoTopo() {
+    if (!el.btnAbrirInfoTopo || !el.painelInfoTopo) return;
+
+    const abrir = () => el.painelInfoTopo.classList.add("aberto");
+    const fechar = () => el.painelInfoTopo.classList.remove("aberto");
+
+    el.btnAbrirInfoTopo.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (el.painelInfoTopo.classList.contains("aberto")) fechar(); else abrir();
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!el.painelInfoTopo.classList.contains("aberto")) return;
+        if (el.painelInfoTopo.contains(e.target) || el.btnAbrirInfoTopo.contains(e.target)) return;
+        fechar();
+    });
+
+    if (el.topbar && typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(() => ajustarEspacoTopbar()).observe(el.topbar);
+    }
+    window.addEventListener("resize", ajustarEspacoTopbar);
+    ajustarEspacoTopbar();
 }
 
 // Ícone fixo na lateral esquerda + gaveta flutuante (não é uma tela que

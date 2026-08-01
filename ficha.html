@@ -76,27 +76,42 @@
         </div>
 
         <div class="topbar-actions">
-            <span class="badge" id="user-role">—</span>
-            <span class="badge" id="mesa-indicador" title="Mesa ativa nesta sessão">—</span>
-            <span class="badge mestre" id="godmode-indicador" style="display:none;">Godmode ativo</span>
-
-            <div id="painel-mestre-seletor" style="display:none;">
-                <select id="select-ficha">
-                    <option value="">-- Escolha uma ficha da rede --</option>
-                </select>
-                <select id="select-npc-atuar" title="Abre a ficha completa do NPC pra você agir por ele (perícias, manobras de combate, itens/armas)">
-                    <option value="">-- Ou atue como um NPC --</option>
-                </select>
-            </div>
-
-            <span id="sync-indicator" class="sync-indicator" title="Status de sincronização">●</span>
-
-            <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
-            <button id="btn-abrir-combate" class="btn-red" type="button" style="display:none;">Gerenciador de Combate</button>
+            <button id="btn-abrir-info-topo" class="btn-ghost" type="button" title="Mais opções">
+                <i data-lucide="menu"></i>
+            </button>
             <button id="btn-abrir-mapa" class="btn-ghost" type="button">Mapa</button>
             <button id="btn-logout" class="btn-ghost" type="button">Sair</button>
         </div>
     </header>
+
+    <!-- ===================== PAINEL DE INFO DO TOPO (janela deslizante) =====================
+         Guarda tudo que não precisa ficar sempre visível: cargo/mesa/godmode,
+         o seletor de ficha do Mestre e o botão de atuar como NPC, o indicador
+         de sincronização e os botões de Painel do Mestre / Gerenciador de
+         Combate. A topbar em si (nome + barras de vida/energia + itens
+         equipados + Mapa/Sair) fica fixa no topo o tempo todo. -->
+    <div id="painel-info-topo" class="painel-info-topo panel">
+        <div class="painel-info-topo-linha">
+            <span class="badge" id="user-role">—</span>
+            <span class="badge" id="mesa-indicador" title="Mesa ativa nesta sessão">—</span>
+            <span class="badge mestre" id="godmode-indicador" style="display:none;">Godmode ativo</span>
+            <span id="sync-indicator" class="sync-indicator" title="Status de sincronização">●</span>
+        </div>
+
+        <div id="painel-mestre-seletor" style="display:none;">
+            <select id="select-ficha">
+                <option value="">-- Escolha uma ficha da rede --</option>
+            </select>
+            <select id="select-npc-atuar" title="Abre a ficha completa do NPC pra você agir por ele (perícias, manobras de combate, itens/armas)">
+                <option value="">-- Ou atue como um NPC --</option>
+            </select>
+        </div>
+
+        <div class="painel-info-topo-botoes">
+            <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
+            <button id="btn-abrir-combate" class="btn-red" type="button" style="display:none;">Gerenciador de Combate</button>
+        </div>
+    </div>
 
     <!-- ===================== CORPO: calendário + conteúdo ===================== -->
     <div class="app-body">
