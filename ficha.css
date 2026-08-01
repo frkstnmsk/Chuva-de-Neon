@@ -906,13 +906,12 @@
     padding: 18px;
     background: var(--panel-bg);
     border-right: 1px solid var(--neon-red);
-    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
     z-index: 5000;
     transform: translateX(-100%);
-    transition: transform 0.25s ease;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
     overflow-y: auto;
 }
-.drawer-pendentes.aberto { transform: translateX(0); }
+.drawer-pendentes.aberto { transform: translateX(0); box-shadow: 0 0 40px rgba(239, 68, 68, 0.25); }
 .drawer-pendentes-topo {
     display: flex;
     align-items: center;
@@ -953,13 +952,12 @@
     padding: 18px;
     background: var(--panel-bg);
     border-left: 1px solid var(--neon-red);
-    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
     z-index: 5000;
     transform: translateX(100%);
-    transition: transform 0.25s ease;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
     overflow-y: auto;
 }
-.drawer-combate.active { transform: translateX(0); }
+.drawer-combate.active { transform: translateX(0); box-shadow: 0 0 40px rgba(239, 68, 68, 0.25); }
 .drawer-combate-topo {
     display: flex;
     align-items: center;
