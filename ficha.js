@@ -1334,6 +1334,19 @@ function renderizarTudo() {
     renderizarTreinamento();
     renderizarReceitas();
     renderizarDarknetENotas();
+
+    // Reavalia o alerta "VOCÊ ESTÁ EM COMBATE!" (e o travamento de ações
+    // fora do turno) sempre que a ficha terminar de carregar/atualizar —
+    // não só quando o estado de combate muda (ver configurarCombateAtivo).
+    // Sem isso, se o snapshot de combateAtivo chegar ANTES da ficha (caso
+    // comum: fichaAtualId ainda vazio no primeiro disparo do listener),
+    // meuParticipanteIdCombate() não encontra o participante e o alerta
+    // nunca é recalculado depois, mesmo com a ficha já carregada.
+    if (!isMestre) {
+        renderizarAlertaIniciativaCombate();
+        travarAcoesForaDoTurno();
+        renderizarAcoesRapidas();
+    }
 }
 
 // ---------------------------------------------------------------------
