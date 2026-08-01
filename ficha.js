@@ -215,6 +215,15 @@ const TIPOS_TREINO = [
 // Personagem — depois disso, só o Mestre mexe (correção de exploit).
 const LISTAS_CARACTERISTICA_NARRATIVA = ["vantagens", "desvantagens", "fatosUniversais"];
 
+// Chaves de localStorage do layout das abas (ver gerenciarLayoutAbas mais
+// abaixo) — precisam ficar definidas antes do init() ser chamado, senão
+// dá erro de "Cannot access before initialization" (a const ainda não
+// existe no momento em que gerenciarLayoutAbas() é executada).
+const CHAVE_ABAS_MODO = "cdn_abas_modo";
+const CHAVE_ABAS_FIXADAS = "cdn_abas_fixadas";
+const CHAVE_ABAS_MAIS = "cdn_abas_mais_ordem";
+const ABAS_FIXADAS_PADRAO = ["perfil", "atributos", "pericias", "inventario", "combate"];
+
 // ---------------------------------------------------------------------
 // Elementos
 // ---------------------------------------------------------------------
@@ -841,11 +850,6 @@ function montarAbas() {
 // salva no navegador (localStorage), por isso é por aparelho/navegador,
 // não por personagem.
 // =====================================================================
-const CHAVE_ABAS_MODO = "cdn_abas_modo";
-const CHAVE_ABAS_FIXADAS = "cdn_abas_fixadas";
-const CHAVE_ABAS_MAIS = "cdn_abas_mais_ordem";
-const ABAS_FIXADAS_PADRAO = ["perfil", "atributos", "pericias", "inventario", "combate"];
-
 function gerenciarLayoutAbas() {
     if (!el.tabsNav || !el.tabsFixadas || !el.tabsMaisMenu || !el.tabsMaisWrap || !el.tabsEditarBtn || !el.tabsModoBtn) return;
 
