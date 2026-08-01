@@ -9,7 +9,7 @@ import { db } from "./firebase-config.js";
 import { ref, set, get, update, push, remove, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 import { caminhoMesa } from "./mesa.js";
 import {
-    rolarD20, rolarDado, calcularDerivados, coletarModificadores,
+    rolarD20, rolarDado, calcularDerivados, coletarModificadores, somaModificadoresPara,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
     calcularEstadoEnergia, dificuldadeSangramento
 } from "./regras.js";
@@ -141,8 +141,9 @@ export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mes
 // Mestre que não têm noção de golpe mirado). Retorna o resumo completo
 // pro Mestre/automação montarem a mensagem do Log de Dados.
 // ---------------------------------------------------------------------
-export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null) {
+export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0) {
     const brutoNum = Number(danoBruto) || 0;
+    const ignorarArmadura = Math.max(0, Number(ignorarArmaduraPontos) || 0);
 
     if (alvoTipo === "ficha") {
         const snap = await get(ref(db, caminhoMesa(`fichas/${alvoId}`)));
@@ -157,11 +158,19 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         // "sem dano registrado = PV cheio" já usada em toda parte,
         // ex: calcularEstadoSaude em regras.js).
         const dadosRaw = raw.dados || {};
+        // Precisamos dos modificadores estruturados da ficha do alvo em
+        // qualquer caso agora (não só quando pvAtual está indefinido):
+        // o alvo "defesa" (Vantagem/Item/Especialização — ver
+        // listaAlvosModificador em regras.js) é uma redução de dano
+        // GENÉRICA (não filtrada por tipo de dano nem por local
+        // mirado, ao contrário da armadura), então precisa entrar em
+        // toda aplicação de dano.
+        const fichaNormalizada = normalizarFicha(raw);
+        const modificadoresAlvo = coletarModificadores(fichaNormalizada);
+        const bonusDefesaGenerica = Math.max(0, somaModificadoresPara("defesa", modificadoresAlvo));
         let pvMaximoRaw = 0;
         if (dadosRaw.pvAtual === null || dadosRaw.pvAtual === undefined) {
-            const fichaNormalizada = normalizarFicha(raw);
-            const modificadoresRaw = coletarModificadores(fichaNormalizada);
-            const derivadosRaw = calcularDerivados(fichaNormalizada.dados, modificadoresRaw);
+            const derivadosRaw = calcularDerivados(fichaNormalizada.dados, modificadoresAlvo);
             const bonusExtraRaw = Number(dadosRaw.pvBonusExtra) || 0;
             const totalCalculadoRaw = Math.round(derivadosRaw.recursos.pv.total) + bonusExtraRaw;
             const overrideRaw = dadosRaw.pvMaximoOverride;
@@ -177,13 +186,18 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         // embutido em danoBruto (crítico, queima-roupa, etc.).
         const ehFragil = temDesvantagemFragil(raw.desvantagens);
         const brutoComFragil = ehFragil ? brutoNum * MULTIPLICADOR_DANO_FRAGIL : brutoNum;
-        const reducao = tipoDanoKey ? Object.values(inventario)
+        const reducaoBruta = tipoDanoKey ? Object.values(inventario)
             .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano)
                 && (localArmadura == null || it.localProtegido === localArmadura))
             .reduce((acc, it) => {
                 const entrada = it.reducoesDano.find(r => r.tipo === tipoDanoKey);
                 return acc + (entrada ? Number(entrada.valor) || 0 : 0);
             }, 0) : 0;
+        // Força Bruta nível 2/4 (manual pg. 22): "golpes ignoram armadura
+        // em pontos igual [ao dobro de] sua Força" — subtrai da redução
+        // de armadura do alvo ANTES de aplicar no dano (nunca deixa a
+        // redução negativa).
+        const reducao = Math.max(0, reducaoBruta - ignorarArmadura) + bonusDefesaGenerica;
         const brutoComFragilArredondado = Math.round(brutoComFragil);
         const danoFinal = Math.max(0, brutoComFragilArredondado - reducao);
         const novoPv = pvAtual - danoFinal;
@@ -206,9 +220,13 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     const reducoesNpc = (npc.reducoesDano && npc.reducoesDano.length)
         ? npc.reducoesDano
         : (npc.protecaoTipo ? [{ tipo: npc.protecaoTipo, valor: npc.protecaoValor || 0 }] : []);
-    const reducao = tipoDanoKey
+    const reducaoBrutaNpc = tipoDanoKey
         ? reducoesNpc.reduce((acc, r) => acc + (r.tipo === tipoDanoKey ? (Number(r.valor) || 0) : 0), 0)
         : 0;
+    // Vantagem "defesa" (redução de dano genérica, ver aplicarDano pro
+    // ramo de ficha acima) também vale pra NPC — mesmo alvo, mesma regra.
+    const bonusDefesaGenericaNpc = Math.max(0, somaModificadoresPara("defesa", coletarModificadores({ vantagens: npc.vantagens })));
+    const reducao = Math.max(0, reducaoBrutaNpc - ignorarArmadura) + bonusDefesaGenericaNpc;
     const danoFinal = Math.max(0, brutoNum - reducao);
     const novoPv = pvAtual - danoFinal;
     await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
@@ -547,6 +565,10 @@ export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
     // dessa entrada tardia, já que ela não passa pela modal de
     // pré-iniciativa; o Mestre pode ajustar na mão se for o caso.
     const bonusCobraKai = bonusCobraKaiIniciativa(stats.nivelCobraKai);
+    // Mesma regra da "iniciativa travada" de iniciarIniciativaCombate:
+    // tirou 1 no d20? Perde esse primeiro turno (0 ações). Rerrola ao
+    // encerrar o turno, dentro de avancarTurnoCombate.
+    const perdeuPrimeiroTurno = rolagemBruta === 1;
 
     const participanteCompleto = {
         ...base,
@@ -556,7 +578,8 @@ export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
         bonusCQCIniciativa: false,
         bonusCobraKaiIniciativa: bonusCobraKai,
         acoesMax,
-        acoes: acoesMax,
+        acoes: perdeuPrimeiroTurno ? 0 : acoesMax,
+        iniciativaTravada: perdeuPrimeiroTurno,
         dispararAvancarDisponivel: false,
         dispararAvancarUsado: false,
         acoesExtraCQCMax: 0,
@@ -676,7 +699,8 @@ async function calcularStatsCombateParticipante(participante, ignorarPenalidadeS
     const npc = snap.val();
 
     if (npc.modoDetalhado) {
-        const secundarios = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride);
+        const modificadoresVantagensNpc = coletarModificadores({ vantagens: npc.vantagens });
+        const secundarios = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modificadoresVantagensNpc);
         const pvMax = secundarios.recursos.pv.valor;
         const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : pvMax;
         const temTolerancia = temPericiaTreinada(npc.periciasNpc, "Tolerância");
@@ -867,6 +891,13 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, disparar
         // ehCQC em ficha.js) — resetado a cada rodada em
         // avancarTurnoCombate, igual `acoes`.
         const temAcaoExtraCQC = !!acaoExtraCQC[id];
+        // Regra da "iniciativa travada": quem tira 1 no d20 da própria
+        // rolagem de iniciativa perde o primeiro turno inteiro (0 ações,
+        // não age). Ao encerrar esse turno (ver avancarTurnoCombate),
+        // rerrola o d20 e reordena a fila com a nova iniciativa — se
+        // tirar 1 de novo, perde o turno seguinte também, e assim por
+        // diante.
+        const perdeuPrimeiroTurno = rolagemBruta === 1;
         participantesAtualizados[id] = {
             ...base,
             ...stats,
@@ -875,7 +906,8 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, disparar
             bonusCQCIniciativa: !!bonusCQC,
             bonusCobraKaiIniciativa: bonusCobraKai,
             acoesMax,
-            acoes: dispararAvancar ? Math.max(0, acoesMax - 1) : acoesMax,
+            acoes: perdeuPrimeiroTurno ? 0 : (dispararAvancar ? Math.max(0, acoesMax - 1) : acoesMax),
+            iniciativaTravada: perdeuPrimeiroTurno,
             dispararAvancarDisponivel: dispararAvancar,
             dispararAvancarUsado: false,
             acoesExtraCQCMax: temAcaoExtraCQC ? 1 : 0,
@@ -967,6 +999,39 @@ export async function avancarTurnoCombate() {
         notasStatus = notas;
     }
 
+    // Regra da "iniciativa travada" (ver iniciarIniciativaCombate e
+    // adicionarParticipanteCombate): quem tirou 1 no d20 da iniciativa
+    // perdeu o turno que está terminando agora (ficou com 0 ações,
+    // travado, sem poder agir). Ao encerrar esse turno — ou seja, agora,
+    // na troca pra quem vem a seguir — rerrola o d20 dele. Se tirar 1 de
+    // novo, o próximo turno dele TAMBÉM fica travado; senão, destrava
+    // (some o iniciativaTravada) e a fila inteira é reordenada com a
+    // nova iniciativa. `novoTurno` já foi decidido acima a partir da
+    // ordem ATUAL da fila, então reordenar aqui não atropela quem é o
+    // próximo a agir agora — só muda a partir de onde a fila continua
+    // dali pra frente.
+    let precisaReordenarFila = false;
+    if (participantes[turnoAtual] && participantes[turnoAtual].iniciativaTravada) {
+        const travado = participantes[turnoAtual];
+        const novaRolagem = rolarD20();
+        const bonusCQCAtual = travado.bonusCQCIniciativa ? 1 : 0;
+        const bonusCobraKaiAtual = Number(travado.bonusCobraKaiIniciativa) || 0;
+        const novaIniciativa = novaRolagem + (Number(travado.modAgilidade) || 0) + bonusCQCAtual + bonusCobraKaiAtual;
+        const aindaTravado = novaRolagem === 1;
+        atualizacoes[`participantes/${turnoAtual}/rolagemBruta`] = novaRolagem;
+        atualizacoes[`participantes/${turnoAtual}/iniciativa`] = novaIniciativa;
+        atualizacoes[`participantes/${turnoAtual}/iniciativaTravada`] = aindaTravado;
+        // Atualiza a cópia local também, pra tanto o recálculo de ações
+        // do loop abaixo (que usa Math.min contra o valor atual de
+        // `acoes`) quanto o reordenamento da fila usarem o valor novo.
+        participantes[turnoAtual] = { ...travado, rolagemBruta: novaRolagem, iniciativa: novaIniciativa, iniciativaTravada: aindaTravado, acoes: aindaTravado ? 0 : travado.acoesMax };
+        precisaReordenarFila = true;
+        notasStatus = [
+            ...notasStatus,
+            `${travado.nome} tinha perdido o turno (rolou 1 na iniciativa) e rerrolou ao encerrá-lo: novo resultado ${novaRolagem}, iniciativa ${novaIniciativa}.${aindaTravado ? " Tirou 1 de novo — perde o próximo turno também." : " Destravado, volta a agir normalmente no próximo turno."}`
+        ];
+    }
+
     // Mesma combinação Godmode + "ignorar penalidade de saúde" usada em
     // iniciarIniciativaCombate — recalcular tem que respeitar o mesmo
     // Godmode que já vale pro resto do combate.
@@ -1009,6 +1074,10 @@ export async function avancarTurnoCombate() {
                 ? acoesExtraCQCMax
                 : Math.min(Number(participantes[id].acoesExtraCQC) || 0, acoesExtraCQCMax);
         }
+    }
+
+    if (precisaReordenarFila) {
+        atualizacoes.ordemTurnos = ordenarPorIniciativa(participantes);
     }
 
     await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
@@ -1327,6 +1396,17 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     } else if (escolha === "bloquear" && consumiu) {
         if (r.tipoDanoKey === "perfuracao_comum" || r.tipoDanoKey === "perfuracao_especial") {
             notaEscolha = `${r.nomeAlvo} tentou BLOQUEAR, mas dano perfurante não é reduzido por bloqueio. Ação guardada consumida mesmo assim.`;
+        } else if (r.bloqueioForcaBruta && r.bloqueioForcaBruta.impossivel) {
+            // Força Bruta nível 5 (manual pg. 22): "não é possível
+            // bloquear golpes" — passa o dano cheio mesmo assim, a ação
+            // guardada é consumida do mesmo jeito que uma tentativa
+            // fracassada de bloquear dano perfurante logo acima.
+            notaEscolha = `${r.nomeAlvo} tentou BLOQUEAR, mas esse golpe veio de Força Bruta nível 5 — impossível bloquear. Ação guardada consumida mesmo assim.`;
+        } else if (r.bloqueioForcaBruta && r.bloqueioForcaBruta.fracaoDanoRestante) {
+            // Força Bruta nível 4 (manual pg. 22): "bloquear seus golpes
+            // diminui apenas em 1/4 o dano" — em vez da metade normal.
+            danoParaAplicar = Math.floor(danoParaAplicar * r.bloqueioForcaBruta.fracaoDanoRestante);
+            notaEscolha = `${r.nomeAlvo} usou a ação guardada pra BLOQUEAR, mas esse golpe veio de Força Bruta nível 4 — só reduziu 1/4 do dano.`;
         } else {
             danoParaAplicar = Math.floor(danoParaAplicar / 2);
             notaEscolha = `${r.nomeAlvo} usou a ação guardada pra BLOQUEAR e reduziu o dano pela metade.`;
@@ -1360,7 +1440,7 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // resolverAtaque em ficha.js). Ausente (reação antiga, de antes
     // dessa mudança) cai em `null`, preservando o comportamento antigo
     // de não filtrar por local.
-    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null);
+    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null, r.ignorarArmaduraPontos ?? 0);
 
     // Golpes Mirados (manual): Golpe Perfurante testa Sangramento, Golpe
     // Cortante aplica obrigatoriamente a regra de Amputação, e Golpe

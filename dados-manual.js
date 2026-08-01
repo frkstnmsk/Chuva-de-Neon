@@ -150,6 +150,18 @@ export function atendeRequisitoPericia(nomePericia, dadosPrimarios, periciasFich
 export const ARTES_MARCIAIS = ["Jiu Jitsu", "Muay Thai", "Boxe", "Karatê Cobra Kai", "CQC"];
 
 // ---------------------------------------------------------------------
+// "Uma arte marcial tem vantagem contra Briga de Rua. A dificuldade ao
+// usar Briga de Rua contra uma arte marcial é 2 pontos maior" (manual
+// pg. 22). Briga de Rua nunca é usada pra Aparar (manual: "Briga de rua
+// não pode ser usada para aparar ataques"), então esse bônus só entra
+// na hora de ATACAR com Briga de Rua contra um alvo com nível ≥ 1 em
+// qualquer uma das 5 artes marciais — ver resolverAtaque em ficha.js.
+// ---------------------------------------------------------------------
+export function alvoTemArteMarcialTreinada(periciasAlvo) {
+    return Object.values(periciasAlvo || {}).some(p => ARTES_MARCIAIS.includes(p && p.nome) && (Number(p.nivel) || 0) >= 1);
+}
+
+// ---------------------------------------------------------------------
 // Funções — bônus de criação de personagem.
 // atributosFixos: { atributo: pontos } sempre aplicados, sem escolha.
 // atributosEscolha: { grupo: [opções], pontos } — jogador escolhe 1 do
@@ -614,6 +626,51 @@ export function calcularEspecificidadeGolpe(nomeManobra, nomePericia, nivelPeric
     }
 
     return { escalaMult, dadoMultiplicador, danoMaximoSemRolar };
+}
+
+// ---------------------------------------------------------------------
+// Força Bruta — efeitos defensivos (manual pg. 22), além do dano máximo/
+// escala já cobertos acima. Só valem quando o GOLPE ESTÁ SENDO ROLADO
+// com a perícia Força Bruta (mesmo critério de danoMaximoSemRolar/
+// escalaMult logo acima — é a perícia usada NESTE golpe que importa,
+// não só ter o nível cadastrado na ficha):
+//
+// Nível 2: "seus golpes ignoram armadura em pontos igual a sua Força."
+// Nível 4: "bloquear seus golpes diminui apenas em 1/4 o dano [em vez
+// da metade normal]; para se esquivar [de você] tem penalidade -1;
+// seus golpes ignoram armadura em pontos igual ao DOBRO de sua Força"
+// (substitui o efeito do nível 2, não soma com ele).
+// Nível 5: "esquivar [de você] tem penalidade -2; não é possível
+// bloquear [seus] golpes."
+// ---------------------------------------------------------------------
+
+// Pontos de armadura ignorados pelo golpe — nível 4 já inclui (substitui)
+// o efeito do nível 2, não é cumulativo.
+export function ignorarArmaduraForcaBruta(nivelForcaBruta, forcaAtacante) {
+    const nivel = Number(nivelForcaBruta) || 0;
+    const forca = Number(forcaAtacante) || 0;
+    if (nivel >= 4) return forca * 2;
+    if (nivel >= 2) return forca;
+    return 0;
+}
+
+// Penalidade (negativa) no teste de Esquivar de quem está tentando
+// esquivar de um golpe rolado com Força Bruta nível 4/5.
+export function penalidadeEsquivarContraForcaBruta(nivelForcaBruta) {
+    const nivel = Number(nivelForcaBruta) || 0;
+    if (nivel >= 5) return -2;
+    if (nivel >= 4) return -1;
+    return 0;
+}
+
+// Como a manobra "Bloquear" se comporta contra um golpe rolado com
+// Força Bruta nível 4/5 — null = comportamento padrão (reduz pela
+// metade, ver responderReacaoPendente em mestre.js).
+export function bloqueioContraForcaBruta(nivelForcaBruta) {
+    const nivel = Number(nivelForcaBruta) || 0;
+    if (nivel >= 5) return { impossivel: true };
+    if (nivel >= 4) return { fracaoDanoRestante: 0.75 }; // reduz só 1/4 (25%) do dano
+    return null;
 }
 
 // ---------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { ref, set, get, update, remove, onValue, off } from "https://www.gstatic
 import { caminhoMesa } from "./mesa.js";
 import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS,
-    listaAlvosModificador, rotuloAlvo, modificadoresQueAfetam,
+    listaAlvosModificador, rotuloAlvo, modificadoresQueAfetam, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA,
     coletarModificadores, calcularDerivados, calcularTotalPericia,
     rolarD20, rolarDado,
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
@@ -36,6 +36,8 @@ import {
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
     cobraKaiCriticoAutomatico,
+    ignorarArmaduraForcaBruta, penalidadeEsquivarContraForcaBruta, bloqueioContraForcaBruta,
+    alvoTemArteMarcialTreinada,
     MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC,
     danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
     danoQuebrarOssosJiuJitsu,
@@ -220,6 +222,11 @@ const el = {
     btnAbrirMapa: document.getElementById("btn-abrir-mapa"),
     btnAbrirMestre: document.getElementById("btn-abrir-mestre"),
     badgePendentes: document.getElementById("badge-pendentes"),
+    btnPendentesLateral: document.getElementById("btn-pendentes-lateral"),
+    badgePendentesLateral: document.getElementById("badge-pendentes-lateral"),
+    drawerPendentes: document.getElementById("drawer-pendentes"),
+    drawerPendentesCorpo: document.getElementById("drawer-pendentes-corpo"),
+    drawerPendentesFechar: document.getElementById("drawer-pendentes-fechar"),
     btnAbrirCombate: document.getElementById("btn-abrir-combate"),
     modalCombateMestre: document.getElementById("modal-combate-mestre"),
     combateMestreCorpo: document.getElementById("combate-mestre-corpo"),
@@ -470,6 +477,7 @@ async function init() {
     if (isMestre) {
         el.painelMestreSeletor.style.display = "flex";
         el.btnAbrirMestre.style.display = "inline-block";
+        el.btnPendentesLateral.style.display = "flex";
         el.btnAbrirCombate.style.display = "inline-block";
         el.calendarioEdicaoMestre.style.display = "block";
         ouvirListaDeFichas();
@@ -505,6 +513,7 @@ async function init() {
         el.carregando.style.display = "none";
         renderTudoVazio();
         configurarPainelMestre();
+        configurarDrawerPendentes();
     } else {
         ativarSincronizacao();
     }
@@ -1914,7 +1923,16 @@ async function executarManobraEsquivar(modificadoresPlanos) {
 function modificadorDePericiaComPenalidade(nomePericia, dadosPrimarios, pericias, modificadoresPlanos, penalidadeSaude = 0) {
     const entrada = Object.entries(pericias || {}).find(([, p]) => p.nome === nomePericia);
     const penalidadeTotal = (Number(penalidadeSaude) || 0) + penalidadeEnergiaParaPericia(nomePericia);
-    if (!entrada || (Number(entrada[1].nivel) || 0) <= 0) return -1 + penalidadeTotal;
+    if (!entrada || (Number(entrada[1].nivel) || 0) <= 0) {
+        // Sem treino: penalidade fixa -1, mas um bônus genérico por
+        // categoria (ex.: Vantagem "Instinto Físico Apurado", testes_fisicos)
+        // ainda ajuda — só o bônus específico por nome de perícia (que
+        // não existe treinada) não entra.
+        const infoPericiaDestreinada = buscarPericiaPorNome(nomePericia);
+        const alvoCategoriaDestreinada = infoPericiaDestreinada ? ALVO_TESTES_POR_CATEGORIA[infoPericiaDestreinada.categoria] : null;
+        const bonusCategoriaDestreinado = alvoCategoriaDestreinada ? somaModificadoresPara(alvoCategoriaDestreinada, modificadoresPlanos) : 0;
+        return -1 + penalidadeTotal + bonusCategoriaDestreinado;
+    }
     return calcularTotalPericia(entrada[1], dadosPrimarios, modificadoresPlanos, penalidadeTotal).total;
 }
 
@@ -3048,6 +3066,18 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const entradaCobraKai = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Karatê Cobra Kai");
     const nivelCobraKai = entradaCobraKai ? (Number(entradaCobraKai[1].nivel) || 0) : 0;
     const cobraKaiCriticoElegivel = armaConfig.desarmado && nomePericia === "Karatê Cobra Kai" && cobraKaiCriticoAutomatico(nivelCobraKai);
+    // Força Bruta (manual pg. 22): efeitos defensivos (ignora armadura,
+    // bloqueio menos eficaz, penalidade pra esquivar) só valem quando
+    // ESTE golpe está sendo rolado com a perícia Força Bruta — mesmo
+    // critério já usado pro dano máximo/escala em calcularEspecificidadeGolpe.
+    // Repassados pra abrirReacaoPendente pra a reação do alvo (Esquivar/
+    // Bloquear) e a redução de armadura em aplicarDano já saírem certos.
+    const entradaForcaBruta = Object.entries(fichaAtual.pericias || {}).find(([, p]) => p.nome === "Força Bruta");
+    const nivelForcaBrutaAtaque = (armaConfig.desarmado && nomePericia === "Força Bruta" && entradaForcaBruta) ? (Number(entradaForcaBruta[1].nivel) || 0) : 0;
+    const forcaAtacanteForcaBruta = Number(fichaAtual.dados.forca) || 0;
+    const ignorarArmaduraPontos = ignorarArmaduraForcaBruta(nivelForcaBrutaAtaque, forcaAtacanteForcaBruta);
+    const penalidadeEsquivaForcaBruta = penalidadeEsquivarContraForcaBruta(nivelForcaBrutaAtaque);
+    const bloqueioForcaBruta = bloqueioContraForcaBruta(nivelForcaBrutaAtaque);
     const numParticipantesCombate = (combateAtivoCache && combateAtivoCache.participantes) ? Object.keys(combateAtivoCache.participantes).length : 0;
     const ehCombate1x1 = combateComIniciativaAtivo() && numParticipantesCombate === 2;
     // Nível 1: +1 EM ROLAGENS DE CQC (só quando a perícia usada pra
@@ -3127,21 +3157,52 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
                 const baseDif = baseDificuldadeAtaque(it.nome, nomePericia);
                 dificuldade = calcularDificuldadeDefesaJogador(fichaAlvo.dados, atributoDefesaChave, modsAlvo, baseDif);
+                // Arte marcial vs. Briga de Rua (manual pg. 22).
+                if (nomePericia === "Briga de Rua" && alvoTemArteMarcialTreinada(fichaAlvo.pericias)) {
+                    dificuldade += 2;
+                    notasSituacionaisLista.push(`${nomeAlvo} tem uma arte marcial — Briga de Rua contra arte marcial tem dificuldade +2`);
+                }
             }
         } else {
             const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
             if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
             const npc = snap.val();
             nomeAlvo = npc.nome || participante.nome;
-            constituicaoAlvo = Number(npc.constituicao) || 0;
+            // Agilidade/Constituição do alvo: recalculadas AO VIVO a partir
+            // dos atributos primários + Vantagens (npc.vantagens) pro NPC
+            // "detalhado" — mesmo padrão que calcularModEsquivarParticipante
+            // já usa pra Esquivar — em vez dos campos soltos npc.agilidade/
+            // npc.constituicao, que só são regravados quando o Mestre salva
+            // a mini-ficha de novo (uma Vantagem de Agilidade recém-marcada
+            // não mudava essa dificuldade até isso acontecer). NPC "rápido"
+            // (sem atributosPrimarios) continua usando os campos soltos, que
+            // são a única fonte que ele tem.
+            let agilidadeAlvoNpc, constituicaoAlvoNpc;
+            if (npc.modoDetalhado && npc.atributosPrimarios) {
+                const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
+                const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
+                agilidadeAlvoNpc = secundariosNpcAlvo.secundarios.agilidade.valor;
+                constituicaoAlvoNpc = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
+            } else {
+                agilidadeAlvoNpc = Number(npc.agilidade) || 0;
+                constituicaoAlvoNpc = Number(npc.constituicao) || 0;
+            }
+            constituicaoAlvo = constituicaoAlvoNpc;
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
-                const valorAtributo = atributoDefesaChave === "constituicao" ? (Number(npc.constituicao) || 0) : (Number(npc.agilidade) || 0);
+                const valorAtributo = atributoDefesaChave === "constituicao" ? constituicaoAlvoNpc : agilidadeAlvoNpc;
                 const baseDif = baseDificuldadeAtaque(it.nome, nomePericia);
                 dificuldade = baseDif + valorAtributo;
+                // Arte marcial vs. Briga de Rua (manual pg. 22) — só NPC
+                // "detalhado" tem perícias cadastradas (periciasNpc); NPC
+                // "rápido" nunca aciona esse bônus.
+                if (nomePericia === "Briga de Rua" && alvoTemArteMarcialTreinada(npc.periciasNpc)) {
+                    dificuldade += 2;
+                    notasSituacionaisLista.push(`${nomeAlvo} tem uma arte marcial — Briga de Rua contra arte marcial tem dificuldade +2`);
+                }
             }
         }
     } catch (err) {
@@ -3294,6 +3355,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         danoDadoTexto += ` [×4 queima-roupa em alvo dominado/agarrado]`;
     }
 
+    // Alvo genérico "dano" (Vantagem/Item/Especialização — ver
+    // listaAlvosModificador em regras.js): bônus/penalidade fixa
+    // somada em CIMA de qualquer dano já calculado (desarmado, arma,
+    // mira, CQC), ANTES do Acerto Crítico dobrar — igual qualquer
+    // outro bônus de dano deste pipeline.
+    const bonusDanoGenerico = somaModificadoresPara("dano", modificadoresPlanosAtacante);
+    if (bonusDanoGenerico) {
+        danoTotal += bonusDanoGenerico;
+        danoDadoTexto += ` [${bonusDanoGenerico > 0 ? "+" : ""}${bonusDanoGenerico} dano (Vantagem/Item)]`;
+    }
+
     // Acerto Crítico (manual): dobra o dano do ataque. Aplicado ANTES
     // das reduções de Agarrado/alcance limitado (que também mexem em
     // danoTotal logo abaixo) e ANTES da redução de armadura do alvo
@@ -3373,6 +3445,13 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             regraSangramentoLocal: localMira.sangramento,
             constituicaoAlvo,
             nivelArma: it.nivelTag ?? 0,
+            // Força Bruta (manual pg. 22): repassa pra responderReacaoPendente
+            // (mestre.js) decidir a redução de armadura e o comportamento
+            // de Bloquear, e pro botão "Esquivar" aqui em ficha.js aplicar
+            // a penalidade no teste de quem está se defendendo.
+            ignorarArmaduraPontos,
+            penalidadeEsquivaForcaBruta,
+            bloqueioForcaBruta,
             // Manual do Aparar: "não é possível aparar ataques de arma
             // branca estando desarmado" — a tela de reação usa isso pra
             // só oferecer perícias de arma branca (não as desarmadas)
@@ -3396,7 +3475,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         // Golpes Mirados: a redução de armadura do alvo só conta itens
         // de Proteção cujo localProtegido bate com o local mirado (ver
         // LOCAIS_MIRA em dados-manual.js e aplicarDano em mestre.js).
-        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura);
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos);
     } catch (err) {
         console.error(err);
         toast("Ataque acertou, mas falhou ao aplicar o dano no alvo.", "erro");
@@ -4183,8 +4262,18 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
                 if (!snap.exists()) { linhasLog.push(`${participante.nome}: NPC não encontrado.`); continue; }
                 const npc = snap.val();
                 nomeAlvo = npc.nome || participante.nome;
-                dificuldade = 9 + (Number(npc.agilidade) || 0);
-                constituicaoAlvo = Number(npc.constituicao) || 0;
+                // Mesmo recálculo ao vivo do bloco de resolverAtaque acima —
+                // ver comentário lá pra detalhes de por que não usa mais
+                // npc.agilidade/npc.constituicao direto.
+                if (npc.modoDetalhado && npc.atributosPrimarios) {
+                    const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
+                    const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
+                    dificuldade = 9 + secundariosNpcAlvo.secundarios.agilidade.valor;
+                    constituicaoAlvo = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
+                } else {
+                    dificuldade = 9 + (Number(npc.agilidade) || 0);
+                    constituicaoAlvo = Number(npc.constituicao) || 0;
+                }
             }
         } catch (err) {
             console.error(err);
@@ -7696,9 +7785,18 @@ function avaliarReacaoPendente() {
 }
 
 function renderizarReacaoPendente(r) {
+    const penalidadeFB = Number(r.penalidadeEsquivaForcaBruta) || 0;
+    const notaForcaBrutaEsquiva = penalidadeFB ? ` (penalidade ${penalidadeFB} por ser um golpe de Força Bruta)` : "";
+    const bloqueioImpossivel = !!(r.bloqueioForcaBruta && r.bloqueioForcaBruta.impossivel);
+    const fracaoBloqueio = r.bloqueioForcaBruta && r.bloqueioForcaBruta.fracaoDanoRestante;
+    const notaBloqueio = bloqueioImpossivel
+        ? "Bloquear é IMPOSSÍVEL contra esse golpe (Força Bruta nível 5)."
+        : fracaoBloqueio
+            ? `Bloquear só reduz 1/4 do dano desse golpe (Força Bruta nível 4), não a metade normal.`
+            : "Bloquear reduz o dano pela metade (não reduz dano perfurante).";
     const avisoBase = r.ehArmaFogo
-        ? `${escapeHtml(r.nomeAlvo)} tem Esquiva/Bloqueio guardada, mas não dá pra esquivar/aparar de arma de fogo — só Bloquear ou levar o golpe cheio. Bloquear reduz o dano pela metade (não reduz dano perfurante).`
-        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar rola Agilidade (+ bônus de Boxe, se tiver) contra o resultado do ataque — só anula o golpe se bater; Aparar (com teste de perícia contra o resultado do ataque) anula o golpe E permite contra-atacar na hora com -1; Bloquear reduz o dano pela metade (não reduz dano perfurante). Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
+        ? `${escapeHtml(r.nomeAlvo)} tem Esquiva/Bloqueio guardada, mas não dá pra esquivar/aparar de arma de fogo — só Bloquear ou levar o golpe cheio. ${notaBloqueio}`
+        : `${escapeHtml(r.nomeAlvo)} tem a ação de Esquiva/Bloqueio guardada. Esquivar rola Agilidade (+ bônus de Boxe, se tiver)${notaForcaBrutaEsquiva} contra o resultado do ataque — só anula o golpe se bater; Aparar (com teste de perícia contra o resultado do ataque) anula o golpe E permite contra-atacar na hora com -1; ${notaBloqueio} Escolha uma opção, ou deixe passar o golpe cheio sem gastar a ação.`;
     el.reacaoDefesaCorpo.innerHTML = `
         <p class="hint">${escapeHtml(r.nomeAtacante)} acertou ${escapeHtml(r.nomeAlvo)} com ${escapeHtml(r.nomeArma)} (${r.resultadoAtaque} vs. dificuldade ${r.dificuldade}). Dano previsto${escapeHtml(r.danoDadoTexto || "")}: ${r.danoTotal} (${escapeHtml(r.tipoDanoLabel)}).</p>
         <p class="hint">${avisoBase}</p>
@@ -7722,7 +7820,10 @@ function renderizarReacaoPendente(r) {
         btnEsquivar.className = "btn-lime"; btnEsquivar.type = "button"; btnEsquivar.innerText = "Esquivar";
         btnEsquivar.addEventListener("click", async () => {
             btnEsquivar.disabled = true;
-            const modDado = await calcularModEsquivarParticipante(r.alvoTipo, r.alvoRefId, r.ataqueArmaBranca);
+            const modDadoBase = await calcularModEsquivarParticipante(r.alvoTipo, r.alvoRefId, r.ataqueArmaBranca);
+            // Força Bruta nível 4/5 do atacante (manual pg. 22):
+            // penalidade -1/-2 pra quem tenta esquivar desse golpe.
+            const modDado = modDadoBase + (Number(r.penalidadeEsquivaForcaBruta) || 0);
             const brutoDado = rolarD20();
             const resultadoDado = brutoDado + modDado;
             await responder("esquivar", { brutoDado, modDado, resultadoDado });
@@ -7807,7 +7908,8 @@ async function calcularModEsquivarParticipante(alvoTipo, alvoRefId, ataqueArmaBr
     if (!snap.exists()) return 0;
     const npc = snap.val();
     if (npc.modoDetalhado && npc.atributosPrimarios) {
-        const secundarios = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride);
+        const modificadoresVantagensNpc = coletarModificadores({ vantagens: npc.vantagens });
+        const secundarios = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modificadoresVantagensNpc);
         const pvMax = secundarios.recursos.pv.valor;
         const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : pvMax;
         const temTolerancia = temPericiaTreinada(npc.periciasNpc, "Tolerância");
@@ -8067,7 +8169,7 @@ function checarConsumoDeAcao(permiteDireto = true, ehCQC = false) {
             if (ehCQC && Number(p.acoesExtraCQC) > 0) {
                 return { participanteId: meuId, direto: false, extraCQC: true };
             }
-            toast("Sem ações restantes neste turno.", "erro");
+            toast(p.iniciativaTravada ? "Tirou 1 na iniciativa — perdeu esse turno, sem ações." : "Sem ações restantes neste turno.", "erro");
             return null;
         }
         return { participanteId: meuId, direto: false, extraCQC: false };
@@ -8085,7 +8187,7 @@ function checarConsumoDeAcao(permiteDireto = true, ehCQC = false) {
             if (ehCQC && Number(p.acoesExtraCQC) > 0) {
                 return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: true };
             }
-            toast("Esse NPC não tem ações restantes neste turno.", "erro");
+            toast(p.iniciativaTravada ? "Esse NPC tirou 1 na iniciativa — perdeu esse turno, sem ações." : "Esse NPC não tem ações restantes neste turno.", "erro");
             return null;
         }
         return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: false };
@@ -8289,10 +8391,16 @@ function configurarAcoesPendentes() {
         if (isMestre) {
             el.badgePendentes.style.display = lista.length ? "inline-flex" : "none";
             el.badgePendentes.innerText = String(lista.length);
+            el.badgePendentesLateral.style.display = lista.length ? "flex" : "none";
+            el.badgePendentesLateral.innerText = String(lista.length);
         }
 
-        if (isMestre && el.mestreCorpo && el.mestreCorpo.dataset.acaoAberta === "pendentes") {
-            abrirAcaoMestre("pendentes");
+        // Ações Pendentes têm lugar próprio agora: ícone fixo na lateral
+        // esquerda que abre uma gaveta flutuante (ver configurarDrawerPendentes
+        // abaixo), em vez de uma aba dentro do Painel do Mestre. Só
+        // re-renderiza o conteúdo se a gaveta já estiver aberta.
+        if (isMestre && el.drawerPendentes && el.drawerPendentes.classList.contains("aberto")) {
+            montarPainelAcoesPendentes(el.drawerPendentesCorpo);
         }
         // O Gerenciador de Combate tem a caixa lateral de Ações Pendentes
         // embutida — precisa re-renderizar também quando a lista de
@@ -8447,15 +8555,48 @@ function configurarPainelMestre() {
         btn.addEventListener("click", () => abrirAcaoMestre(btn.dataset.acao));
     });
 
-    // Gerenciador de Combate — agora é um botão/modal próprio no topo,
-    // fora do Painel do Mestre (era só mais uma aba lá dentro antes).
+    // Gerenciador de Combate — painel encostado na direita, pra dar pra
+    // ver a ficha e o combate ao mesmo tempo (não é mais um modal de tela
+    // cheia). Fecha só pelo botão "Fechar" — clicar na ficha atrás não
+    // fecha, já que o objetivo é justamente poder usar as duas coisas
+    // juntas.
     el.btnAbrirCombate.addEventListener("click", () => {
         el.modalCombateMestre.classList.add("active");
         el.combateMestreCorpo.innerHTML = "";
         montarGerenciadorCombate(el.combateMestreCorpo);
     });
     el.combateMestreFechar.addEventListener("click", () => el.modalCombateMestre.classList.remove("active"));
-    el.modalCombateMestre.addEventListener("click", (e) => { if (e.target === el.modalCombateMestre) el.modalCombateMestre.classList.remove("active"); });
+}
+
+// Ícone fixo na lateral esquerda + gaveta flutuante (não é uma tela que
+// sobrepõe tudo, como o Painel do Mestre — fica encostada na borda,
+// desliza pra dentro/fora, e o resto da tela continua visível e usável
+// por trás). Reaproveita montarPainelAcoesPendentes (mesma renderização
+// usada na caixa lateral embutida do Gerenciador de Combate).
+function configurarDrawerPendentes() {
+    const abrir = () => {
+        el.btnPendentesLateral.classList.add("aberto");
+        el.drawerPendentes.classList.add("aberto");
+        montarPainelAcoesPendentes(el.drawerPendentesCorpo);
+    };
+    const fechar = () => {
+        el.btnPendentesLateral.classList.remove("aberto");
+        el.drawerPendentes.classList.remove("aberto");
+    };
+
+    el.btnPendentesLateral.addEventListener("click", () => {
+        if (el.drawerPendentes.classList.contains("aberto")) fechar(); else abrir();
+    });
+    el.drawerPendentesFechar.addEventListener("click", fechar);
+
+    // Clicar fora da gaveta (e fora do próprio ícone, que já tem seu
+    // próprio handler acima) fecha — sem precisar de um overlay escuro
+    // bloqueando o resto da tela.
+    document.addEventListener("click", (e) => {
+        if (!el.drawerPendentes.classList.contains("aberto")) return;
+        if (el.drawerPendentes.contains(e.target) || el.btnPendentesLateral.contains(e.target)) return;
+        fechar();
+    });
 }
 
 function nomeDeFicha(fichaId) {
@@ -8525,9 +8666,6 @@ function abrirAcaoMestre(acao) {
 
     } else if (acao === "dashboard") {
         montarDashboardFichas(corpo);
-
-    } else if (acao === "pendentes") {
-        montarPainelAcoesPendentes(corpo);
     }
 }
 
@@ -9397,9 +9535,12 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeSaude = badgeEstadoSaudeCombate(p);
             const badgeEnergia = badgeEstadoEnergiaCombate(p);
             const badgeStatus = badgeStatusAtivosCombate(p);
+            const badgeIniciativaTravada = p.iniciativaTravada
+                ? ` <span class="mod-pill negativo" title="Tirou 1 no d20 da iniciativa — perde esse turno inteiro (0 ações). Ao encerrar o turno, rerrola automaticamente e reordena a fila.">🎲1 Perdeu o turno</span>`
+                : "";
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeIniciativaTravada}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""}${p.bonusCobraKaiIniciativa ? ` + ${p.bonusCobraKaiIniciativa} Cobra Kai` : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>

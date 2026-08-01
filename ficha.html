@@ -15,6 +15,23 @@
     <p>Conectando ao sinal da rede...</p>
 </div>
 
+<!-- ===================== AÇÕES PENDENTES (ícone lateral + gaveta flutuante) ===================== -->
+<!-- Lugar próprio, fora do Painel do Mestre: não é uma tela que cobre
+     tudo, é uma caixa que desliza a partir da borda esquerda, com o
+     resto da ficha continuando visível e clicável por trás. -->
+<button id="btn-pendentes-lateral" class="pendentes-lateral-btn" type="button" style="display:none;" title="Ações Pendentes">
+    <span class="pendentes-lateral-icone">⚑</span>
+    <span id="badge-pendentes-lateral" class="badge-pendentes-lateral" style="display:none;"></span>
+</button>
+
+<aside id="drawer-pendentes" class="drawer-pendentes">
+    <div class="drawer-pendentes-topo">
+        <h4>Ações Pendentes</h4>
+        <button id="drawer-pendentes-fechar" class="btn-ghost" type="button">✕</button>
+    </div>
+    <div id="drawer-pendentes-corpo" class="drawer-pendentes-corpo"></div>
+</aside>
+
 <div id="app" class="app-shell" style="display:none;">
 
     <!-- ===================== TOPO ===================== -->
@@ -631,7 +648,6 @@
             <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
             <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
             <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
-            <button class="btn-red mestre-acao" data-acao="pendentes" type="button">Ações Pendentes</button>
             <label class="godmode-toggle">
                 <input type="checkbox" id="chk-godmode">
                 Godmode (ignora trava de edição)
@@ -648,16 +664,17 @@
     </div>
 </div>
 
-<!-- ===================== MODAL: GERENCIADOR DE COMBATE (standalone) ===================== -->
-<div class="modal-overlay" id="modal-combate-mestre">
-    <div class="modal-content modal-largo">
+<!-- ===================== GERENCIADOR DE COMBATE (painel lateral direito) ===================== -->
+<!-- Não é mais um modal de tela cheia: fica encostado na borda direita e
+     desliza pra dentro/fora, deixando a ficha visível (e usável) do lado
+     esquerdo ao mesmo tempo. -->
+<aside class="drawer-combate" id="modal-combate-mestre">
+    <div class="drawer-combate-topo">
         <h4>Gerenciador de Combate</h4>
-        <div id="combate-mestre-corpo"></div>
-        <div class="modal-btns">
-            <button id="combate-mestre-fechar" class="btn-ghost" type="button">Fechar</button>
-        </div>
+        <button id="combate-mestre-fechar" class="btn-ghost" type="button">Fechar</button>
     </div>
-</div>
+    <div id="combate-mestre-corpo" class="drawer-combate-corpo"></div>
+</aside>
 
 <!-- ===================== MODAL: AVISO CUSTO DE VIDA ===================== -->
 <div class="modal-overlay" id="modal-custo-vida">

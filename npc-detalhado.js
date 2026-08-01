@@ -80,11 +80,16 @@ export function estadoInicialNpcDetalhado() {
 }
 
 // Calcula os secundários/recursos de um NPC a partir dos atributos
-// primários (mesmas fórmulas do jogador, sem modificadores estruturados
-// — NPC não tem inventário com bônus, é tudo digitado à mão), e então
-// aplica qualquer override manual que o Mestre tenha definido por cima.
-export function calcularSecundariosNpc(atributosPrimarios, secundariosOverride) {
-    const derivados = calcularDerivados(atributosPrimarios || {}, []);
+// primários (mesmas fórmulas do jogador). `modificadoresExtras` é
+// opcional (default []) — usado pra somar os modificadores estruturados
+// das Vantagens do NPC (ver npc.vantagens, coletarModificadores em
+// regras.js) nos secundários/recursos de combate, exatamente como já
+// acontece pra ficha de jogador. Sem isso, uma Vantagem paranormal tipo
+// "+3 Agilidade" num NPC não mudava a iniciativa/esquiva dele em
+// combate. Por cima disso tudo, aplica qualquer override manual que o
+// Mestre tenha definido.
+export function calcularSecundariosNpc(atributosPrimarios, secundariosOverride, modificadoresExtras = []) {
+    const derivados = calcularDerivados(atributosPrimarios || {}, modificadoresExtras);
     const overrides = secundariosOverride || {};
 
     const secundarios = {};

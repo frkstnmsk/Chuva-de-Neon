@@ -316,7 +316,14 @@ export function normalizarNpcComoFicha(npcId, raw) {
         inventario: normalizarInventario(npc.inventario || {}),
         categoriasInventario: npc.categoriasInventario || {},
         gastosExtras: {},
-        vantagens: {},
+        // vantagens: já são gravadas certinho em npcs/{id}/vantagens pelo
+        // modal genérico de Vantagem/Desvantagem (ficha.js: caminhoBase()
+        // + a lista, sem remapeamento — só `pericias` precisa virar
+        // `periciasNpc`, ver caminhoLista). Faltava só ESTA leitura
+        // devolver o dado de verdade em vez de {} fixo — sem isso, uma
+        // Vantagem cadastrada num NPC nunca entrava em coletarModificadores
+        // nem aparecia na aba "Vantagens / Desvantagens" ao atuar como ele.
+        vantagens: npc.vantagens || {},
         desvantagens: {},
         // Os deltas de override entram como uma "especialização" oculta
         // — é a fonte de modificadores estruturados mais neutra que já

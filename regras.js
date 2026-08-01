@@ -4,6 +4,8 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
+import { buscarPericiaPorNome } from "./dados-manual.js";
+
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
     { key: "forca", label: "Força" },
@@ -150,6 +152,15 @@ export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
     return resultado;
 }
 
+// Mapa categoria de perícia (dados-manual.js) -> alvo de modificador
+// "genérico por categoria" (ver listaAlvosModificador acima). Existia
+// no seletor do modal de Vantagem/Desvantagem/Item desde sempre, mas
+// não estava ligado em lugar nenhum — uma Vantagem tipo "Instinto
+// Animal" (+2 em testes físicos) não fazia nada de verdade. Corrigido
+// aqui, no único lugar por onde toda rolagem de perícia passa.
+const ALVO_TESTES_POR_CATEGORIA = { fisica: "testes_fisicos", mental: "testes_mentais", social: "testes_sociais" };
+export { ALVO_TESTES_POR_CATEGORIA };
+
 // Total de rolagem de uma perícia: SOMENTE o nível da perícia + modificadores
 // estruturados que apontam pra ela. O manual trata perícia e atributo como
 // rolagens distintas — somar o atributo aqui duplicaria o bônus quando o
@@ -160,7 +171,14 @@ export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
 // nenhuma chamada existente que ainda não repassa esse valor.
 export function calcularTotalPericia(pericia, dadosPrimarios, modificadoresPlanos, penalidadeSaude = 0) {
     const nivel = Number(pericia.nivel) || 0;
-    const ajustes = modificadoresQueAfetam(`pericia:${pericia.nome}`, modificadoresPlanos);
+    const ajustesPericia = modificadoresQueAfetam(`pericia:${pericia.nome}`, modificadoresPlanos);
+    // Perícia "legado" (fora da lista fechada do manual — ver `legado`
+    // em normalizacao.js) não tem categoria conhecida, então não recebe
+    // bônus genérico de categoria — só o ajuste direto por nome acima.
+    const infoPericia = buscarPericiaPorNome(pericia.nome);
+    const alvoCategoria = infoPericia ? ALVO_TESTES_POR_CATEGORIA[infoPericia.categoria] : null;
+    const ajustesCategoria = alvoCategoria ? modificadoresQueAfetam(alvoCategoria, modificadoresPlanos) : [];
+    const ajustes = [...ajustesPericia, ...ajustesCategoria];
     const somaAjustes = ajustes.reduce((acc, m) => acc + m.valor, 0);
     const penalidade = Number(penalidadeSaude) || 0;
     return {

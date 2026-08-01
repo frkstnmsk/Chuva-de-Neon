@@ -541,6 +541,140 @@
 .pendente-card .pendente-botoes button {
     flex: 1;
 }
+
+/* ---------- Ações Pendentes: ícone lateral + gaveta flutuante ----------
+   Lugar próprio pro Mestre, fora do Painel do Mestre: uma aba fixa
+   grudada na borda esquerda da tela que, ao ser clicada, desliza uma
+   caixa flutuante com a fila de pendentes — sem escurecer nem bloquear
+   o resto da ficha por trás, ao contrário dos modais de tela cheia. */
+.pendentes-lateral-btn {
+    position: fixed;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    z-index: 5001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 58px;
+    border: 1px solid var(--neon-red);
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+    background: var(--panel-bg);
+    color: var(--neon-red);
+    font-size: 1.3rem;
+    cursor: pointer;
+    box-shadow: 0 0 18px rgba(239, 68, 68, 0.25);
+    transition: left 0.25s ease, background 0.15s ease;
+}
+.pendentes-lateral-btn:hover { background: rgba(239, 68, 68, 0.12); }
+.pendentes-lateral-btn.aberto { left: 320px; }
+.pendentes-lateral-icone { line-height: 1; }
+.badge-pendentes-lateral {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--neon-red);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.drawer-pendentes {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 320px;
+    max-width: 86vw;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    background: var(--panel-bg);
+    border-right: 1px solid var(--neon-red);
+    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
+    z-index: 5000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+}
+.drawer-pendentes.aberto { transform: translateX(0); }
+.drawer-pendentes-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: var(--border-style);
+}
+.drawer-pendentes-topo h4 {
+    color: var(--neon-red);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.95rem;
+}
+.drawer-pendentes-corpo {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+@media (max-width: 520px) {
+    .pendentes-lateral-btn.aberto { left: 86vw; }
+}
+
+/* ---------- Gerenciador de Combate: painel encostado na direita ----------
+   Mesma ideia da gaveta de Ações Pendentes, mas do lado oposto e mais
+   largo (o conteúdo interno já tem duas colunas — ver montarGerenciador
+   Combate em ficha.js). Sem backdrop: a ficha continua visível e clicável
+   à esquerda enquanto o painel está aberto. */
+.drawer-combate {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 640px;
+    max-width: 94vw;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--neon-red);
+    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
+    z-index: 5000;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+}
+.drawer-combate.active { transform: translateX(0); }
+.drawer-combate-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: var(--border-style);
+}
+.drawer-combate-topo h4 {
+    color: var(--neon-red);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.95rem;
+}
+.drawer-combate-corpo {
+    display: flex;
+    flex-direction: column;
+    overflow-y: visible;
+}
 .reducao-dano-grid {
     display: flex;
     flex-direction: column;
