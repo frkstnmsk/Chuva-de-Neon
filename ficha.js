@@ -479,7 +479,15 @@ function atualizarIcones() {
 // ---------------------------------------------------------------------
 // Inicialização
 // ---------------------------------------------------------------------
-init();
+// init() é chamado de forma adiada (setTimeout 0) de propósito: várias
+// consts usadas logo no começo da função (ex.: CHAVE_ABAS_MODO,
+// ABAS_OCULTAS_NPC) são declaradas mais abaixo no arquivo. Chamando
+// init() direto aqui, ele roda ANTES dessas linhas serem executadas
+// (o motor de JS ainda não chegou nelas), o que dá "Cannot access
+// before initialization". Adiar pro próximo tick garante que o arquivo
+// inteiro já terminou de rodar (todas as consts/functions do topo já
+// existem) antes do init() de fato começar.
+setTimeout(() => init(), 0);
 
 async function init() {
     el.userRole.innerText = isMestre ? "Mestre" : (sessao.nome || "Jogador").toUpperCase();
