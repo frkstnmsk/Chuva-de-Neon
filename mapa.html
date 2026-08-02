@@ -610,10 +610,22 @@
     }
 
     const BANCO_MAPAS = {
-        distrito_norte: { nome: "Distrito Norte", url: "https://imgur.com/v8p3VvI.jpeg", larguraKm: 1000 }
+        distrito_norte: { nome: "Distrito Norte", url: "https://imgur.com/v8p3VvI.jpeg", larguraKm: 1000 },
+        // Mapa exclusivo da mesa do Luke (login "lukethemaster") — ver
+        // MAPA_POR_MESA logo abaixo, que decide qual chave daqui usar
+        // conforme o MESA_ID da sessão. Mesma largura de escala do mapa
+        // padrão por enquanto (1000km) — ajustar aqui se o Mestre luke
+        // quiser recalibrar a régua de distância desse mapa depois.
+        mapa_luke: { nome: "Mapa do Luke", url: "https://i.imgur.com/zgXmDrj.png", larguraKm: 1000 }
     };
 
-    const mapaAtivoKey = "distrito_norte";
+    // Cada mesa pode ter seu próprio mapa (chave de BANCO_MAPAS acima).
+    // Quem não estiver listado aqui cai no padrão "distrito_norte".
+    const MAPA_POR_MESA = {
+        lukethemaster: "mapa_luke"
+    };
+
+    const mapaAtivoKey = MAPA_POR_MESA[MESA_ID] || "distrito_norte";
 
     const CATEGORIAS_POI = [
         "social", "compra/venda", "moradia", "corrida", "crime", 
