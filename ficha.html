@@ -285,6 +285,25 @@
                         <button id="financas-gastar-btn" class="btn-red" type="button">Solicitar gasto ao Mestre</button>
                     </div>
 
+                    <div id="financas-mover-bloco" style="display:none;">
+                        <div class="section-header">Mover dinheiro entre saldos <span class="hint-inline">pedido precisa de aprovação do Mestre</span></div>
+                        <div class="grid-form grid-4">
+                            <div class="campo">
+                                <label for="financas-mover-origem">De</label>
+                                <select id="financas-mover-origem"></select>
+                            </div>
+                            <div class="campo">
+                                <label for="financas-mover-destino">Para</label>
+                                <select id="financas-mover-destino"></select>
+                            </div>
+                            <div class="campo">
+                                <label for="financas-mover-valor">Valor</label>
+                                <input type="number" id="financas-mover-valor" min="0" value="0">
+                            </div>
+                        </div>
+                        <button id="financas-mover-btn" class="btn-red" type="button">Solicitar movimentação ao Mestre</button>
+                    </div>
+
                     <div class="section-header">Padrão de vida <span class="hint-inline">custo semanal cobrado todo Domingo</span></div>
                     <div class="grid-form grid-4">
                         <div class="campo largo">

@@ -1587,7 +1587,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "gastar_dinheiro" | "dar_item"
+// tipo: "remover_item" | "mover_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -1624,6 +1624,40 @@ export async function confirmarAcaoPendente(acao) {
             const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - Number(payload.valor || 0) });
+        }
+
+    } else if (tipo === "mover_dinheiro") {
+        // Move um valor de um saldo pra outro da MESMA ficha — soma da
+        // ficha não muda, só a distribuição entre saldos (ex.: tirar
+        // dinheiro da carteira digital e guardar no cofre do
+        // esconderijo). Mesma infra de leitura/escrita do gastar_dinheiro
+        // acima, aplicada duas vezes (subtrai na origem, soma no destino);
+        // cada lado pode ser um saldo normal (fichaAtual.saldos) ou a
+        // carteira digital de um item (ver ehIdSaldoDeItem/idItemDoSaldo).
+        const valor = Number(payload.valor || 0);
+        const origemId = payload.saldoOrigemId;
+        const destinoId = payload.saldoDestinoId;
+
+        if (ehIdSaldoDeItem(origemId)) {
+            const itemId = idItemDoSaldo(origemId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - valor });
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${origemId}/valor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${origemId}`)), { valor: atual - valor });
+        }
+
+        if (ehIdSaldoDeItem(destinoId)) {
+            const itemId = idItemDoSaldo(destinoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual + valor });
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${destinoId}/valor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${destinoId}`)), { valor: atual + valor });
         }
 
     } else if (tipo === "dar_item") {

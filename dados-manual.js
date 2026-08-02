@@ -1137,20 +1137,27 @@ export const MANOBRAS_COMBATE = [
 ];
 
 // ---------------------------------------------------------------------
-// "Arremessar" (manual pg. 20-21, dentro da descrição de CQC nível 3) é
+// "Arremessar" (manual pg. 23, dentro da descrição de CQC nível 3) é
 // uma manobra EXCLUSIVA de quem tem CQC nível 3+ — por isso não mora na
 // tabela MANOBRAS_COMBATE (que é a lista "aberta pra qualquer perícia"
 // do manual, pg. 49-50): só aparece na lista de manobras de ficha.js
 // quando o personagem tem o nível (ver renderizarManobrasCombate).
 // Guardada separada só pra reaproveitar o mesmo formato de exibição
 // (nome/alcance/perícias/dificuldade/efeito) das outras linhas.
+//
+// IMPORTANTE: isso NÃO é arremessar uma arma (faca/adaga) — é arremessar
+// o(s) PRÓPRIO ALVO. Texto do manual: "Para cada inimigo a mais até um
+// máximo de 3, você recebe modificador +1 para arremessá-los ou
+// derrubá-los. Arremessar causa Força C, teste de derrubar, porém com
+// dificuldade aumentada em +2." Não há menção a arma equipada — é
+// manobra desarmada (dano tratado como contusão, igual golpe desarmado).
 // ---------------------------------------------------------------------
 export const MANOBRA_ARREMESSAR_CQC = {
     nome: "Arremessar",
     alcance: "Longo",
     pericias: ["CQC"],
     dificuldade: "9 + agilidade do alvo (dificuldade -1 já embutida do nível 3)",
-    efeito: "Exclusiva de CQC nível 3+, com faca/adaga equipada. Arremessa em até 3 alvos (+1 no ataque por alvo extra); dano Força [escala C]; cada acerto testa Derrubar (dificuldade +2)"
+    efeito: "Exclusiva de CQC nível 3+. Arremessa o(s) alvo(s) (até 3, +1 no ataque por alvo extra); dano Força [escala C] (contusão); cada acerto testa Derrubar (dificuldade +2)"
 };
 
 // ---------------------------------------------------------------------

@@ -304,6 +304,11 @@ const el = {
     financasGastarOrigem: document.getElementById("financas-gastar-origem"),
     financasGastarValor: document.getElementById("financas-gastar-valor"),
     financasGastarBtn: document.getElementById("financas-gastar-btn"),
+    financasMoverBloco: document.getElementById("financas-mover-bloco"),
+    financasMoverOrigem: document.getElementById("financas-mover-origem"),
+    financasMoverDestino: document.getElementById("financas-mover-destino"),
+    financasMoverValor: document.getElementById("financas-mover-valor"),
+    financasMoverBtn: document.getElementById("financas-mover-btn"),
     financasGanhoFixo: document.getElementById("financas-ganho-fixo"),
     financasGanhoFixoSalvar: document.getElementById("financas-ganho-fixo-salvar"),
     resumoCarga: document.getElementById("resumo-carga"),
@@ -1397,9 +1402,11 @@ function renderizarFinancas() {
         ? "você pode editar os saldos diretamente acima"
         : "apenas o Mestre pode editar os saldos — use \"Gastar dinheiro\" abaixo pra remover";
     el.financasGastarBloco.style.display = isMestre ? "none" : "block";
+    el.financasMoverBloco.style.display = isMestre ? "none" : "block";
 
     renderizarSaldos();
     renderizarOpcoesOrigemGasto();
+    renderizarOpcoesMoverDinheiro();
 
     if (document.activeElement !== el.financasGanhoFixo) {
         el.financasGanhoFixo.value = fichaAtual.dados.ganhoFixo ?? 0;
@@ -1440,6 +1447,25 @@ function renderizarOpcoesOrigemGasto() {
         el.financasGastarOrigem.appendChild(opt);
     });
     if (saldos.some(s => s.id === escolhaAnterior)) el.financasGastarOrigem.value = escolhaAnterior;
+}
+
+// Popula os dois dropdowns ("De" / "Para") de "Mover dinheiro entre
+// saldos" com os saldos atuais da ficha, preservando a escolha atual de
+// cada um quando possível — mesma ideia de renderizarOpcoesOrigemGasto
+// acima, só que duplicada pros dois lados da movimentação.
+function renderizarOpcoesMoverDinheiro() {
+    const saldos = todosOsSaldos(fichaAtual);
+    [el.financasMoverOrigem, el.financasMoverDestino].forEach((select) => {
+        const escolhaAnterior = select.value;
+        select.innerHTML = "";
+        saldos.forEach((s) => {
+            const opt = document.createElement("option");
+            opt.value = s.id;
+            opt.innerText = s.nome;
+            select.appendChild(opt);
+        });
+        if (saldos.some(s => s.id === escolhaAnterior)) select.value = escolhaAnterior;
+    });
 }
 
 function configurarFinancas() {
@@ -1508,6 +1534,38 @@ function configurarFinancas() {
         });
         toast("Pedido de gasto enviado ao Mestre.");
         el.financasGastarValor.value = 0;
+    });
+
+    // Mover dinheiro entre saldos — igual "Gastar dinheiro", o jogador
+    // nunca move na hora, vira pedido pro Mestre aprovar (regra 4). Não
+    // altera a soma total da ficha, só a distribuição entre saldos (ex.:
+    // sacar da conta bancária e guardar na carteira). Funciona pra
+    // qualquer par de saldos, inclusive carteiras digitais de item (ver
+    // ehIdSaldoDeItem em dados-manual.js) e saldos customizados.
+    el.financasMoverBtn.addEventListener("click", async () => {
+        if (!fichaAtual || !fichaAtualId || isMestre) return;
+        const valor = Number(el.financasMoverValor.value) || 0;
+        if (valor <= 0) { toast("Informe um valor de movimentação maior que zero.", "erro"); return; }
+        const origemId = el.financasMoverOrigem.value;
+        const destinoId = el.financasMoverDestino.value;
+        if (!origemId || !destinoId) { toast("Escolha os saldos de origem e destino.", "erro"); return; }
+        if (origemId === destinoId) { toast("Escolha saldos diferentes pra origem e destino.", "erro"); return; }
+        const saldos = todosOsSaldos(fichaAtual);
+        const saldoOrigem = saldos.find(s => s.id === origemId);
+        const saldoDestino = saldos.find(s => s.id === destinoId);
+        if (!saldoOrigem || !saldoDestino) { toast("Escolha saldos válidos.", "erro"); return; }
+        const saldoAtualOrigem = Number(saldoOrigem.valor) || 0;
+        if (valor > saldoAtualOrigem) { toast("Valor maior que o saldo disponível na origem.", "erro"); return; }
+        const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+        await criarAcaoPendente({
+            tipo: "mover_dinheiro",
+            fichaId: fichaAtualId,
+            nomeJogador,
+            detalhe: `${nomeJogador} quer mover CN$ ${valor} de "${saldoOrigem.nome}" pra "${saldoDestino.nome}".`,
+            payload: { valor, saldoOrigemId: origemId, saldoDestinoId: destinoId }
+        });
+        toast("Pedido de movimentação enviado ao Mestre.");
+        el.financasMoverValor.value = 0;
     });
 }
 
@@ -2988,8 +3046,11 @@ async function resolverDispararAvancar(alvoId, itemPistola) {
 // participantes do combate (exceto o próprio atacante) — diferente do
 // resto das manobras, que sempre miram um único alvo, por isso usa uma
 // modal própria em vez do modal compartilhado (el.modalSelecionarAlvo).
+// Manobra desarmada: arremessa o(s) PRÓPRIO ALVO (manual pg. 23: "...
+// modificador +1 para arremessá-los ou derrubá-los"), não uma arma —
+// por isso não depende de item de inventário nenhum.
 // Devolve void — chama resolverArremessar direto ao confirmar.
-function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
+function abrirModalArremessar(nomePericia, modificadorBase) {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     const opcoes = Object.entries(participantes).filter(([, p]) =>
         !(p.tipo === "ficha" && p.refId === fichaAtualId) &&
@@ -3010,24 +3071,13 @@ function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
             <span>${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</span>
         </label>
     `).join("");
-    const tipoDanoExtraItem = (itemFaca.arma && itemFaca.arma.tipoDanoExtra) || null;
-    const seletorTipoDanoHtml = tipoDanoExtraItem ? `
-        <div class="modal-field" style="margin-top:6px;">
-            <label for="arremessar-tipo-dano-select">Tipo de dano</label>
-            <select id="arremessar-tipo-dano-select">
-                <option value="padrao">${escapeHtml(TIPOS_DANO.find(t => t.key === itemFaca.arma.tipoDano)?.label || itemFaca.arma.tipoDano)} (padrão)</option>
-                <option value="extra">${escapeHtml(TIPOS_DANO.find(t => t.key === tipoDanoExtraItem)?.label || tipoDanoExtraItem)}</option>
-            </select>
-        </div>
-    ` : "";
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Arremessar — CQC nível 3+</span>
             <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
         </div>
         <h4>Escolha até 3 alvos</h4>
-        <p class="hint">Arremessa "${escapeHtml(itemFaca.nome)}" em cada alvo marcado. Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
-        ${seletorTipoDanoHtml}
+        <p class="hint">Arremessa cada alvo marcado (dano Força [escala C], contusão). Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
         <div class="combate-lista">${linhas}</div>
         <button type="button" class="btn-lime" id="btn-confirmar-arremessar" style="margin-top:10px;width:100%;">Arremessar</button>
     `;
@@ -3042,10 +3092,8 @@ function abrirModalArremessar(nomePericia, modificadorBase, itemFaca) {
     modal.querySelector("#btn-confirmar-arremessar").addEventListener("click", async () => {
         const alvosIds = checks().filter(c => c.checked).map(c => c.dataset.arremessarAlvo);
         if (!alvosIds.length) { toast("Marque pelo menos 1 alvo.", "erro"); return; }
-        const tipoDanoSelect = document.getElementById("arremessar-tipo-dano-select");
-        const tipoDanoEscolhido = tipoDanoSelect ? tipoDanoSelect.value : "padrao";
         modal.remove();
-        await resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds, tipoDanoEscolhido);
+        await resolverArremessar(nomePericia, modificadorBase, alvosIds);
     });
 }
 
@@ -4540,20 +4588,21 @@ async function tentarLibertarImobilizado(participanteId) {
     }
 }
 
-// Arremessar (CQC nível 3+, manual pg. 20-21, dentro de "Esfaquear e
-// Arremessar"): joga a faca/adaga equipada em até 3 alvos numa única
-// ação. "Para cada inimigo a mais até um máximo de 3, você recebe
-// modificador +1 para arremessá-los ou derrubá-los" — interpretado como
-// bônus cumulativo aplicado à rolagem inteira (não escalonado alvo a
-// alvo), já que o manual não detalha outra forma de dividir isso.
-// Reaproveita a dificuldade -1 do "golpear com faca" (nível 3, já
-// embutida no "9 +" abaixo em vez de "10 +"), mas o dano aqui escala
-// com FORÇA [escala C] — diferente do golpe corpo a corpo, que escala
-// com Destreza [D] (ver bonusCQCFacaAdaga). Cada acerto ainda testa
-// Derrubar contra aquele alvo específico, com dificuldade +2 (mais
-// difícil que o Derrubar corpo a corpo comum), usando a mesma
-// infraestrutura de definirDerrubado/resolverDerrubar.
-async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosIds, tipoDanoEscolhido = "padrao") {
+// Arremessar (CQC nível 3+, manual pg. 23, dentro de "Esfaquear e
+// Arremessar"): arremessa o(s) PRÓPRIO ALVO (não uma arma) em até 3
+// alvos numa única ação. "Para cada inimigo a mais até um máximo de 3,
+// você recebe modificador +1 para arremessá-los ou derrubá-los" —
+// interpretado como bônus cumulativo aplicado à rolagem inteira (não
+// escalonado alvo a alvo), já que o manual não detalha outra forma de
+// dividir isso. Reaproveita a dificuldade -1 do nível 3 (já embutida no
+// "9 +" abaixo em vez de "10 +"). Dano escala com FORÇA [escala C]
+// (manual: "Arremessar causa Força C") e é tratado como contusão, igual
+// qualquer golpe desarmado — não há arma nem tipo de dano extra
+// envolvido. Cada acerto ainda testa Derrubar contra aquele alvo
+// específico, com dificuldade +2 (mais difícil que o Derrubar corpo a
+// corpo comum), usando a mesma infraestrutura de
+// definirDerrubado/resolverDerrubar.
+async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
     const consumo = checarConsumoDeAcao(true, true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
@@ -4564,13 +4613,7 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
     const modificadorAtaque = modificadorBase + bonusPorAlvoExtra;
     const forcaAtacante = Number(fichaAtual.dados.forca) || 0;
     const danoArremesso = calcularDanoTotalArma({ danoBase: 0, escalaMult: 2 }, forcaAtacante); // escala C = 2x Força
-    // Dano extra (arma branca — ver "Tipo de dano extra" no modal de
-    // item, e o seletor equivalente na modal de Arremessar): mesma ideia
-    // do ataque comum (ver resolverAtaque) — a escolha só troca o TIPO,
-    // não o valor do dano.
-    const tipoDanoKey = (tipoDanoEscolhido === "extra" && itemFaca.arma && itemFaca.arma.tipoDanoExtra)
-        ? itemFaca.arma.tipoDanoExtra
-        : ((itemFaca.arma && itemFaca.arma.tipoDano) || "corte");
+    const tipoDanoKey = "contusao"; // arremessa o alvo, não uma arma — dano de impacto
 
     if (participanteIdParaGastarAcao) {
         if (consumo.direto) {
@@ -4580,7 +4623,7 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
                 tipo: "gastar_acao_combate",
                 fichaId: fichaAtualId,
                 nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} arremessou ${itemFaca.nome} em ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+                detalhe: `${nomeAtacante} arremessou ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
                 payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
             });
             toast("Gasto de ação enviado pro Mestre aprovar.");
@@ -4660,7 +4703,7 @@ async function resolverArremessar(nomePericia, modificadorBase, itemFaca, alvosI
     }
 
     const notaBonus = bonusPorAlvoExtra ? ` (base ${modificadorBase >= 0 ? "+" : ""}${modificadorBase} +${bonusPorAlvoExtra} por alvo extra)` : "";
-    const detalhe = `${nomeAtacante} ARREMESSOU ${itemFaca.nome} (CQC nível 3+) em ${alvosIds.length} alvo(s) — modificador ${modificadorAtaque >= 0 ? "+" : ""}${modificadorAtaque}${notaBonus}:\n${linhasLog.map(l => `• ${l}`).join("\n")}`;
+    const detalhe = `${nomeAtacante} ARREMESSOU (CQC nível 3+) ${alvosIds.length} alvo(s) — modificador ${modificadorAtaque >= 0 ? "+" : ""}${modificadorAtaque}${notaBonus}:\n${linhasLog.map(l => `• ${l}`).join("\n")}`;
     await registrarRolagem({ quem: nomeAtacante, modificador: modificadorAtaque, resultado: `${alvosIds.length} alvo(s)`, detalhe });
     toast(detalhe);
 }
@@ -5296,22 +5339,19 @@ function renderizarManobrasCombate() {
                 }
 
                 // Arremessar (CQC nível 3+, exclusiva — ver
-                // MANOBRA_ARREMESSAR_CQC em dados-manual.js): precisa de
-                // uma faca/adaga EQUIPADA (ver itemPodeEquipar em
-                // inventario.js) e escolhe até 3 alvos numa modal própria
-                // (resolve tudo em resolverArremessar).
+                // MANOBRA_ARREMESSAR_CQC em dados-manual.js): manobra
+                // DESARMADA, arremessa o(s) PRÓPRIO ALVO (não uma arma —
+                // manual pg. 23 não menciona faca/adaga aqui, isso é o
+                // "Esfaquear" do mesmo nível, uma manobra separada) e
+                // escolhe até 3 alvos numa modal própria (resolve tudo em
+                // resolverArremessar).
                 if (m.nome === "Arremessar") {
                     if (!combateTemParticipantes()) {
                         toast("Arremessar precisa de um combate com participantes cadastrado.", "erro");
                         return;
                     }
-                    const itemFaca = Object.values(fichaAtual.inventario || {}).find(it => ehFacaOuAdaga(it.nome) && it.categoria === "levando" && it.equipada);
-                    if (!itemFaca) {
-                        toast("Equipe uma faca ou adaga (Levando consigo + Equipada) pra poder arremessar.", "erro");
-                        return;
-                    }
                     const modificador = calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
-                    abrirModalArremessar(nomePericia, modificador, itemFaca);
+                    abrirModalArremessar(nomePericia, modificador);
                     return;
                 }
 
@@ -6050,6 +6090,7 @@ function renderizarReceitas() {
                             </div>
                             <div class="entity-badges">
                                 ${r ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(p.nome)}" data-modificador="${calcPericia.total}" title="Rolar ${p.nome} (${calcPericia.total >= 0 ? "+" : ""}${calcPericia.total}) pra criar">🎲 Criar</button>` : ""}
+                                ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                             </div>
                             <span class="hint-inline">Gratuita — travada${isMestre ? "" : " (só o Mestre pode trocar)"}</span>
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${livre.id}">Remover</button>` : ""}
@@ -6098,6 +6139,7 @@ function renderizarReceitas() {
                             <div class="entity-main">
                                 <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}</span>
                             </div>
+                            ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
                         </li>`;
                    }).join("")}</ul>`
@@ -6118,6 +6160,7 @@ function renderizarReceitas() {
                             </div>
                             <div class="entity-badges">
                                 ${podeCriar ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(p.nome)}" data-modificador="${calcPericia.total}" title="Rolar ${p.nome} (${calcPericia.total >= 0 ? "+" : ""}${calcPericia.total}) pra criar">🎲 Criar</button>` : ""}
+                                ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                             </div>
                             <span class="hint-inline">adicionada por ${escapeHtml(x.adicionadoPorNome || "—")}</span>
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
@@ -6194,6 +6237,20 @@ function renderizarReceitas() {
     // Mestre: remover uma receita conhecida (gratuita ou extra).
     el.receitasLista.querySelectorAll(".receita-remover").forEach(btn => {
         btn.addEventListener("click", () => removerReceitaConhecida(btn.dataset.id));
+    });
+
+    // Editar a receita já conhecida direto no Banco Global (mesma modal
+    // usada pra criar — ver abrirModalCriarReceita — e disponível tanto
+    // pro jogador quanto pro Mestre, já que o Banco Global é
+    // compartilhado entre todo mundo, igual o de itens). Como a edição
+    // é no registro global, ela afeta qualquer outra ficha/mesa que use
+    // essa mesma receita.
+    el.receitasLista.querySelectorAll(".receita-editar").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const receita = receitasGlobaisCache.find(g => g.id === btn.dataset.receitaEditarId);
+            if (!receita) { toast("Receita não encontrada no Banco Global.", "erro"); return; }
+            abrirModalCriarReceita(receita);
+        });
     });
 
     // Criar o item da receita: primeiro escolhe quais materiais do
