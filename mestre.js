@@ -11,7 +11,7 @@ import { caminhoMesa } from "./mesa.js";
 import {
     rolarD20, rolarDado, calcularDerivados, coletarModificadores, somaModificadoresPara,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
-    calcularEstadoEnergia, dificuldadeSangramento
+    calcularEstadoEnergia, dificuldadeSangramento, dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO
 } from "./regras.js";
 import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calendario.js";
 import { avancarUmDiaTreinamento } from "./treinamento.js";
@@ -584,7 +584,8 @@ export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
         dispararAvancarUsado: false,
         acoesExtraCQCMax: 0,
         acoesExtraCQC: 0,
-        esquivasDisponiveis: 0
+        esquivasDisponiveis: 0,
+        acoesGuardadas: 0
     };
 
     await set(novaRef, participanteCompleto);
@@ -922,7 +923,12 @@ export async function iniciarIniciativaCombate(bonusIniciativaCQC = {}, disparar
             // mas pode acumular mais se o personagem usar a manobra
             // "Esquivar" no próprio turno (ver adicionarEsquivaExtra),
             // permitindo esquivar de mais de um golpe na mesma rodada.
-            esquivasDisponiveis: 0
+            esquivasDisponiveis: 0,
+            // Ações guardadas (ver avancarTurnoCombate/confirmarAcaoPendente,
+            // tipo "guardar_acao_combate"): começa em 0 — só ganha
+            // conteúdo quando o Mestre aprova guardar ação(ões) sobrando
+            // do fim de um turno.
+            acoesGuardadas: 0
         };
     }
 
@@ -976,6 +982,32 @@ export async function avancarTurnoCombate() {
     if (participantes[turnoAtual]) {
         const esquivasAtuais = Number(participantes[turnoAtual].esquivasDisponiveis) || 0;
         atualizacoes[`participantes/${turnoAtual}/esquivasDisponiveis`] = esquivasAtuais + 1;
+    }
+
+    // Guardar ação: se quem está encerrando o turno ainda tem ação(ões)
+    // do turno sobrando (não gastou tudo), isso vira uma pergunta pro
+    // Mestre na fila de Ações Pendentes ("guardar_acao_combate" — ver
+    // confirmarAcaoPendente abaixo) em vez de simplesmente perder as
+    // ações. Se o Mestre aprovar, elas viram "ações guardadas"
+    // (acoesGuardadas) que o personagem pode gastar depois, MESMO fora
+    // do seu próprio turno — ver consumirAcaoCombate, que recorre a
+    // acoesGuardadas quando `acoes` já está zerado, e
+    // checarConsumoDeAcao em ficha.js, que libera a rolagem fora do
+    // turno quando há acoesGuardadas disponíveis. Se o Mestre rejeitar,
+    // nada muda — as ações que sobraram simplesmente se perdem, igual
+    // já acontecia antes dessa funcionalidade existir.
+    if (participantes[turnoAtual]) {
+        const acoesSobrando = Number(participantes[turnoAtual].acoes) || 0;
+        if (acoesSobrando > 0) {
+            const nomeQuemEncerrou = participantes[turnoAtual].nome || turnoAtual;
+            await criarAcaoPendente({
+                tipo: "guardar_acao_combate",
+                fichaId: turnoAtual,
+                nomeJogador: nomeQuemEncerrou,
+                detalhe: `${nomeQuemEncerrou} encerrou o turno com ${acoesSobrando} ação(ões) sobrando. Guardar para usar fora do turno?`,
+                payload: { participanteId: turnoAtual, quantidade: acoesSobrando }
+            });
+        }
     }
 
     if (virouRodada) {
@@ -1095,9 +1127,26 @@ export async function consumirAcaoCombate(participanteId) {
     const caminho = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoes`));
     const snap = await get(caminho);
     const atual = snap.exists() ? Number(snap.val()) : 0;
-    const novo = Math.max(0, atual - 1);
-    await set(caminho, novo);
-    return novo;
+
+    if (atual > 0) {
+        const novo = atual - 1;
+        await set(caminho, novo);
+        return novo;
+    }
+
+    // Sem ação do turno atual sobrando: tenta gastar de uma ação
+    // guardada (ver "guardar_acao_combate" em avancarTurnoCombate/
+    // confirmarAcaoPendente) — é isso que permite ao personagem agir
+    // fora do seu próprio turno, desde que o Mestre já tenha aprovado
+    // guardar a ação antes. Se também não houver ação guardada, não faz
+    // nada (mesmo comportamento de antes: nunca fica negativo).
+    const caminhoGuardadas = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoesGuardadas`));
+    const snapGuardadas = await get(caminhoGuardadas);
+    const guardadasAtual = snapGuardadas.exists() ? Number(snapGuardadas.val()) : 0;
+    if (guardadasAtual > 0) {
+        await set(caminhoGuardadas, guardadasAtual - 1);
+    }
+    return 0;
 }
 
 // Consome 1 ação EXTRA de CQC (nível 5, "Agente Impossível" — manual:
@@ -1449,6 +1498,15 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // define como "sem efeitos extras") e causou dano de verdade. Tiro
     // de arma de fogo nunca passa por aqui (ver comentário abaixo), só
     // golpes corpo a corpo/arma branca que atravessaram a reação.
+    //
+    // Teste de Desmaio (regra padrão da mesa, não automatizado — o
+    // sistema só anota o aviso pro Mestre resolver): pra ACORDAR de um
+    // desmaio, quando não houver outra regra mais específica pro caso
+    // (ex.: Desacordado do Jiu Jitsu nível 3, que o manual já diz que
+    // NÃO tem teste pra se libertar sozinho — ver definirDesacordado
+    // acima), o padrão é um teste de Constituição, dificuldade 15. O
+    // agravante de +4 do golpe contundente na Cabeça soma em cima dessa
+    // base (dificuldade 19 no total).
     let notaSangramento = "";
     let notaEfeitoLocal = "";
     if (danoParaAplicar > 0 && r.localMiraKey && r.localMiraKey !== "padrao") {
@@ -1460,7 +1518,7 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${r.localMiraLabel || "local específico"}: aplica-se a regra de Amputação (resolva com o Mestre).`;
         }
         if (ehDanoContundente(r.tipoDanoKey) && r.localMiraKey === "cabeca") {
-            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo (resolva com o Mestre).`;
+            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;
         }
     }
 
@@ -1689,6 +1747,24 @@ export async function confirmarAcaoPendente(acao) {
         // numa ação nova) comece sem penalidade acumulada.
         if (payload.ehArmaFogo && payload.idDisparo && payload.itemIdDisparo) {
             await resetarRecuoArma(payload.idDisparo, payload.itemIdDisparo);
+        }
+
+    } else if (tipo === "guardar_acao_combate") {
+        // Confirma o pedido criado em avancarTurnoCombate: converte as
+        // ações do turno que sobraram em "ações guardadas"
+        // (acoesGuardadas), somando ao que já estiver guardado (dá pra
+        // acumular de rodada em rodada se o Mestre for aprovando).
+        // Zera `acoes` porque elas já viraram guardadas — sem isso o
+        // contador normal do turno passado ficaria contando pra sempre
+        // além do que a rodada atual permite.
+        const participanteId = payload.participanteId;
+        const quantidade = Number(payload.quantidade) || 0;
+        if (participanteId && quantidade > 0) {
+            const caminhoGuardadas = ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoesGuardadas`));
+            const snapGuardadas = await get(caminhoGuardadas);
+            const guardadasAtual = snapGuardadas.exists() ? Number(snapGuardadas.val()) : 0;
+            await set(caminhoGuardadas, guardadasAtual + quantidade);
+            await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/acoes`)), 0);
         }
     }
 

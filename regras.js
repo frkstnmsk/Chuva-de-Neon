@@ -128,7 +128,14 @@ export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
     const resultado = { secundarios: {}, recursos: {} };
 
     for (const sec of ATRIBUTOS_SECUNDARIOS) {
-        const base = sec.formula(d);
+        // Fórmulas como Velocidade/Agilidade/Percepção somam dois
+        // atributos primários e dividem por 2 — com soma ímpar isso dá
+        // fração (ex.: Inteligência 2 + Sabedoria 1 = 3 / 2 = 1.5).
+        // Manual: arredonda pra baixo, não pro inteiro mais próximo.
+        // Math.floor não afeta as fórmulas que já somam sem dividir
+        // (Massa Corpórea, Força de Vontade), então é seguro aplicar
+        // pra todas aqui de uma vez.
+        const base = Math.floor(sec.formula(d));
         const ajustes = modificadoresQueAfetam(`secundario:${sec.key}`, modificadoresPlanos);
         const somaAjustes = ajustes.reduce((acc, m) => acc + m.valor, 0);
         resultado.secundarios[sec.key] = {
@@ -302,7 +309,7 @@ export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ig
 export function aplicarEstadoSaudeVelocidade(infoVelocidade, estadoSaude) {
     if (!estadoSaude || !estadoSaude.estado) return infoVelocidade;
     const antes = infoVelocidade.total;
-    const depois = estadoSaude.metadeVelocidade ? antes / 2 : antes + estadoSaude.penalidadeVelocidade;
+    const depois = estadoSaude.metadeVelocidade ? Math.floor(antes / 2) : antes + estadoSaude.penalidadeVelocidade;
     return {
         ...infoVelocidade,
         ajustes: [...infoVelocidade.ajustes, { valor: depois - antes, origem: `Estado de saúde: ${estadoSaude.label}` }],
@@ -466,6 +473,22 @@ export function rolarTesteReanimacao() {
 // ---------------------------------------------------------------------
 export function dificuldadeSangramento(nivelArma, difExtra = 0) {
     return 10 + (Number(nivelArma) || 0) + (Number(difExtra) || 0);
+}
+
+// ---------------------------------------------------------------------
+// Teste de Desmaio (regra padrão da mesa, não automatizada — o sistema
+// só avisa o Mestre pra resolver manualmente): PRA ACORDAR de um
+// desmaio, quando não houver nenhuma regra mais específica cobrindo o
+// caso (ex.: Desacordado do Jiu Jitsu nível 3 é inconsciência mas SEM
+// teste pra se libertar sozinho — regra específica do manual, não usa
+// isto aqui), o padrão é um teste de Constituição, dificuldade 15.
+// Agravantes (como o +4 do golpe contundente na Cabeça — ver
+// LOCAIS_MIRA em dados-manual.js) somam em cima dessa base.
+// ---------------------------------------------------------------------
+export const DIFICULDADE_BASE_DESMAIO = 15;
+
+export function dificuldadeDesmaio(difExtra = 0) {
+    return DIFICULDADE_BASE_DESMAIO + (Number(difExtra) || 0);
 }
 
 // ---------------------------------------------------------------------

@@ -13,7 +13,8 @@ import {
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
     calcularDanoDesarmado, calcularDificuldadeArmaFogo, MAX_ATRIBUTO_JOGO,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
-    calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO
+    calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
+    dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -1646,7 +1647,7 @@ async function alternarEquipadaItem(id, novoValor, nomeItem) {
 
     let consumo = { participanteId: null, direto: false, extraCQC: false };
     if (novoValor) {
-        consumo = checarConsumoDeAcao(true, false);
+        consumo = checarConsumoDeAcao(false);
         if (!consumo) return;
     }
 
@@ -1662,20 +1663,15 @@ async function alternarEquipadaItem(id, novoValor, nomeItem) {
         return;
     }
 
-    if (consumo.direto) {
-        await consumirAcaoCombate(consumo.participanteId);
-        toast("Item equipado — 1 ação consumida.");
-    } else {
-        const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
-        await criarAcaoPendente({
-            tipo: "gastar_acao_combate",
-            fichaId: fichaAtualId,
-            nomeJogador,
-            detalhe: `${nomeJogador} equipou ${nomeItem || "um item"} e quer gastar 1 ação do turno.`,
-            payload: { participanteId: consumo.participanteId, extraCQC: false, ehArmaFogo: false }
-        });
-        toast("Item equipado — gasto de ação enviado pro Mestre aprovar.");
-    }
+    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+    await criarAcaoPendente({
+        tipo: "gastar_acao_combate",
+        fichaId: fichaAtualId,
+        nomeJogador,
+        detalhe: `${nomeJogador} equipou ${nomeItem || "um item"} e quer gastar 1 ação do turno.`,
+        payload: { participanteId: consumo.participanteId, extraCQC: false, ehArmaFogo: false }
+    });
+    toast("Item equipado — gasto de ação enviado pro Mestre aprovar.");
 }
 
 function escapeHtml(str) {
@@ -2130,7 +2126,7 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
 // — SEM o estado de saúde embutido), penalidades separadas (estado de
 // saúde/recuo/precisão/movimento) e o resultado final. Falha crítica
 // (nat 1 OU resultado final <= 1) mostra "CRÍTICO NEGATIVO" no lugar do
-// número; acerto crítico (resultado final exatamente 20 — dobra o dano,
+// número; acerto crítico (resultado final 20 ou mais — dobra o dano,
 // ver resolverAtaque) mostra "CRÍTICO POSITIVO" — só destaques visuais;
 // não mudam se o ataque acerta ou erra, que continua comparando
 // resultadoAtaque com a dificuldade.
@@ -2222,21 +2218,21 @@ async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
     // fora do fluxo de ataque completo, e nenhuma dessas gasta ação
     // automaticamente (só golpe corpo a corpo/arma branca em
     // resolverAtaque faz isso — ver checarConsumoDeAcao).
-    const consumo = checarConsumoDeAcao(false, ehCQC);
+    const consumo = checarConsumoDeAcao(ehCQC);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
     const bruto = rolarD20();
     const resultado = bruto + Number(modificador || 0);
-    // Acerto Crítico: o RESULTADO FINAL (d20 + modificador) precisa ser
-    // exatamente 20 — d20 natural 20 sozinho NÃO garante crítico se o
-    // modificador derrubar o resultado (ex.: d20=20, modificador -1,
-    // resultado final 19 → não é crítico). Falha Crítica (d20 natural 1
-    // ou resultado final <= 1) — aqui é só sinalização pro Log de Dados
-    // e resolução manual do Mestre; não há "dano" pra dobrar numa
-    // rolagem genérica de perícia/atributo (isso é exclusivo de
-    // resolverAtaque, que também aplica a dobra de dano de verdade).
-    const criticoPositivo = resultado === 20;
+    // Acerto Crítico: o RESULTADO FINAL (d20 + modificador) precisa
+    // bater ou passar de 20 — d20 natural 20 sozinho NÃO garante crítico
+    // se o modificador derrubar o resultado abaixo de 20 (ex.: d20=20,
+    // modificador -1, resultado final 19 → não é crítico). Falha Crítica
+    // (d20 natural 1 ou resultado final <= 1) — aqui é só sinalização
+    // pro Log de Dados e resolução manual do Mestre; não há "dano" pra
+    // dobrar numa rolagem genérica de perícia/atributo (isso é exclusivo
+    // de resolverAtaque, que também aplica a dobra de dano de verdade).
+    const criticoPositivo = resultado >= 20;
     // Falha Crítica: d20 natural 1, OU resultado final <= 1 — este
     // segundo caso só é matematicamente possível com modificador
     // negativo (ex: d20=2, modificador -1, resultado final = 1),
@@ -2254,18 +2250,14 @@ async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
     toast(`${nomeAlvo}: ${resultado} (d20: ${bruto} ${modificador >= 0 ? "+" : ""}${modificador})${notaCritico}`, criticoNegativo ? "critico-falha" : (criticoPositivo ? "critico-acerto" : "ok"));
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: quem,
-                detalhe: `${quem} rolou "${nomeAlvo}" (resultado ${resultado}) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: quem,
+            detalhe: `${quem} rolou "${nomeAlvo}" (resultado ${resultado}) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 }
 
@@ -2301,18 +2293,14 @@ async function executarManobraEsquivar(modificadoresPlanos) {
     toast(`Esquivar (Agilidade): ${resultado} (d20: ${bruto} ${modAgilidade >= 0 ? "+" : ""}${modAgilidade})`);
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: quem,
-                detalhe: `${quem} usou "Esquivar" no próprio turno (resultado ${resultado}) e quer gastar 1 ação do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: quem,
+            detalhe: `${quem} usou "Esquivar" no próprio turno (resultado ${resultado}) e quer gastar 1 ação do turno.`,
+            payload: { participanteId: participanteIdParaGastarAcao }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
 
         // Usada no próprio turno (é isso que participanteIdParaGastarAcao
         // != null garante) — guarda uma esquiva extra pro personagem.
@@ -3399,7 +3387,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         consumo = { participanteId: null, direto: false };
         participanteIdParaGastarAcao = null;
     } else {
-        consumo = checarConsumoDeAcao(!ehFogo, nomePericia === "CQC");
+        consumo = checarConsumoDeAcao(nomePericia === "CQC");
         if (!consumo) return;
         participanteIdParaGastarAcao = consumo.participanteId;
     }
@@ -3512,17 +3500,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
     // Acerto Crítico (manual): o RESULTADO FINAL (d20 + modificadores)
-    // precisa ser exatamente 20 — d20 natural 20 sozinho NÃO garante
-    // crítico se os modificadores derrubarem o resultado (ex.: d20=20,
-    // modificador -1, resultado final 19 → acerto normal, não crítico).
-    // Dobra o dano do ataque (aplicado mais abaixo, sobre danoTotal,
-    // antes de reduções de armadura/agarrado/alcance). Falha Crítica:
-    // d20 natural 1, OU resultado final <= 1 (possível com modificador
-    // negativo, ex: d20=2, modificador -1, resultado final = 1) —
-    // sempre sinalizada no Log como "Fogo Amigo/Desastre" pra resolução
-    // rápida do Mestre, independente do resultado final ter batido a
-    // dificuldade ou não.
-    let criticoPositivo = resultadoAtaque === 20;
+    // precisa bater ou passar de 20 — d20 natural 20 sozinho NÃO garante
+    // crítico se os modificadores derrubarem o resultado abaixo de 20
+    // (ex.: d20=20, modificador -1, resultado final 19 → acerto normal,
+    // não crítico). Dobra o dano do ataque (aplicado mais abaixo, sobre
+    // danoTotal, antes de reduções de armadura/agarrado/alcance). Falha
+    // Crítica: d20 natural 1, OU resultado final <= 1 (possível com
+    // modificador negativo, ex: d20=2, modificador -1, resultado final =
+    // 1) — sempre sinalizada no Log como "Fogo Amigo/Desastre" pra
+    // resolução rápida do Mestre, independente do resultado final ter
+    // batido a dificuldade ou não.
+    let criticoPositivo = resultadoAtaque >= 20;
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
     let detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
 
@@ -3654,25 +3642,20 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // disparo começa uma nova sequência de disparos (nova ação), sem a
     // penalidade acumulada da ação anterior.
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-            if (ehFogo) await resetarRecuoArma(idDisparoAtual, chaveDisparoAtual);
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: {
-                    participanteId: participanteIdParaGastarAcao,
-                    extraCQC: consumo.extraCQC,
-                    ehArmaFogo: ehFogo,
-                    idDisparo: idDisparoAtual,
-                    itemIdDisparo: chaveDisparoAtual
-                }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: {
+                participanteId: participanteIdParaGastarAcao,
+                extraCQC: consumo.extraCQC,
+                ehArmaFogo: ehFogo,
+                idDisparo: idDisparoAtual,
+                itemIdDisparo: chaveDisparoAtual
+            }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!acertou) {
@@ -3911,7 +3894,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${localMira.label}: aplica-se a regra de Amputação (resolva com o Mestre).`;
         }
         if (ehDanoContundente(tipoDanoKey) && localMira.key === "cabeca") {
-            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo (resolva com o Mestre).`;
+            notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;
         }
     }
 
@@ -3942,7 +3925,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 // vítima ficam bloqueados e o dano dela sai pela metade, até alguém
 // soltar o agarrão (botão "Soltar" na lista de combate).
 async function resolverAgarrar(nomePericia, modificador, participante) {
-    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
+    const consumo = checarConsumoDeAcao(nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -3980,18 +3963,14 @@ async function resolverAgarrar(nomePericia, modificador, participante) {
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Agarrar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Agarrar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4018,7 +3997,7 @@ async function resolverAgarrar(nomePericia, modificador, participante) {
 // alvo não tiver nenhuma arma equipada, o teste ainda pode ser vencido,
 // mas não tem o que desarmar — o Log deixa isso claro.
 async function resolverDesarmar(nomePericia, modificador, participante) {
-    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
+    const consumo = checarConsumoDeAcao(nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4051,18 +4030,14 @@ async function resolverDesarmar(nomePericia, modificador, participante) {
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Desarmar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Desarmar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4119,7 +4094,7 @@ async function resolverDesarmar(nomePericia, modificador, participante) {
 // do bônus têm que ser usadas juntas na mesma ação, então ficam
 // desacopladas — cabe ao Mestre decidir quando cada uma se aplica.
 async function resolverDerrubar(nomePericia, modificador, participante, usarBonusCQCDano = false) {
-    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
+    const consumo = checarConsumoDeAcao(nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4154,18 +4129,14 @@ async function resolverDerrubar(nomePericia, modificador, participante, usarBonu
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Derrubar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Derrubar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4244,10 +4215,7 @@ async function tentarLevantarDerrubado(participanteId) {
         return;
     }
     await levantarDerrubado(participanteId);
-    if (isMestre) {
-        await consumirAcaoCombate(participanteId);
-        toast("Levantou — 1 ação consumida.");
-    } else {
+    {
         const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
         await criarAcaoPendente({
             tipo: "gastar_acao_combate",
@@ -4274,7 +4242,7 @@ async function tentarLevantarDerrubado(participanteId) {
 // uma ação separada e posterior ao Derrubar, usamos o teste que de fato
 // prende o alvo agora.
 async function resolverImobilizar(nomePericia, modificador, participante) {
-    const consumo = checarConsumoDeAcao(true, true); // Imobilizar só rola CQC (MANOBRA_IMOBILIZAR_CQC)
+    const consumo = checarConsumoDeAcao(true); // Imobilizar só rola CQC (MANOBRA_IMOBILIZAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4306,18 +4274,14 @@ async function resolverImobilizar(nomePericia, modificador, participante) {
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Imobilizar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Imobilizar ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4399,7 +4363,7 @@ async function alvoTemJiuJitsuTreinado(alvoTipo, alvoRefId) {
 // calcularMelhorForcaOuJiuJitsuAlvo acima) e, com sucesso e Jiu Jitsu
 // nível 3+, a opção de Desacordar o alvo em vez de só imobilizar.
 async function resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, participante, desacordar) {
-    const consumo = checarConsumoDeAcao(true, false);
+    const consumo = checarConsumoDeAcao(false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4432,18 +4396,14 @@ async function resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, partic
     const desacordarValido = desacordar && Number(nivelJJ) >= 3;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Imobilizar (Jiu Jitsu) ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Imobilizar (Jiu Jitsu) ${nomeAlvo} e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4479,7 +4439,7 @@ async function resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, partic
 // penalidade — o Mestre decide como aplicar "-X em qualquer ação
 // física" nos testes seguintes da vítima.
 async function resolverQuebrarOssosJiuJitsu(nivelJJ, participante, membroInferior) {
-    const consumo = checarConsumoDeAcao(true, false);
+    const consumo = checarConsumoDeAcao(false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4501,18 +4461,14 @@ async function resolverQuebrarOssosJiuJitsu(nivelJJ, participante, membroInferio
     }
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} usou Quebrar ossos em ${nomeAlvo} e quer gastar 1 ação do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} usou Quebrar ossos em ${nomeAlvo} e quer gastar 1 ação do turno.`,
+            payload: { participanteId: participanteIdParaGastarAcao, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     await definirOssosQuebrados(participante._pid, {
@@ -4564,17 +4520,13 @@ async function tentarLibertarImobilizado(participanteId) {
     const conseguiu = resultado >= dificuldade;
 
     const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
-    if (isMestre) {
-        await consumirAcaoCombate(participanteId);
-    } else {
-        await criarAcaoPendente({
-            tipo: "gastar_acao_combate",
-            fichaId: fichaAtualId,
-            nomeJogador,
-            detalhe: `${nomeJogador} testou Destreza pra se libertar do Imobilizado e quer gastar 1 ação do turno.\n${detalheRolagem}`,
-            payload: { participanteId, ehArmaFogo: false }
-        });
-    }
+    await criarAcaoPendente({
+        tipo: "gastar_acao_combate",
+        fichaId: fichaAtualId,
+        nomeJogador,
+        detalhe: `${nomeJogador} testou Destreza pra se libertar do Imobilizado e quer gastar 1 ação do turno.\n${detalheRolagem}`,
+        payload: { participanteId, ehArmaFogo: false }
+    });
 
     if (conseguiu) {
         await soltarImobilizado(participanteId);
@@ -4603,7 +4555,7 @@ async function tentarLibertarImobilizado(participanteId) {
 // corpo comum), usando a mesma infraestrutura de
 // definirDerrubado/resolverDerrubar.
 async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
-    const consumo = checarConsumoDeAcao(true, true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
+    const consumo = checarConsumoDeAcao(true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4616,18 +4568,14 @@ async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
     const tipoDanoKey = "contusao"; // arremessa o alvo, não uma arma — dano de impacto
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} arremessou ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} arremessou ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     const linhasLog = [];
@@ -4713,7 +4661,7 @@ async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
 // ver calcularMelhorModCorpoACorpoParticipante). Sucesso trava a vítima
 // num único alcance (ver verificarAlcanceLimitado em resolverAtaque).
 async function resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhido, participante) {
-    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
+    const consumo = checarConsumoDeAcao(nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4743,18 +4691,14 @@ async function resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhi
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Delimitar o alcance (${alcanceEscolhido}) de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Delimitar o alcance (${alcanceEscolhido}) de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -4779,7 +4723,7 @@ async function resolverRetomarAlcance(nomePericia, modificador, participante) {
         toast(`${participante.nome} não está com o alcance limitado.`, "erro");
         return;
     }
-    const consumo = checarConsumoDeAcao(true, nomePericia === "CQC");
+    const consumo = checarConsumoDeAcao(nomePericia === "CQC");
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -4792,18 +4736,14 @@ async function resolverRetomarAlcance(nomePericia, modificador, participante) {
     const conseguiu = resultadoAtaque >= dificuldade;
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await (consumo.extraCQC ? consumirAcaoExtraCQC(participanteIdParaGastarAcao) : consumirAcaoCombate(participanteIdParaGastarAcao));
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: nomeAtacante,
-                detalhe: `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: nomeAtacante,
+            detalhe: `${nomeAtacante} tentou Retomar o alcance de ${nomeAlvo} e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.\n${detalheRolagem}`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
     if (!conseguiu) {
@@ -5890,7 +5830,7 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
 //     gasta o material integralmente (comportamento antigo), deixando
 //     a resolução a critério do Mestre.
 async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorFinal) {
-    const consumo = checarConsumoDeAcao(false, false);
+    const consumo = checarConsumoDeAcao(false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -5899,7 +5839,7 @@ async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modific
     // Acerto/Falha Crítica olham só pro d20 puro + modificador de
     // perícia — a redução de dificuldade por qualidade NÃO participa
     // disso (ela mexe na dificuldade, não no resultado do teste).
-    const criticoPositivo = resultado === 20;
+    const criticoPositivo = resultado >= 20;
     const criticoNegativo = bruto === 1 || resultado <= 1;
     const temDificuldade = receita.dificuldade || receita.dificuldade === 0;
     const dificuldadeBase = temDificuldade ? Number(receita.dificuldade) : null;
@@ -6040,18 +5980,14 @@ async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modific
     toast(`${rotulo}: ${resultado} (d20: ${bruto} ${modificadorFinal >= 0 ? "+" : ""}${modificadorFinal})${notaDesfecho}`, tipoToast);
 
     if (participanteIdParaGastarAcao) {
-        if (consumo.direto) {
-            await consumirAcaoCombate(participanteIdParaGastarAcao);
-        } else {
-            await criarAcaoPendente({
-                tipo: "gastar_acao_combate",
-                fichaId: fichaAtualId,
-                nomeJogador: quem,
-                detalhe: `${quem} rolou "${rotulo}" (resultado ${resultado}) e quer gastar 1 ação do turno.`,
-                payload: { participanteId: participanteIdParaGastarAcao, extraCQC: false }
-            });
-            toast("Gasto de ação enviado pro Mestre aprovar.");
-        }
+        await criarAcaoPendente({
+            tipo: "gastar_acao_combate",
+            fichaId: fichaAtualId,
+            nomeJogador: quem,
+            detalhe: `${quem} rolou "${rotulo}" (resultado ${resultado}) e quer gastar 1 ação do turno.`,
+            payload: { participanteId: participanteIdParaGastarAcao, extraCQC: false }
+        });
+        toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 }
 
@@ -8542,28 +8478,19 @@ function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
 // ---------------------------------------------------------------------
 // Trava de ações do turno, compartilhada entre toda rolagem em combate
 // (perícia solta, manobra de combate, ataque com arma/item):
-//   - Jogador: precisa ser o turno dele E ter ação sobrando; o gasto em
-//     si entra na fila de Aprovação do Mestre (regra de ouro existente).
-//   - Mestre atuando como NPC: mesma checagem de turno/ações, mas o
-//     gasto é consumido NA HORA — o Mestre já é a autoridade que
-//     aprovaria o próprio pedido, então a fila de aprovação não faz
-//     sentido aqui.
+//   - Jogador: precisa ser o turno dele E ter ação sobrando.
+//   - Mestre atuando como NPC: mesma checagem de turno/ações.
 //   - Fora de combate com iniciativa, ou personagem fora da lista de
 //     participantes: ação livre, sem gasto de turno.
+// Em QUALQUER caso, o gasto em si nunca é consumido aqui — só entra na
+// fila de Ações Pendentes do Mestre (ver criarAcaoPendente/
+// resolverAcaoPendente em mestre.js). Regra da mesa: nenhuma ação ou
+// dado rolado em combate gasta ação do turno sozinho, mesmo sendo o
+// próprio Mestre controlando o NPC — ele sempre aprova ou recusa na
+// fila, igual faria com um jogador.
 // Retorna null se a ação não pode prosseguir (toast já disparado), ou
-// um objeto { participanteId, direto } — participanteId é null quando
-// não há economia de ação a aplicar.
-//
-// permiteDireto (default true): controla se o gasto do Mestre agindo por
-// um NPC pode ser consumido NA HORA (direto: true) ou se, mesmo sendo o
-// Mestre, o gasto ainda assim precisa passar pela fila de Ações
-// Pendentes (direto: false). Regra (manual/pedido do Mestre da mesa):
-// SÓ rolagens de ataque corpo a corpo/arma branca (resolverAtaque com
-// ehFogo === false) gastam ação automaticamente. Qualquer outra
-// rolagem — tiro de arma de fogo, perícia solta, atributo (Percepção,
-// Constituição etc.) — precisa sempre ir pro gerenciador de Ações
-// Pendentes, mesmo quando é o próprio Mestre controlando o NPC que
-// rolou, pra ele decidir se quer mesmo gastar a ação.
+// um objeto { participanteId } — participanteId é null quando não há
+// economia de ação a aplicar.
 //
 // ehCQC (default false): identifica se a rolagem em questão usa
 // especificamente a perícia CQC — só importa pro CQC nível 5 ("Agente
@@ -8576,46 +8503,67 @@ function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
 // resolverAtaque/resolverAgarrar/resolverDesarmar/resolverDerrubar/
 // resolverImobilizar/resolverArremessar/resolverDelimitarAlcance/
 // resolverRetomarAlcance/rolarERegistrar) passa isso adiante.
-function checarConsumoDeAcao(permiteDireto = true, ehCQC = false) {
-    if (!combateComIniciativaAtivo()) return { participanteId: null, direto: false, extraCQC: false };
+function checarConsumoDeAcao(ehCQC = false) {
+    if (!combateComIniciativaAtivo()) return { participanteId: null, extraCQC: false };
 
     if (!isMestre) {
         const meuId = meuParticipanteIdCombate();
-        if (!meuId) return { participanteId: null, direto: false, extraCQC: false };
+        if (!meuId) return { participanteId: null, extraCQC: false };
+        const p = combateAtivoCache.participantes[meuId];
+        const guardadas = p ? (Number(p.acoesGuardadas) || 0) : 0;
+
         if (combateAtivoCache.turnoAtual !== meuId) {
+            // Fora do próprio turno só é permitido gastar uma ação
+            // GUARDADA (ver "guardar_acao_combate" em avancarTurnoCombate/
+            // confirmarAcaoPendente, em mestre.js) — o Mestre precisa ter
+            // aprovado isso antes. consumirAcaoCombate já sabe descontar
+            // de acoesGuardadas quando `acoes` normal está zerado.
+            if (guardadas > 0) {
+                return { participanteId: meuId, extraCQC: false, usouAcaoGuardada: true };
+            }
             toast("Não é o seu turno.", "erro");
             return null;
         }
-        const p = combateAtivoCache.participantes[meuId];
         if (p && Number(p.acoes) <= 0) {
             if (ehCQC && Number(p.acoesExtraCQC) > 0) {
-                return { participanteId: meuId, direto: false, extraCQC: true };
+                return { participanteId: meuId, extraCQC: true };
+            }
+            if (guardadas > 0) {
+                return { participanteId: meuId, extraCQC: false, usouAcaoGuardada: true };
             }
             toast(p.iniciativaTravada ? "Tirou 1 na iniciativa — perdeu esse turno, sem ações." : "Sem ações restantes neste turno.", "erro");
             return null;
         }
-        return { participanteId: meuId, direto: false, extraCQC: false };
+        return { participanteId: meuId, extraCQC: false };
     }
 
     if (modoNpc) {
         const npcPid = npcParticipanteIdCombate();
-        if (!npcPid) return { participanteId: null, direto: false, extraCQC: false };
+        if (!npcPid) return { participanteId: null, extraCQC: false };
+        const p = combateAtivoCache.participantes[npcPid];
+        const guardadas = p ? (Number(p.acoesGuardadas) || 0) : 0;
+
         if (combateAtivoCache.turnoAtual !== npcPid) {
+            if (guardadas > 0) {
+                return { participanteId: npcPid, extraCQC: false, usouAcaoGuardada: true };
+            }
             toast("Não é o turno desse NPC.", "erro");
             return null;
         }
-        const p = combateAtivoCache.participantes[npcPid];
         if (p && Number(p.acoes) <= 0) {
             if (ehCQC && Number(p.acoesExtraCQC) > 0) {
-                return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: true };
+                return { participanteId: npcPid, extraCQC: true };
+            }
+            if (guardadas > 0) {
+                return { participanteId: npcPid, extraCQC: false, usouAcaoGuardada: true };
             }
             toast(p.iniciativaTravada ? "Esse NPC tirou 1 na iniciativa — perdeu esse turno, sem ações." : "Esse NPC não tem ações restantes neste turno.", "erro");
             return null;
         }
-        return { participanteId: npcPid, direto: !!permiteDireto, extraCQC: false };
+        return { participanteId: npcPid, extraCQC: false };
     }
 
-    return { participanteId: null, direto: false, extraCQC: false };
+    return { participanteId: null, extraCQC: false };
 }
 
 // ---------------------------------------------------------------------
@@ -8657,7 +8605,14 @@ function travarAcoesForaDoTurno() {
     const meuId = meuParticipanteIdCombate();
     const emCombate = combateComIniciativaAtivo();
     const meuTurno = emCombate && combateAtivoCache.turnoAtual === meuId;
-    const bloquear = emCombate && !!meuId && !meuTurno;
+    // Ação guardada (ver checarConsumoDeAcao/guardar_acao_combate): se o
+    // Mestre já aprovou guardar uma ação, o personagem pode usá-la fora
+    // do próprio turno — então a trava geral de botões não se aplica
+    // nesse caso (a validação de verdade continua em checarConsumoDeAcao,
+    // isso aqui só libera os botões pra chegar até lá).
+    const p = meuId ? combateAtivoCache.participantes[meuId] : null;
+    const temAcaoGuardada = p && Number(p.acoesGuardadas) > 0;
+    const bloquear = emCombate && !!meuId && !meuTurno && !temAcaoGuardada;
     document.body.classList.toggle("combate-bloqueio-ativo", bloquear);
 }
 
@@ -8756,6 +8711,8 @@ function montarPainelIniciativaJogador() {
         const marcadorVoce = pid === meuId ? " (você)" : "";
         const qtdEsquivas = Number(p.esquivasDisponiveis) || 0;
         const badgeEsquiva = qtdEsquivas > 0 ? ` <span title="Tem ${qtdEsquivas} ação(ões) de Esquiva/Bloqueio guardada(s)">🛡️${qtdEsquivas > 1 ? `×${qtdEsquivas}` : ""}</span>` : "";
+        const qtdAcoesGuardadas = Number(p.acoesGuardadas) || 0;
+        const badgeAcaoGuardada = qtdAcoesGuardadas > 0 ? ` <span title="Tem ${qtdAcoesGuardadas} ação(ões) guardada(s) — dá pra usar fora do seu turno">⏳${qtdAcoesGuardadas > 1 ? `×${qtdAcoesGuardadas}` : ""}</span>` : "";
         const temContraAtaque = !!(combateAtivoCache.contraAtaquePendente && combateAtivoCache.contraAtaquePendente[pid]);
         const badgeContraAtaque = temContraAtaque ? ` <span title="Aparou! Tem um contra-ataque imediato guardado (modificador -1)">🗡️</span>` : "";
         const badgeAgarrado = (p.agarrado && p.agarrado.ativo)
@@ -8809,7 +8766,7 @@ function montarPainelIniciativaJogador() {
         const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
                 <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}${p.bonusCobraKaiIniciativa ? ` (+${p.bonusCobraKaiIniciativa} Cobra Kai)` : ""}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -10089,6 +10046,8 @@ function montarGerenciadorCombate(corpoOriginal) {
             linha.className = "combate-linha" + (pid === turnoAtual ? " combate-linha-ativa" : "");
             const qtdEsquivas = Number(p.esquivasDisponiveis) || 0;
             const badgeEsquiva = qtdEsquivas > 0 ? ` <span title="Tem ${qtdEsquivas} ação(ões) de Esquiva/Bloqueio guardada(s)">🛡️${qtdEsquivas > 1 ? `×${qtdEsquivas}` : ""}</span>` : "";
+            const qtdAcoesGuardadas = Number(p.acoesGuardadas) || 0;
+            const badgeAcaoGuardada = qtdAcoesGuardadas > 0 ? ` <span title="Tem ${qtdAcoesGuardadas} ação(ões) guardada(s) — pode agir fora do próprio turno">⏳${qtdAcoesGuardadas > 1 ? `×${qtdAcoesGuardadas}` : ""}</span>` : "";
             const temContraAtaque = !!(combateAtivoCache.contraAtaquePendente && combateAtivoCache.contraAtaquePendente[pid]);
             const badgeContraAtaque = temContraAtaque ? ` <span title="Aparou! Tem um contra-ataque imediato guardado (modificador -1)">🗡️</span>` : "";
             const badgeAgarrado = (p.agarrado && p.agarrado.ativo)
@@ -10134,7 +10093,7 @@ function montarGerenciadorCombate(corpoOriginal) {
                 : "";
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeIniciativaTravada}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeIniciativaTravada}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""}${p.bonusCobraKaiIniciativa ? ` + ${p.bonusCobraKaiIniciativa} Cobra Kai` : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
