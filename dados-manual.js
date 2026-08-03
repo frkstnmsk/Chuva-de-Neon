@@ -310,6 +310,61 @@ export function ehContainer(tagKey) {
     return tagKey === "recipiente";
 }
 
+// ---------------------------------------------------------------------
+// Volume — Fase 0/1 do sistema de "cabe ou não cabe" (ver conversa de
+// design: peso já limita quanto dá pra carregar, volume limita quanto
+// dá pra GUARDAR num recipiente específico). Dois eixos, cada um
+// resolvendo um problema diferente:
+//
+//   - volume (número, soma) — igual peso: quanto espaço o item ocupa.
+//     Empilhável (peso × quantidade) via mesma lógica de
+//     pesoUnitario/quantidade — ver lerPesoVolumeEQuantidadeDoModal em
+//     ficha.js (Fase 3).
+//   - tamanho (categoria, TAMANHOS_ITEM abaixo) — trava binária,
+//     independente da soma: um item "Comprido" (katana, fuzil) não
+//     cabe num recipiente que só aceita até "Médio", nem que sobre
+//     volume numérico. Resolve o problema que volume puro não resolve
+//     sozinho (comprimento ≠ volume).
+//
+// Campos novos no item (fichaAtual.inventario[id]), gravados pelo
+// modal (Fase 3) e lidos por itemCabeNoContainer (Fase 2, inventario.js):
+//   item.volume            — total (como peso)
+//   item.volumeUnitario    — só pra reexibir no modal em item empilhável
+//   item.tamanho           — key de TAMANHOS_ITEM
+//
+// Campos novos SÓ em item com ehContainer(tag) === true:
+//   item.capacidadeVolume     — soma máxima de volume que cabe dentro
+//   item.tamanhoMaximoAceito  — key de TAMANHOS_ITEM, o maior que entra
+// ---------------------------------------------------------------------
+
+// Ordem importa: cada key é estritamente maior que a anterior — é o
+// que permite comparar "cabe ou não" (ver tamanhoCabe abaixo) sem
+// precisar de uma tabela de comparação à parte.
+export const TAMANHOS_ITEM = [
+    { key: "pequeno", label: "Pequeno (cabe no bolso/mão — faca, celular, carregador de pistola)" },
+    { key: "medio", label: "Médio (cabe numa mochila — pistola, notebook, colete)" },
+    { key: "grande", label: "Grande (precisa de mochila/mala grande — fuzil desmontado, escudo)" },
+    { key: "comprido", label: "Comprido (não dobra — katana, fuzil montado, lança; só cabe em recipiente feito pra isso)" }
+];
+
+export function rotuloTamanho(tamanhoKey) {
+    const t = TAMANHOS_ITEM.find(t => t.key === tamanhoKey);
+    return t ? t.label : tamanhoKey;
+}
+
+// true se um item desse tamanho cabe num recipiente cujo maior
+// tamanho aceito é tamanhoMaximoAceito. Sem tamanho definido em
+// nenhum dos dois lados (dado antigo/recipiente ainda não configurado
+// — ver Fase 7, migração), não trava: deixa passar, quem trava de
+// verdade é a capacidade em volume.
+export function tamanhoCabe(tamanhoItem, tamanhoMaximoAceito) {
+    if (!tamanhoItem || !tamanhoMaximoAceito) return true;
+    const idxItem = TAMANHOS_ITEM.findIndex(t => t.key === tamanhoItem);
+    const idxMax = TAMANHOS_ITEM.findIndex(t => t.key === tamanhoMaximoAceito);
+    if (idxItem === -1 || idxMax === -1) return true;
+    return idxItem <= idxMax;
+}
+
 // Carregador, quando criado, define quantos projéteis cabem nele.
 export function tagExigeCapacidadeCarregador(tagKey) {
     return ehCarregador(tagKey);

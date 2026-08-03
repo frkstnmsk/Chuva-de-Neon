@@ -1208,6 +1208,45 @@ select.select-guardar-dentro {
 }
 .treino-card select, .treino-card button { margin-top: 4px; }
 
+/* ---------- Barra de Volume dos recipientes (mochila etc., expandidos) ---------- */
+.volume-bar-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 4px 10px;
+}
+.volume-bar-texto {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+.volume-bar-texto-estourado {
+    color: var(--neon-red);
+    font-weight: 600;
+}
+.volume-bar-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.volume-bar-fill {
+    height: 100%;
+    background: var(--neon-lime);
+    box-shadow: 0 0 6px rgba(163,230,53,0.5);
+    transition: width 0.35s ease, background-color 0.35s ease;
+}
+.volume-bar-fill.volume-bar-estourado {
+    background: var(--neon-red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
+    animation: volume-bar-pisca 1s ease-in-out infinite;
+}
+@keyframes volume-bar-pisca {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 /* ---------- Modal: linhas de modificador ---------- */
 .modificador-row, .modificacao-arma-row {
     display: grid;

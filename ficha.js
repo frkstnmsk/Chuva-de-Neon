@@ -52,7 +52,8 @@ import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
     listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado,
-    ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis
+    ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis,
+    TAMANHOS_ITEM, rotuloTamanho, itemCabeNoContainer, volumeTotalDentroDe
 } from "./inventario.js";
 import {
     estadoInicialCriacao, funcaoDe, calcularPontosAtributoTotais,
@@ -376,6 +377,7 @@ const el = {
     modalCarregadorCapacidade: document.getElementById("modal-carregador-capacidade"),
     modalCampoProjetilQuantidade: document.getElementById("modal-campo-projetil-quantidade"),
     modalProjetilQuantidade: document.getElementById("modal-projetil-quantidade"),
+    modalProjetilVolumeTotal: document.getElementById("modal-projetil-volume-total"),
     modalCampoMaterialTipo: document.getElementById("modal-campo-material-tipo"),
     modalMaterialTipo: document.getElementById("modal-material-tipo"),
     modalCampoMaterialQualidade: document.getElementById("modal-campo-material-qualidade"),
@@ -385,9 +387,19 @@ const el = {
     modalCampoPeso: document.getElementById("modal-campo-peso"),
     modalLabelPeso: document.getElementById("modal-label-peso"),
     modalPeso: document.getElementById("modal-peso"),
+    modalCampoVolume: document.getElementById("modal-campo-volume"),
+    modalLabelVolume: document.getElementById("modal-label-volume"),
+    modalVolume: document.getElementById("modal-volume"),
+    modalCampoTamanho: document.getElementById("modal-campo-tamanho"),
+    modalTamanho: document.getElementById("modal-tamanho"),
+    modalCampoCapacidadeVolume: document.getElementById("modal-campo-capacidade-volume"),
+    modalCapacidadeVolume: document.getElementById("modal-capacidade-volume"),
+    modalCampoTamanhoMaximo: document.getElementById("modal-campo-tamanho-maximo"),
+    modalTamanhoMaximo: document.getElementById("modal-tamanho-maximo"),
     modalCampoQuantidade: document.getElementById("modal-campo-quantidade"),
     modalQuantidade: document.getElementById("modal-quantidade"),
     modalQuantidadePesoTotal: document.getElementById("modal-quantidade-peso-total"),
+    modalQuantidadeVolumeTotal: document.getElementById("modal-quantidade-volume-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
     modalCampoGuardarDentro: document.getElementById("modal-campo-guardar-dentro"),
@@ -407,6 +419,9 @@ const el = {
     modalArmaAlcance: document.getElementById("modal-arma-alcance"),
     modalArmaRecuo: document.getElementById("modal-arma-recuo"),
     modalArmaEfeitoExtra: document.getElementById("modal-arma-efeito-extra"),
+    modalArmaUsaCarregador: document.getElementById("modal-arma-usa-carregador"),
+    modalCampoArmaCamaraExtra: document.getElementById("modal-campo-arma-camara-extra"),
+    modalArmaTemCamaraExtra: document.getElementById("modal-arma-tem-camara-extra"),
     modalCampoArmaCarregador: document.getElementById("modal-campo-arma-carregador"),
     modalArmaCarregador: document.getElementById("modal-arma-carregador"),
     modalArmaModificacoesLista: document.getElementById("modal-arma-modificacoes-lista"),
@@ -2511,6 +2526,18 @@ function ehArmaComCarregador(it) {
     return ehArma(it.tag) && ehArmaDeFogo(it.periciaUso) && !(it.arma && it.arma.desarmado);
 }
 
+// Se a arma usa carregador (magazine) removível ou dispara direto do
+// estoque de munição no inventário (ex.: revólver, escopeta 12 gauge) —
+// escolha explícita feita no modal (checkbox "Usa carregador?"), não mais
+// automática só por calibre. Itens salvos antes dessa opção existir não
+// têm `usaCarregador` gravado, então caem no fallback de sempre: só
+// escopeta (12 gauge) não usava carregador.
+function armaUsaCarregador(it) {
+    if (!it || !it.arma) return true;
+    if (typeof it.arma.usaCarregador === "boolean") return it.arma.usaCarregador;
+    return !ehCalibreEscopeta(it.calibre);
+}
+
 // Desconta 1 projétil do carregador (usado a cada disparo bem-sucedido de
 // "Usar"). Some primeiro do grupo de projéteis carregados que ainda tiver
 // saldo, só pra manter a lista de "o que tá dentro" (tooltip) coerente —
@@ -2527,9 +2554,10 @@ function descontarUmProjetil(carregadorCfg) {
     };
 }
 
-// Soma toda a munição 12 gauge (buckshot + slug) que o personagem está
-// levando consigo — usado só pra exibição (não há "carregador" pra
-// mostrar munição atual/máxima numa escopeta).
+// Soma toda a munição compatível (do calibre da arma) que o personagem
+// está levando consigo — usado pra exibição de armas "sem carregador"
+// (revólver, escopeta 12 gauge...), que não têm um carregador anexado
+// pra mostrar munição atual/máxima.
 function municaoEscopetaDisponivel(calibreArma) {
     return listaProjeteisInventario(fichaAtual, calibreArma)
         .filter(p => p.categoria === "levando")
@@ -2537,9 +2565,11 @@ function municaoEscopetaDisponivel(calibreArma) {
 }
 
 // Desconta 1 projétil direto do estoque no inventário (sem carregador) —
-// usado só por armas de calibre 12 gauge. Pega o primeiro item de
-// projétil compatível (buckshot ou slug, o que tiver estoque) que
-// estiver em "Levando consigo"; apaga o item se a quantidade zerar.
+// usado por armas marcadas como "não usa carregador" (revólver, escopeta
+// 12 gauge...) e pra carregar a câmara de armas com Capacidade +1. Pega
+// o primeiro item de projétil compatível com o calibre (ex.: buckshot ou
+// slug pra 12 gauge) que estiver em "Levando consigo"; apaga o item se a
+// quantidade zerar.
 async function descontarProjetilDiretoDoEstoque(calibreArma) {
     const candidatos = listaProjeteisInventario(fichaAtual, calibreArma)
         .filter(p => p.categoria === "levando" && (Number(p.projetil?.quantidade) || 0) > 0);
@@ -2549,8 +2579,13 @@ async function descontarProjetilDiretoDoEstoque(calibreArma) {
     const restante = (Number(proj.projetil.quantidade) || 0) - 1;
     if (restante > 0) {
         const atualizado = { ...proj.projetil, quantidade: restante };
-        fichaAtual.inventario[proj.id] = { ...fichaAtual.inventario[proj.id], projetil: atualizado };
-        await update(ref(db, `${caminhoBase()}/inventario/${proj.id}/projetil`), atualizado);
+        // volume precisa acompanhar a quantidade que sobrou (mesma fórmula
+        // de sempre — Math.floor(volumeUnitario × quantidade), ver Fase 4);
+        // senão o item fica com o volume "congelado" no valor de antes do
+        // disparo, superestimando o quanto ele ocupa (ex.: num recipiente).
+        const volumeAtualizado = Math.floor((Number(proj.volumeUnitario) || 0) * restante);
+        fichaAtual.inventario[proj.id] = { ...fichaAtual.inventario[proj.id], projetil: atualizado, volume: volumeAtualizado };
+        await update(ref(db, `${caminhoBase()}/inventario/${proj.id}`), { projetil: atualizado, volume: volumeAtualizado });
     } else {
         // update() só apaga uma chave se ela vier explicitamente como null
         // no payload (mesmo motivo documentado em carregarCarregador).
@@ -2560,17 +2595,18 @@ async function descontarProjetilDiretoDoEstoque(calibreArma) {
     return true;
 }
 
-// Antes de disparar: exige carregador anexado e com munição — exceto
-// pra escopeta (12 gauge), que dispara direto do estoque de projéteis
-// no inventário, sem carregador. Se puder disparar, já desconta 1
-// projétil (do carregador ou do estoque, conforme o caso).
+// Antes de disparar: exige carregador anexado e com munição — exceto pra
+// arma marcada como "não usa carregador" (revólver, escopeta 12 gauge...),
+// que dispara direto do estoque de projéteis no inventário. Se a arma tem
+// Capacidade +1 (bala na agulha) e o carregador anexado está vazio, ainda
+// dispara consumindo o round que estava só na câmara antes de bloquear.
 async function consumirMunicaoSeArmaDeFogo(it) {
     if (!ehArmaComCarregador(it)) return true;
 
-    if (ehCalibreEscopeta(it.calibre)) {
+    if (!armaUsaCarregador(it)) {
         const descontou = await descontarProjetilDiretoDoEstoque(it.calibre);
         if (!descontou) {
-            toast("Sem munição 12 gauge (buckshot ou slug) em \"Levando consigo\" pra disparar esta arma.", "erro");
+            toast(`Sem munição ${rotuloCalibre(it.calibre) || "compatível"} em "Levando consigo" pra disparar esta arma.`, "erro");
             return false;
         }
         return true;
@@ -2578,18 +2614,35 @@ async function consumirMunicaoSeArmaDeFogo(it) {
 
     const carregadorId = it.arma && it.arma.carregadorId;
     const carregador = carregadorId ? fichaAtual.inventario?.[carregadorId] : null;
+    const municaoCarregador = (carregador && carregador.carregador) ? (Number(carregador.carregador.municaoAtual) || 0) : 0;
+    const temCamaraExtra = !!(it.arma && it.arma.temCamaraExtra);
+    const camaraCarregada = temCamaraExtra && !!(it.arma && it.arma.camaraCarregada);
+
+    if (municaoCarregador > 0) {
+        const carregadorAtualizado = descontarUmProjetil(carregador.carregador);
+        fichaAtual.inventario[carregadorId] = { ...carregador, carregador: carregadorAtualizado };
+        await update(ref(db, `${caminhoBase()}/inventario/${carregadorId}/carregador`), carregadorAtualizado);
+        return true;
+    }
+
+    if (camaraCarregada) {
+        // Carregador vazio (ou nem anexado), mas ainda tem a bala que
+        // tava só na agulha — dispara ela e esvazia a câmara. Persiste
+        // no próprio item da arma (não no carregador), então sobrevive
+        // à troca de carregador (ver recarregarArma/retirarCarregadorArma).
+        const armaAtualizada = { ...it, arma: { ...it.arma, camaraCarregada: false } };
+        fichaAtual.inventario[it.id] = armaAtualizada;
+        await update(ref(db, `${caminhoBase()}/inventario/${it.id}/arma`), armaAtualizada.arma);
+        toast("Disparou a bala que estava na agulha — câmara vazia agora.");
+        return true;
+    }
+
     if (!carregadorId || !carregador || !carregador.carregador) {
         toast("Esta arma está sem carregador anexado. Anexe um carregador (editando a arma) antes de atirar.", "erro");
         return false;
     }
-    if ((Number(carregador.carregador.municaoAtual) || 0) <= 0) {
-        toast("Carregador vazio. Use \"Recarregar\" pra trocar por um carregador com munição.", "erro");
-        return false;
-    }
-    const carregadorAtualizado = descontarUmProjetil(carregador.carregador);
-    fichaAtual.inventario[carregadorId] = { ...carregador, carregador: carregadorAtualizado };
-    await update(ref(db, `${caminhoBase()}/inventario/${carregadorId}/carregador`), carregadorAtualizado);
-    return true;
+    toast(`Carregador vazio. Use "Recarregar" pra trocar por um carregador com munição${temCamaraExtra ? ", ou carregue a câmara" : ""}.`, "erro");
+    return false;
 }
 
 // ---------------------------------------------------------------------
@@ -2624,7 +2677,12 @@ async function carregarCarregador(carregadorId, carregadorItem) {
 
         const restante = disponivel - movido;
         if (restante > 0) {
-            inventarioAtualizado[proj.id] = { ...proj, projetil: { ...proj.projetil, quantidade: restante } };
+            // volume precisa acompanhar a quantidade que sobrou no estoque
+            // (mesma fórmula de Math.floor(volumeUnitario × quantidade) da
+            // Fase 4) — senão o item fica mostrando o volume de antes de
+            // carregar o carregador, superestimando o espaço ocupado.
+            const volumeAtualizado = Math.floor((Number(proj.volumeUnitario) || 0) * restante);
+            inventarioAtualizado[proj.id] = { ...proj, projetil: { ...proj.projetil, quantidade: restante }, volume: volumeAtualizado };
         } else {
             // update() só apaga uma chave se ela vier explicitamente como
             // null no payload — remover a chave do objeto local (delete)
@@ -2670,8 +2728,8 @@ async function carregarCarregador(carregadorId, carregadorItem) {
 // ---------------------------------------------------------------------
 async function recarregarArma(armaId, armaItem) {
     if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
-    if (ehCalibreEscopeta(armaItem.calibre)) {
-        toast("Escopeta (12 gauge) não usa carregador — ela dispara direto do estoque de munição.", "erro");
+    if (!armaUsaCarregador(armaItem)) {
+        toast("Esta arma não usa carregador — ela dispara direto do estoque de munição.", "erro");
         return;
     }
     const calibre = armaItem.calibre;
@@ -2705,8 +2763,8 @@ async function recarregarArma(armaId, armaItem) {
 // ---------------------------------------------------------------------
 async function retirarCarregadorArma(armaId, armaItem) {
     if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
-    if (ehCalibreEscopeta(armaItem.calibre)) {
-        toast("Escopeta (12 gauge) não usa carregador — ela dispara direto do estoque de munição.", "erro");
+    if (!armaUsaCarregador(armaItem)) {
+        toast("Esta arma não usa carregador — ela dispara direto do estoque de munição.", "erro");
         return;
     }
     const carregadorId = armaItem.arma && armaItem.arma.carregadorId;
@@ -2723,6 +2781,36 @@ async function retirarCarregadorArma(armaId, armaItem) {
     const municao = carregador.carregador?.municaoAtual ?? 0;
     const capacidade = carregador.carregador?.capacidadeMax ?? 0;
     toast(`${carregador.nome} retirado de ${armaItem.nome} e devolvido ao inventário (${municao}/${capacidade}).`);
+}
+
+// ---------------------------------------------------------------------
+// "Colocar bala na agulha": carrega 1 projétil direto na câmara de uma
+// arma com Capacidade +1, gastando 1 unidade do estoque de munição
+// compatível em "Levando consigo" (mesma fonte que descontarProjetilDireto-
+// DoEstoque usa pra disparar sem carregador). Fica marcado em arma.
+// camaraCarregada — persiste trocando de carregador (ver recarregarArma/
+// retirarCarregadorArma, que só mexem em carregadorId) e só é gasto
+// quando o carregador anexado esvaziar (ver consumirMunicaoSeArmaDeFogo).
+// ---------------------------------------------------------------------
+async function carregarCamaraArma(armaId, armaItem) {
+    if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
+    if (!armaItem.arma || !armaItem.arma.temCamaraExtra) {
+        toast("Esta arma não tem Capacidade +1 (bala na agulha).", "erro");
+        return;
+    }
+    if (armaItem.arma.camaraCarregada) {
+        toast("A câmara já está carregada.", "erro");
+        return;
+    }
+    const descontou = await descontarProjetilDiretoDoEstoque(armaItem.calibre);
+    if (!descontou) {
+        toast(`Sem munição ${rotuloCalibre(armaItem.calibre) || "compatível"} em "Levando consigo" pra carregar a câmara.`, "erro");
+        return;
+    }
+    const armaAtualizada = { ...armaItem, arma: { ...armaItem.arma, camaraCarregada: true } };
+    fichaAtual.inventario[armaId] = armaAtualizada;
+    await update(ref(db, `${caminhoBase()}/inventario/${armaId}/arma`), armaAtualizada.arma);
+    toast(`${armaItem.nome}: bala colocada na agulha.`);
 }
 
 // "Usar" um item/arma do inventário: rola d20 + o total da perícia
@@ -5085,7 +5173,9 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const periciasUsoItem = periciaUsoComoArray(it.periciaUso);
     const podeUsar = itemPodeUsar(it) && (!!periciasUsoItem.length || kitGeral);
     const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
-    const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
+    const semCarregador = ehFogo && !armaUsaCarregador(it);
+    const temCamaraExtraItem = ehFogo && !!(it.arma && it.arma.temCamaraExtra);
+    const camaraCarregadaItem = temCamaraExtraItem && !!(it.arma && it.arma.camaraCarregada);
     const ehArmaItem = ehArma(it.tag);
     const ehEquipavelItem = itemEhEquipavel(it);
     const equipadaItem = !!it.equipada;
@@ -5108,14 +5198,15 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
     const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
     const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
-    const armaEstaCarregadaItem = ehFogo && !escopeta && !!carregadorAnexadoObjItem;
+    const armaEstaCarregadaItem = ehFogo && !semCarregador && !!carregadorAnexadoObjItem;
     const carregadorAnexadoLabel = (ehFogo && it.arma)
-        ? (escopeta
+        ? (semCarregador
             ? ` · Munição em estoque: ${municaoEscopetaDisponivel(it.calibre)} (sem carregador)`
             : (carregadorAnexadoObjItem
                 ? ` · Carregador: ${escapeHtml(carregadorAnexadoObjItem.nome)} (${carregadorAnexadoObjItem.carregador?.municaoAtual || 0}/${carregadorAnexadoObjItem.carregador?.capacidadeMax || 0})`
                 : " · Sem carregador anexado"))
         : "";
+    const camaraLabel = temCamaraExtraItem ? ` · Câmara: ${camaraCarregadaItem ? "carregada (+1)" : "vazia"}` : "";
     // Tooltip do carregador: só aparece ao passar o mouse por cima,
     // listando os projéteis carregados dentro dele.
     const tooltipCarregador = it.carregador
@@ -5140,15 +5231,17 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     li.innerHTML = `
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
-            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${containerLabel}</span>
+            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}</span>
         </div>
         <div class="entity-badges">
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+            ${camaraCarregadaItem ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
             ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
             ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
             <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
-            ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
-            ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
+            ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+            ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
+            ${(ehFogo && temCamaraExtraItem) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(itemPodeUsar(it) && !camaraCarregadaItem) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
             ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
             ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
             <select class="select-guardar-dentro"></select>
@@ -5215,6 +5308,22 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         const containerNovo = novoContainerId ? fichaAtual.inventario[novoContainerId] : null;
         const nomeContainerNovo = containerNovo?.nome || "";
         const categoriaNova = containerNovo?.categoria || it.categoria;
+        // "Cabe ou não cabe" (Fase 5) — mesma trava do modal, só que no
+        // fluxo rápido do dropdown. Só se aplica ao GUARDAR (tirar do
+        // recipiente, novoContainerId vazio, nunca é barrado por isso).
+        // Vale tanto pro Mestre (aplicaria direto) quanto pro jogador
+        // (nem chega a virar pedido pendente se já não couber).
+        if (novoContainerId) {
+            const resultado = itemCabeNoContainer(fichaAtual, novoContainerId, it.volume, it.tamanho, id);
+            if (!resultado.cabe) {
+                const msg = resultado.motivo === "tamanho"
+                    ? `"${nomeContainerNovo}" não aceita item desse tamanho.`
+                    : `"${nomeContainerNovo}" não tem espaço sobrando (capacidade de volume estourada).`;
+                toast(msg, "erro");
+                selectGuardarDentro.value = "__guardar__";
+                return;
+            }
+        }
         if (isMestre) {
             const dados = { dentroDe: novoContainerId || null };
             // Guardar move o item junto pra categoria do recipiente;
@@ -5318,6 +5427,15 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         });
     }
 
+    const btnCarregarCamara = li.querySelector(".btn-carregar-camara-item");
+    if (btnCarregarCamara) {
+        btnCarregarCamara.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (camaraCarregadaItem) return;
+            await carregarCamaraArma(id, it);
+        });
+    }
+
     const btnCarregar = li.querySelector(".btn-carregar-item");
     if (btnCarregar) {
         btnCarregar.addEventListener("click", async (e) => {
@@ -5343,6 +5461,26 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
     // o conteúdo "viaja" junto se o item pai for movido/filtrado).
     if (ehContainerItem && containerAberto) {
+        // Barra de volume (🎒 Volume: usado/capacidade) — mesma ideia da
+        // barra de carga do topo do inventário, só que por recipiente.
+        // Recipiente sem capacidadeVolume definida (dado antigo/Fase 7)
+        // não mostra barra de progresso, só o total guardado — não tem
+        // limite pra comparar. Fica vermelha/pisca se, por alguma
+        // inconsistência de dados antigos, passar do limite (a
+        // validação normal — modal e select-guardar-dentro — já
+        // impede isso de acontecer em uso normal).
+        const volumeUsadoContainer = volumeTotalDentroDe(fichaAtual, id);
+        const capacidadeVolumeContainer = Number(it.capacidadeVolume) || 0;
+        const estourado = capacidadeVolumeContainer > 0 && volumeUsadoContainer > capacidadeVolumeContainer;
+        const pctVolumeContainer = capacidadeVolumeContainer > 0 ? Math.min(100, Math.round((volumeUsadoContainer / capacidadeVolumeContainer) * 100)) : 0;
+        const barraVolume = document.createElement("div");
+        barraVolume.className = "volume-bar-wrap";
+        barraVolume.innerHTML = `
+            <span class="volume-bar-texto${estourado ? " volume-bar-texto-estourado" : ""}">🎒 Volume: ${volumeUsadoContainer}${capacidadeVolumeContainer > 0 ? `/${capacidadeVolumeContainer}` : " (sem limite definido)"}</span>
+            ${capacidadeVolumeContainer > 0 ? `<div class="volume-bar-track"><div class="volume-bar-fill${estourado ? " volume-bar-estourado" : ""}" style="width:${pctVolumeContainer}%;"></div></div>` : ""}
+        `;
+        li.appendChild(barraVolume);
+
         const ulFilhos = document.createElement("ul");
         ulFilhos.className = "entity-list entity-list-nested";
         if (!filhosContainer.length) {
@@ -5383,17 +5521,20 @@ function renderizarCombate() {
             const classeLabel = arma.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(arma.classeProtecao))}` : "";
             const calibreLabel = arma.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(arma.calibre))}` : "";
             const ehFogo = ehArmaDeFogo(arma.periciaUso);
-            const escopeta = ehFogo && ehCalibreEscopeta(arma.calibre);
+            const semCarregador = ehFogo && !armaUsaCarregador(arma);
             const carregadorAnexado = (ehFogo && cfg.carregadorId) ? fichaAtual.inventario?.[cfg.carregadorId] : null;
+            const temCamaraExtraArma = ehFogo && !!cfg.temCamaraExtra;
+            const camaraCarregadaArma = temCamaraExtraArma && !!cfg.camaraCarregada;
             const municaoLabel = ehFogo
-                ? (escopeta
+                ? (semCarregador
                     ? ` · Munição em estoque: ${municaoEscopetaDisponivel(arma.calibre)} (sem carregador)`
                     : (carregadorAnexado
                         ? ` · Munição: ${carregadorAnexado.carregador?.municaoAtual || 0}/${carregadorAnexado.carregador?.capacidadeMax || 0}`
                         : " · Sem carregador anexado"))
                 : "";
+            const camaraLabelCombate = temCamaraExtraArma ? ` · Câmara: ${camaraCarregadaArma ? "carregada (+1)" : "vazia"}` : "";
             const fogoLabel = ehFogo
-                ? ` · Dif. acerto ${cfg.dificuldadeAcerto ?? "—"} · Alcance ${rotuloAlcanceArmaFogo(cfg.alcance)} · Recuo: ${rotuloPadraoRecuo(cfg.recuo)}${cfg.precisao ? ` · Precisão ${cfg.precisao >= 0 ? "+" : ""}${cfg.precisao}` : ""}${municaoLabel}`
+                ? ` · Dif. acerto ${cfg.dificuldadeAcerto ?? "—"} · Alcance ${rotuloAlcanceArmaFogo(cfg.alcance)} · Recuo: ${rotuloPadraoRecuo(cfg.recuo)}${cfg.precisao ? ` · Precisão ${cfg.precisao >= 0 ? "+" : ""}${cfg.precisao}` : ""}${municaoLabel}${camaraLabelCombate}`
                 : "";
             li.innerHTML = `
                 <div class="entity-main">
@@ -5403,11 +5544,13 @@ function renderizarCombate() {
                     ${cfg.efeitoExtra ? `<span class="entity-sub">Efeito extra: ${escapeHtml(cfg.efeitoExtra)}</span>` : ""}
                 </div>
                 <div class="entity-badges">
-                    ${(ehFogo && !escopeta && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+                    ${(ehFogo && !semCarregador && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+                    ${camaraCarregadaArma ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
                     <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${podeEquiparArma ? (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
                     <button type="button" class="btn-usar-item btn-blue" data-quick-key="arma:${escapeHtml(arma.id)}" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
-                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
-                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
+                    ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+                    ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
+                    ${(ehFogo && temCamaraExtraArma) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(podeUsar && !camaraCarregadaArma) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
                 </div>
             `;
             li.querySelector(".btn-toggle-equipada").addEventListener("click", (e) => {
@@ -5434,6 +5577,14 @@ function renderizarCombate() {
                     e.stopPropagation();
                     if (!carregadorAnexado) return;
                     await retirarCarregadorArma(arma.id, arma);
+                });
+            }
+            const btnCarregarCamaraCombate = li.querySelector(".btn-carregar-camara-item");
+            if (btnCarregarCamaraCombate) {
+                btnCarregarCamaraCombate.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    if (camaraCarregadaArma) return;
+                    await carregarCamaraArma(arma.id, arma);
                 });
             }
             li.addEventListener("click", () => abrirModalEdicao("inventario", arma.id));
@@ -7093,6 +7244,10 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoClasseProtecao.style.display = "none";
     el.modalCampoLocalProtegido.style.display = "none";
     el.modalCampoPeso.style.display = "none";
+    el.modalCampoVolume.style.display = "none";
+    el.modalCampoTamanho.style.display = "none";
+    el.modalCampoCapacidadeVolume.style.display = "none";
+    el.modalCampoTamanhoMaximo.style.display = "none";
     el.modalCampoQuantidade.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
     el.modalCampoGuardarDentro.style.display = "none";
@@ -7294,9 +7449,28 @@ function popularSelectGuardarDentro(idItemAtual, valorSelecionado) {
     };
 }
 
+// Popula um <select> de tamanho (usado tanto pro tamanho do próprio
+// item quanto pro "maior tamanho aceito" de um recipiente) com as
+// categorias de TAMANHOS_ITEM. valorAtual cai pro primeiro da lista
+// ("pequeno") se vier vazio/inválido — mantém o select sempre com uma
+// opção válida selecionada, sem exigir escolha explícita pra itens
+// sem tamanho definido (dado antigo, ver Fase 7).
+function popularSelectTamanho(selectEl, valorAtual) {
+    selectEl.innerHTML = "";
+    TAMANHOS_ITEM.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t.key;
+        opt.innerText = t.label;
+        selectEl.appendChild(opt);
+    });
+    selectEl.value = (valorAtual && TAMANHOS_ITEM.some(t => t.key === valorAtual)) ? valorAtual : TAMANHOS_ITEM[0].key;
+}
+
 function prepararModalItem(existente, ehBanco) {
     el.modalCampoTag.style.display = "flex";
     el.modalCampoPeso.style.display = "flex";
+    el.modalCampoVolume.style.display = "flex";
+    el.modalCampoTamanho.style.display = "flex";
     // Item do Banco Global não tem "categoria" (levando/casa) nem
     // "guardar dentro de" — isso só existe quando o item está de fato
     // dentro de uma ficha.
@@ -7323,21 +7497,25 @@ function prepararModalItem(existente, ehBanco) {
         el.modalNome.value = existente.nome || "";
         el.modalTag.value = existente.tag || "";
         el.modalPeso.value = existente.pesoUnitario ?? existente.peso ?? 0;
+        el.modalVolume.value = existente.volumeUnitario ?? existente.volume ?? 0;
+        popularSelectTamanho(el.modalTamanho, existente.tamanho);
         if (!ehBanco) {
             el.modalCategoriaItem.value = existente.categoria || "levando";
             popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe || "");
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { capacidadeVolume: existente.capacidadeVolume, tamanhoMaximoAceito: existente.tamanhoMaximoAceito });
         el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
+        el.modalVolume.value = 0;
+        popularSelectTamanho(el.modalTamanho, null);
         if (!ehBanco) {
             el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
             popularSelectGuardarDentro(null, "");
         }
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
         el.modalEquipavel.checked = false;
     }
 
@@ -7371,9 +7549,11 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalNome.value = it.nome;
                 el.modalTag.value = it.tag || "";
                 el.modalPeso.value = it.pesoUnitario ?? it.peso ?? 0;
+                el.modalVolume.value = it.volumeUnitario ?? it.volume ?? 0;
+                popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { capacidadeVolume: it.capacidadeVolume, tamanhoMaximoAceito: it.tamanhoMaximoAceito });
                 el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
@@ -7467,14 +7647,33 @@ function atualizarVisibilidadeArmaFogo(armaConfig) {
         el.modalArmaRecuo.value = (cfg.recuo && PADROES_RECUO.some(p => p.key === cfg.recuo)) ? cfg.recuo : PADROES_RECUO[0].key;
         el.modalArmaEfeitoExtra.value = cfg.efeitoExtra || "";
 
+        // "Usa carregador?" agora é escolha explícita (checkbox), não mais
+        // automática por calibre — ver armaUsaCarregador em ficha.js. Item
+        // sem esse campo ainda gravado (criado antes dele existir) cai no
+        // fallback de sempre: só escopeta (12 gauge) não usava carregador.
         const calibreArmaAtual = (el.modalCampoCalibre.style.display !== "none") ? el.modalCalibre.value : null;
-        const ehEscopeta = ehCalibreEscopeta(calibreArmaAtual);
-        // Escopeta (12 gauge) não usa carregador — some com o campo em
-        // vez de mostrar um select que não se aplica a essa arma.
-        if (el.modalCampoArmaCarregador) el.modalCampoArmaCarregador.style.display = ehEscopeta ? "none" : "flex";
-        if (!ehEscopeta) popularCarregadorAnexado(cfg.carregadorId);
+        if (el.modalArmaUsaCarregador) {
+            el.modalArmaUsaCarregador.checked = (typeof cfg.usaCarregador === "boolean") ? cfg.usaCarregador : !ehCalibreEscopeta(calibreArmaAtual);
+        }
+        if (el.modalArmaTemCamaraExtra) el.modalArmaTemCamaraExtra.checked = !!cfg.temCamaraExtra;
+        atualizarVisibilidadeCamposCarregador(cfg.carregadorId);
     }
 }
+
+// Mostra/esconde "Capacidade +1" e "Carregador anexado" conforme o
+// checkbox "Usa carregador?" — e, se o carregador anexado ficar visível,
+// repopula o select com os carregadores compatíveis do calibre atual.
+function atualizarVisibilidadeCamposCarregador(carregadorIdAtual) {
+    const usaCarregador = el.modalArmaUsaCarregador ? el.modalArmaUsaCarregador.checked : true;
+    if (el.modalCampoArmaCamaraExtra) el.modalCampoArmaCamaraExtra.style.display = usaCarregador ? "flex" : "none";
+    if (!usaCarregador && el.modalArmaTemCamaraExtra) el.modalArmaTemCamaraExtra.checked = false;
+    if (el.modalCampoArmaCarregador) el.modalCampoArmaCarregador.style.display = usaCarregador ? "flex" : "none";
+    if (usaCarregador) popularCarregadorAnexado(carregadorIdAtual);
+}
+document.getElementById("modal-arma-usa-carregador")?.addEventListener("change", () => {
+    if (el.modalConfigArmaFogo.style.display === "none") return;
+    atualizarVisibilidadeCamposCarregador(null);
+});
 
 // Popula o select "Carregador anexado" só com carregadores do inventário
 // que casam com o Calibre específico selecionado na arma (campo próprio,
@@ -7507,13 +7706,11 @@ document.getElementById("modal-classe-protecao")?.addEventListener("change", () 
 });
 
 // Trocar o Calibre da arma reavalia quais carregadores aparecem como
-// compatíveis no select "Carregador anexado" — ou some com o campo, se
-// o novo calibre for de escopeta (12 gauge não usa carregador).
-document.getElementById("modal-calibre")?.addEventListener("change", (e) => {
+// compatíveis no select "Carregador anexado" (só repopula se o campo
+// estiver visível — depende do checkbox "Usa carregador?").
+document.getElementById("modal-calibre")?.addEventListener("change", () => {
     if (el.modalConfigArmaFogo.style.display === "none") return;
-    const ehEscopeta = ehCalibreEscopeta(e.target.value);
-    if (el.modalCampoArmaCarregador) el.modalCampoArmaCarregador.style.display = ehEscopeta ? "none" : "flex";
-    if (!ehEscopeta) popularCarregadorAnexado(null);
+    if (el.modalCampoArmaCarregador && el.modalCampoArmaCarregador.style.display !== "none") popularCarregadorAnexado(null);
 });
 
 // Monta a lista de checkboxes "Tipos de dano reduzidos" + valor de
@@ -7556,7 +7753,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma": arma
     // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
@@ -7575,13 +7772,27 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     el.modalCampoCarregadorCapacidade.style.display = exigeCapacidade ? "flex" : "none";
     if (exigeCapacidade) el.modalCarregadorCapacidade.value = (carregadorConfigAtual && carregadorConfigAtual.capacidadeMax) || 10;
 
+    // Recipiente (ex.: mochila) — capacidade em volume (soma máxima do
+    // que cabe dentro) e maior tamanho aceito (trava binária, ver
+    // tamanhoCabe em dados-manual.js). Só aparecem pra tag "recipiente".
+    const container = ehContainer(tagKey);
+    el.modalCampoCapacidadeVolume.style.display = container ? "flex" : "none";
+    el.modalCampoTamanhoMaximo.style.display = container ? "flex" : "none";
+    if (container) {
+        el.modalCapacidadeVolume.value = (recipienteConfigAtual && recipienteConfigAtual.capacidadeVolume) || 0;
+        popularSelectTamanho(el.modalTamanhoMaximo, recipienteConfigAtual && recipienteConfigAtual.tamanhoMaximoAceito);
+    }
+
     // Projétil/munição — quantidade de rounds que ESTE item representa.
     // Editável direto no modal: assim dá pra ter um único item "9mm"
     // com 60 unidades, por exemplo, em vez de precisar criar/duplicar
     // vários itens do mesmo calibre só pra empilhar munição.
     const exigeQuantidadeProjetil = tagExigeQuantidadeProjetil(tagKey);
     el.modalCampoProjetilQuantidade.style.display = exigeQuantidadeProjetil ? "flex" : "none";
-    if (exigeQuantidadeProjetil) el.modalProjetilQuantidade.value = (projetilConfigAtual && projetilConfigAtual.quantidade) ?? 1;
+    if (exigeQuantidadeProjetil) {
+        el.modalProjetilQuantidade.value = (projetilConfigAtual && projetilConfigAtual.quantidade) ?? 1;
+        atualizarVolumeTotalProjetilModal();
+    }
 
     // Material de criação — tipo (obrigatório, lista fechada do manual),
     // qualidade (se aquele tipo tiver variação) e quantidade em estoque
@@ -7688,6 +7899,11 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     const temQuantidade = tagKey && tagTemQuantidadeGeral(tagKey);
     el.modalCampoQuantidade.style.display = temQuantidade ? "flex" : "none";
     if (el.modalLabelPeso) el.modalLabelPeso.textContent = temQuantidade ? "Peso unitário (kg)" : "Peso (kg)";
+    if (el.modalLabelVolume) {
+        el.modalLabelVolume.textContent = ehProjetil(tagKey)
+            ? "Volume unitário (por projétil)"
+            : (temQuantidade ? "Volume unitário" : "Volume");
+    }
     if (temQuantidade) {
         el.modalQuantidade.value = Math.max(1, Number(quantidadeAtual) || 1);
         atualizarPesoTotalModal();
@@ -7736,7 +7952,7 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
 });
 
 document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
@@ -7749,15 +7965,39 @@ document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) =
 // visível (item de uma tag que aceita quantidade genérica).
 function atualizarPesoTotalModal() {
     const unitario = Math.max(0, Number(el.modalPeso.value) || 0);
+    const volumeUnitario = Math.max(0, Number(el.modalVolume.value) || 0);
     const quantidade = Math.max(1, Number(el.modalQuantidade.value) || 1);
     el.modalQuantidadePesoTotal.textContent = `Peso total: ${(unitario * quantidade).toFixed(2).replace(/\.?0+$/, "") || "0"} kg`;
+    el.modalQuantidadeVolumeTotal.textContent = `Volume total: ${(volumeUnitario * quantidade).toFixed(2).replace(/\.?0+$/, "") || "0"}`;
 }
 document.getElementById("modal-peso")?.addEventListener("input", () => {
     if (el.modalCampoQuantidade.style.display !== "none") atualizarPesoTotalModal();
 });
+document.getElementById("modal-volume")?.addEventListener("input", () => {
+    if (el.modalCampoQuantidade.style.display !== "none") atualizarPesoTotalModal();
+    if (el.modalCampoProjetilQuantidade.style.display !== "none") atualizarVolumeTotalProjetilModal();
+});
 document.getElementById("modal-quantidade")?.addEventListener("input", () => {
     if (Number(el.modalQuantidade.value) < 1) el.modalQuantidade.value = 1;
     atualizarPesoTotalModal();
+});
+
+// Volume total de munição (Fase 4) — mesma fórmula de "unitário ×
+// quantidade" de sempre, mas puxando a quantidade do campo aninhado
+// próprio de projétil (modal-projetil-quantidade), não do campo de
+// quantidade genérico (que fica escondido pra essa tag — ver
+// tagTemQuantidadeGeral em dados-manual.js). Math.floor é o que faz o
+// "estoque pequeno não ocupa espaço" acontecer sozinho: volumeUnitario
+// baixo (ex.: 0.1) vezes poucas balas arredonda pra 0, sem precisar de
+// nenhum if especial pra "abaixo de N não conta".
+function atualizarVolumeTotalProjetilModal() {
+    const volumeUnitario = Math.max(0, Number(el.modalVolume.value) || 0);
+    const quantidadeProjetil = Math.max(0, Number(el.modalProjetilQuantidade.value) || 0);
+    el.modalProjetilVolumeTotal.textContent = `Volume total: ${Math.floor(volumeUnitario * quantidadeProjetil)}`;
+}
+document.getElementById("modal-projetil-quantidade")?.addEventListener("input", () => {
+    if (Number(el.modalProjetilQuantidade.value) < 0) el.modalProjetilQuantidade.value = 0;
+    atualizarVolumeTotalProjetilModal();
 });
 
 // Repopula o select de Qualidade conforme o Tipo de material escolhido
@@ -8000,11 +8240,23 @@ async function salvarPericiaDoModal(id) {
 // Arma de Fogo (capacidade, disparos por turno, precisão, dificuldade
 // de acerto, alcance, recuo, efeito extra) só quando a perícia vinculada
 // for uma perícia de Arma de Fogo.
-function lerConfigArmaDoModal(periciaUso, calibre) {
+// Monta o objeto `arma` a partir do modal — compartilhado entre item de
+// inventário e item do Banco Global. Sempre grava danoBase (número) e
+// tipoDano; escala só se não for arma de fogo; e as características de
+// Arma de Fogo (capacidade, disparos por turno, precisão, dificuldade
+// de acerto, alcance, recuo, efeito extra) só quando a perícia vinculada
+// for uma perícia de Arma de Fogo. `armaExistente` é o `arma` do item
+// antes de editar (ou null pra item novo/Banco Global) — só serve pra
+// preservar `camaraCarregada`, que é estado de jogo (bala já carregada
+// na câmara), não um campo que o modal deixa o jogador escolher direto.
+function lerConfigArmaDoModal(periciaUso, calibre, armaExistente) {
     const ehFogo = ehArmaDeFogo(periciaUso);
-    // Escopeta (12 gauge) não usa carregador — nunca grava carregadorId
-    // pra ela, mesmo que o select escondido ainda tenha um valor antigo.
-    const usaCarregador = ehFogo && !ehCalibreEscopeta(calibre);
+    // "Usa carregador?" é escolha explícita (checkbox) desde que deixou
+    // de ser automática por calibre — ver armaUsaCarregador. Sem
+    // carregador, nunca grava carregadorId, mesmo que o select escondido
+    // ainda tenha um valor antigo.
+    const usaCarregador = ehFogo && !!(el.modalArmaUsaCarregador ? el.modalArmaUsaCarregador.checked : true);
+    const temCamaraExtra = ehFogo && usaCarregador && !!(el.modalArmaTemCamaraExtra && el.modalArmaTemCamaraExtra.checked);
     return {
         danoBase: Number(el.modalArmaDanoBase.value) || 0,
         tipoDano: el.modalArmaTipoDano.value,
@@ -8022,7 +8274,10 @@ function lerConfigArmaDoModal(periciaUso, calibre) {
         alcance: ehFogo ? (el.modalArmaAlcance.value || null) : null,
         recuo: ehFogo ? (el.modalArmaRecuo.value || null) : null,
         efeitoExtra: ehFogo ? el.modalArmaEfeitoExtra.value.trim() : "",
-        carregadorId: usaCarregador ? (el.modalArmaCarregador.value || null) : null
+        usaCarregador,
+        carregadorId: usaCarregador ? (el.modalArmaCarregador.value || null) : null,
+        temCamaraExtra,
+        camaraCarregada: temCamaraExtra ? !!(armaExistente && armaExistente.camaraCarregada) : false
     };
 }
 
@@ -8051,19 +8306,47 @@ function lerSaldoDoItemDoModal(tag) {
     return { ehSaldo: true, saldoValor: Number(el.modalItemSaldoValor.value) || 0 };
 }
 
-// Lê peso e quantidade do modal e devolve o trio pronto pra gravar no
-// item: `peso` continua sendo o peso TOTAL do registro (é o que
-// pesoTotalPorCategoria e o resto do código já somam/leem direto, sem
-// precisar saber de quantidade) — pra tags sem quantidade genérica
-// (projétil/material/carregador, ver tagTemQuantidadeGeral em
-// dados-manual.js) ele é só o valor digitado, igual sempre foi.
-function lerPesoEQuantidadeDoModal(tag) {
+// Lê peso, volume e quantidade do modal e devolve tudo pronto pra
+// gravar no item: `peso`/`volume` continuam sendo os totais do
+// registro (é o que pesoTotalPorCategoria, volumeTotalDentroDe e o
+// resto do código já somam/leem direto, sem precisar saber de
+// quantidade) — pra tags sem quantidade genérica (projétil/material/
+// carregador, ver tagTemQuantidadeGeral em dados-manual.js) eles são
+// só os valores digitados, igual sempre foi. Volume usa exatamente a
+// mesma quantidade que peso, pra não duplicar o campo no modal.
+function lerPesoVolumeEQuantidadeDoModal(tag) {
     const pesoDigitado = Math.max(0, Number(el.modalPeso.value) || 0);
+    const volumeDigitado = Math.max(0, Number(el.modalVolume.value) || 0);
+
+    // Projétil (Fase 4) — caso especial: usa a PRÓPRIA quantidade de
+    // projéteis (it.projetil.quantidade, campo aninhado — não o
+    // "quantidade" genérico, que fica escondido pra essa tag) pra
+    // multiplicar o volume, arredondando pra baixo. O Math.floor
+    // reaproveita a mesma fórmula de unitário × quantidade de sempre,
+    // sem nenhum if especial: um estoque pequeno de munição (poucas
+    // balas × volume unitário baixo) simplesmente arredonda pra 0.
+    if (ehProjetil(tag)) {
+        const quantidadeProjetil = Math.max(0, Number(el.modalProjetilQuantidade.value) || 0);
+        return {
+            peso: pesoDigitado,
+            pesoUnitario: null,
+            volume: Math.floor(volumeDigitado * quantidadeProjetil),
+            volumeUnitario: volumeDigitado,
+            quantidade: null
+        };
+    }
+
     if (!tagTemQuantidadeGeral(tag)) {
-        return { peso: pesoDigitado, pesoUnitario: null, quantidade: null };
+        return { peso: pesoDigitado, pesoUnitario: null, volume: volumeDigitado, volumeUnitario: null, quantidade: null };
     }
     const quantidade = Math.max(1, Math.round(Number(el.modalQuantidade.value)) || 1);
-    return { peso: +(pesoDigitado * quantidade).toFixed(2), pesoUnitario: pesoDigitado, quantidade };
+    return {
+        peso: +(pesoDigitado * quantidade).toFixed(2),
+        pesoUnitario: pesoDigitado,
+        volume: +(volumeDigitado * quantidade).toFixed(2),
+        volumeUnitario: volumeDigitado,
+        quantidade
+    };
 }
 
 async function salvarItemDoModal(id) {
@@ -8075,7 +8358,7 @@ async function salvarItemDoModal(id) {
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
     const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
-    const { peso, pesoUnitario, quantidade } = lerPesoEQuantidadeDoModal(tag);
+    const { peso, pesoUnitario, volume, volumeUnitario, quantidade } = lerPesoVolumeEQuantidadeDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -8089,6 +8372,14 @@ async function salvarItemDoModal(id) {
     const exigeLocalProtegido = tagExigeLocalProtegido(tag);
     const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
     if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
+
+    const tamanho = el.modalTamanho.value || null;
+
+    // Recipiente (mochila, bolsa...) — capacidade em volume e maior
+    // tamanho aceito, só gravados quando a tag é "recipiente" (ver
+    // ehContainer em dados-manual.js).
+    const capacidadeVolume = ehContainer(tag) ? Math.max(0, Number(el.modalCapacidadeVolume.value) || 0) : null;
+    const tamanhoMaximoAceito = ehContainer(tag) ? (el.modalTamanhoMaximo.value || null) : null;
 
     // "Guardar dentro de" (item-recipiente) — só existe pra item de
     // ficha (não pro Banco Global). Revalida contra ciclo aqui também
@@ -8105,6 +8396,21 @@ async function salvarItemDoModal(id) {
         if (valorDentroDe && id && itemDescendeDe(fichaAtual, valorDentroDe, id)) {
             toast("Não dá pra guardar um item dentro dele mesmo (ou de algo já guardado dentro dele).", "erro");
             return;
+        }
+        // "Cabe ou não cabe" (Fase 2/3): tamanho e capacidade do
+        // recipiente escolhido, contra o volume/tamanho deste item.
+        // idExcluir = id (quando editando) evita contar o volume do
+        // próprio item duas vezes, caso ele já estivesse guardado ali.
+        if (valorDentroDe) {
+            const resultado = itemCabeNoContainer(fichaAtual, valorDentroDe, volume, tamanho, id || null);
+            if (!resultado.cabe) {
+                const nomeContainer = fichaAtual.inventario[valorDentroDe]?.nome || "recipiente";
+                const msg = resultado.motivo === "tamanho"
+                    ? `"${nomeContainer}" não aceita item desse tamanho.`
+                    : `"${nomeContainer}" não tem espaço sobrando (capacidade de volume estourada).`;
+                toast(msg, "erro");
+                return;
+            }
         }
         dentroDe = valorDentroDe;
         if (dentroDe && fichaAtual.inventario[dentroDe]) {
@@ -8150,6 +8456,11 @@ async function salvarItemDoModal(id) {
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         peso,
         pesoUnitario,
+        volume,
+        volumeUnitario,
+        tamanho,
+        capacidadeVolume,
+        tamanhoMaximoAceito,
         quantidade,
         categoria: categoriaFinal,
         dentroDe,
@@ -8160,7 +8471,7 @@ async function salvarItemDoModal(id) {
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
-        arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null,
+        arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre, existenteItem.arma) : null,
         carregador,
         projetil,
         // Equipável (checkbox independente da tag — ver atualizarCamposPorTag):
@@ -8224,7 +8535,10 @@ async function salvarItemBancoDoModal(id) {
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
     const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
-    const { peso, pesoUnitario, quantidade } = lerPesoEQuantidadeDoModal(tag);
+    const { peso, pesoUnitario, volume, volumeUnitario, quantidade } = lerPesoVolumeEQuantidadeDoModal(tag);
+    const tamanho = el.modalTamanho.value || null;
+    const capacidadeVolume = ehContainer(tag) ? Math.max(0, Number(el.modalCapacidadeVolume.value) || 0) : null;
+    const tamanhoMaximoAceito = ehContainer(tag) ? (el.modalTamanhoMaximo.value || null) : null;
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -8254,8 +8568,8 @@ async function salvarItemBancoDoModal(id) {
     if (tagExigeQuantidadeProjetil(tag)) {
         projetil = { quantidade: Math.max(0, Number(el.modalProjetilQuantidade.value) || 0) };
     }
-    const armaConfig = ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre) : null;
-    if (armaConfig) armaConfig.carregadorId = null;
+    const armaConfig = ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre, null) : null;
+    if (armaConfig) { armaConfig.carregadorId = null; armaConfig.camaraCarregada = false; }
 
     const registro = {
         nome,
@@ -8265,6 +8579,11 @@ async function salvarItemBancoDoModal(id) {
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         peso,
         pesoUnitario,
+        volume,
+        volumeUnitario,
+        tamanho,
+        capacidadeVolume,
+        tamanhoMaximoAceito,
         quantidade,
         periciaUso,
         ehSaldo,
@@ -9431,7 +9750,12 @@ function montarPainelAcoesPendentes(corpo) {
                 toast("Ação confirmada e aplicada.");
             } catch (err) {
                 console.error(err);
-                toast("Falha ao confirmar a ação.", "erro");
+                // guardar_item revalida no confirmarAcaoPendente (Fase 6) e,
+                // se não couber mais, já cancela (remove) o pedido e lança
+                // um erro com o motivo — mostra ele direto pro Mestre em vez
+                // da mensagem genérica, e a lista se atualiza sozinha (o
+                // pedido já saiu de acoesPendentes).
+                toast(err && err.message ? err.message : "Falha ao confirmar a ação.", "erro");
             }
         });
         const btnRejeitar = document.createElement("button");

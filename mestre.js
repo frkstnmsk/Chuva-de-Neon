@@ -20,6 +20,7 @@ import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, ehContainer } from "./dados-manual.js";
+import { itemCabeNoContainer } from "./inventario.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
@@ -1928,6 +1929,30 @@ export async function confirmarAcaoPendente(acao) {
         // Guardar move o item junto pra categoria do recipiente
         // (payload.categoriaNova já vem calculada de lá); soltar mantém
         // a categoria como está.
+        //
+        // Revalidação (Fase 6): o jogador já é barrado client-side se o
+        // item obviamente não cabe (ver Fase 5), mas entre o pedido ser
+        // enviado e o Mestre confirmar, a ficha pode ter mudado — outro
+        // item pode ter sido guardado no mesmo recipiente nesse meio-
+        // tempo, por exemplo. Por isso, ao GUARDAR (nunca ao soltar),
+        // busca o estado mais atual do inventário e roda a mesma checagem
+        // de tamanho/capacidade de novo antes de gravar; se não couber
+        // mais, cancela a ação pendente (em vez de gravar um estado
+        // inconsistente) e avisa o motivo pro Mestre decidir o que fazer.
+        if (payload.containerIdNovo) {
+            const snapInventario = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+            const inventarioAtual = snapInventario.exists() ? snapInventario.val() : {};
+            const itemGuardando = inventarioAtual[payload.itemId] || {};
+            const resultado = itemCabeNoContainer({ inventario: inventarioAtual }, payload.containerIdNovo, itemGuardando.volume, itemGuardando.tamanho, payload.itemId);
+            if (!resultado.cabe) {
+                const nomeContainer = inventarioAtual[payload.containerIdNovo]?.nome || payload.containerNomeNovo || "recipiente";
+                const motivo = resultado.motivo === "tamanho"
+                    ? `"${nomeContainer}" não aceita item desse tamanho.`
+                    : `"${nomeContainer}" não tem mais espaço sobrando (capacidade de volume estourada).`;
+                await rejeitarAcaoPendente(acao.id);
+                throw new Error(`Pedido cancelado: ${motivo}`);
+            }
+        }
         const dadosGuardar = { dentroDe: payload.containerIdNovo || null };
         if (payload.containerIdNovo && payload.categoriaNova) dadosGuardar.categoria = payload.categoriaNova;
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosGuardar);

@@ -172,8 +172,35 @@ export function normalizarInventario(lista) {
             // (pesoUnitario × quantidade), calculado e gravado no
             // momento de salvar o item.
             pesoUnitario: it.pesoUnitario ?? null,
+            // Volume/tamanho (Fase 0/7 do sistema "cabe ou não cabe" —
+            // ver dados-manual.js e inventario.js). Item antigo (criado
+            // antes desses campos existirem) cai nos defaults mais
+            // permissivos possíveis: volume 0 e tamanho "pequeno" (o
+            // menor da lista — tamanhoCabe deixa passar em qualquer
+            // recipiente) — assim ele não "empurra" a capacidade de
+            // ninguém nem trava por tamanho até o jogador/Mestre editar
+            // o item e preencher de verdade.
+            volume: it.volume ?? 0,
+            volumeUnitario: it.volumeUnitario ?? null,
+            tamanho: it.tamanho || "pequeno",
+            // Recipiente antigo sem capacidadeVolume/tamanhoMaximoAceito
+            // definidos fica null (não 0/"pequeno") — null é o valor que
+            // itemCabeNoContainer/tamanhoCabe leem como "sem limite",
+            // então o recipiente continua aceitando qualquer coisa até o
+            // Mestre preencher esses campos de propósito. Isso evita
+            // travar de uma vez toda mochila já em uso assim que a
+            // funcionalidade entra no ar.
+            capacidadeVolume: it.capacidadeVolume ?? null,
+            tamanhoMaximoAceito: it.tamanhoMaximoAceito || null,
             quantidade: it.quantidade ?? null,
             categoria: it.categoria || "levando",
+            // Item guardado dentro de um recipiente (mochila etc. — ver
+            // ehContainer/itensDentroDe em inventario.js). Estava faltando
+            // aqui — mesmo bug de "campo apagado a cada recarga" que
+            // materialTipo/ehSaldo já tiveram (ver comentário mais abaixo):
+            // sem essa linha, todo item guardado numa mochila "soltava"
+            // sozinho assim que a ficha recarregasse.
+            dentroDe: it.dentroDe || null,
             // Armas precisam estar equipadas (empunhadas) pra serem
             // usadas em combate — ver itemPodeUsar em inventario.js.
             // Itens que já existiam antes dessa trava nascem desequipados

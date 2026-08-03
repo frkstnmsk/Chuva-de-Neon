@@ -4,7 +4,8 @@
 
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis
+    ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
+    TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe
 } from "./dados-manual.js";
 import { calcularCarga } from "./regras.js";
 
@@ -153,6 +154,50 @@ export function itensDentroDe(fichaAtual, containerId) {
         .map(([id, it]) => ({ id, ...it }));
 }
 
+// Soma o volume (item.volume) de tudo que está guardado dentro de um
+// recipiente. idExcluir tira um item específico da soma — usado
+// quando o item sendo checado JÁ está guardado ali (edição: não faz
+// sentido contar o volume dele duas vezes contra a própria capacidade
+// do recipiente onde ele já mora).
+export function volumeTotalDentroDe(fichaAtual, containerId, idExcluir) {
+    return itensDentroDe(fichaAtual, containerId)
+        .filter(it => it.id !== idExcluir)
+        .reduce((acc, it) => acc + (Number(it.volume) || 0), 0);
+}
+
+// A checagem central de "cabe ou não cabe" — duas travas independentes,
+// na ordem que faz mais sentido explicar pro jogador (tamanho primeiro,
+// é o motivo mais "óbvio" fisicamente; capacidade depois, é aritmética):
+//   1. Tamanho: item "Comprido" não entra num recipiente que só aceita
+//      até "Médio", nem que sobre capacidade numérica (ver tamanhoCabe
+//      em dados-manual.js).
+//   2. Capacidade: soma do que já está guardado + o volume do item não
+//      pode passar da capacidadeVolume do recipiente.
+// Recipiente sem capacidadeVolume definida (dado antigo/não configurado
+// ainda — Fase 7) não trava por capacidade, só por tamanho se este
+// estiver definido. Retorna { cabe, motivo } — motivo é null quando cabe,
+// senão "tamanho" ou "capacidade" (pra montar a mensagem de erro certa
+// em ficha.js).
+export function itemCabeNoContainer(fichaAtual, containerId, itemVolume, itemTamanho, idExcluir) {
+    const container = (fichaAtual.inventario || {})[containerId];
+    if (!container || !ehContainer(container.tag)) return { cabe: true, motivo: null };
+
+    if (!tamanhoCabe(itemTamanho, container.tamanhoMaximoAceito)) {
+        return { cabe: false, motivo: "tamanho" };
+    }
+
+    const capacidade = Number(container.capacidadeVolume);
+    if (capacidade > 0) {
+        const jaOcupado = volumeTotalDentroDe(fichaAtual, containerId, idExcluir);
+        const volumeItem = Number(itemVolume) || 0;
+        if (jaOcupado + volumeItem > capacidade) {
+            return { cabe: false, motivo: "capacidade" };
+        }
+    }
+
+    return { cabe: true, motivo: null };
+}
+
 // Sobe a cadeia de "dentroDe" a partir de itemId — true se em algum
 // ponto encontrar possivelAncestralId (inclusive o próprio itemId).
 // Usado pra impedir guardar um recipiente dentro de si mesmo ou dentro
@@ -185,4 +230,4 @@ export function listaContainersDisponiveis(fichaAtual, idItemAtual) {
         .map(([id, it]) => ({ id, ...it }));
 }
 
-export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag };
+export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe };
