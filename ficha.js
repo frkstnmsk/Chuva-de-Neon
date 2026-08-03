@@ -1000,15 +1000,43 @@ function gerenciarLayoutAbas() {
     }
     function posicaoDeInsercao(container, x, y) {
         const itens = [...container.children].filter(c => c !== arrastando && c.classList.contains("tab-btn"));
-        let melhor = null, menorDist = Infinity;
+        if (!itens.length) return null;
+
+        // Agrupa os itens por linha (mesmo "top" aproximado) antes de
+        // comparar X. Sem isso, o item mais próximo em linha reta podia
+        // estar numa linha diferente da que o ponteiro está sobre —
+        // já que os containers usam flex-wrap — fazendo a aba pular
+        // pra um lugar bem diferente de onde foi solta.
+        const linhas = [];
         itens.forEach(item => {
             const r = item.getBoundingClientRect();
-            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-            const d = Math.hypot(x - cx, y - cy);
-            if (d < menorDist) { menorDist = d; melhor = { item, cx }; }
+            let linha = linhas.find(l => Math.abs(l.top - r.top) < r.height / 2);
+            if (!linha) { linha = { top: r.top, bottom: r.bottom, itens: [] }; linhas.push(linha); }
+            linha.itens.push({ item, rect: r });
+            linha.top = Math.min(linha.top, r.top);
+            linha.bottom = Math.max(linha.bottom, r.bottom);
         });
-        if (!melhor) return null;
-        return x < melhor.cx ? melhor.item : melhor.item.nextElementSibling;
+
+        // Linha mais próxima do ponteiro no eixo Y: a que contém o Y,
+        // ou (se estiver acima da primeira/abaixo da última) a mais
+        // perto de todas.
+        let linhaAlvo = linhas.find(l => y >= l.top && y <= l.bottom);
+        if (!linhaAlvo) {
+            linhaAlvo = linhas.reduce((melhor, l) => {
+                const distAtual = Math.min(Math.abs(y - l.top), Math.abs(y - l.bottom));
+                const distMelhor = Math.min(Math.abs(y - melhor.top), Math.abs(y - melhor.bottom));
+                return distAtual < distMelhor ? l : melhor;
+            }, linhas[0]);
+        }
+
+        // Dentro da linha escolhida, decide antes/depois de cada item
+        // olhando só o X (ordem visual da esquerda pra direita).
+        const itensLinha = linhaAlvo.itens.sort((a, b) => a.rect.left - b.rect.left);
+        for (const { item, rect } of itensLinha) {
+            const cx = rect.left + rect.width / 2;
+            if (x < cx) return item;
+        }
+        return itensLinha[itensLinha.length - 1].item.nextElementSibling;
     }
     function onPointerMoveArrastar(e) {
         if (!arrastando) return;
