@@ -914,11 +914,32 @@ function gerenciarLayoutAbas() {
         el.tabsMaisWrap.style.display = (modoAtual === "compacto" && el.tabsMaisMenu.children.length) ? "" : "none";
     }
 
+    // A caixa "Mais", quando vazia, não tinha nenhum conteúdo visual
+    // além do min-height do CSS — o que podia deixá-la sem área real
+    // pra soltar uma aba (o elemento sob o ponteiro deixava de ser
+    // ela). Esse placeholder garante que ela sempre tenha algo visível
+    // e "pegável" mesmo com zero abas dentro.
+    function atualizarPlaceholderMais() {
+        const temAbas = !!el.tabsMaisMenu.querySelector(".tab-btn[data-tab]");
+        let placeholder = el.tabsMaisMenu.querySelector(".tabs-mais-vazio");
+        if (!temAbas) {
+            if (!placeholder) {
+                placeholder = document.createElement("span");
+                placeholder.className = "tabs-mais-vazio";
+                placeholder.textContent = "Arraste uma aba pra cá pra escondê-la no menu \"Mais\"";
+                el.tabsMaisMenu.appendChild(placeholder);
+            }
+        } else if (placeholder) {
+            placeholder.remove();
+        }
+    }
+
     function sairModoEdicao() {
         el.tabsNav.classList.remove("editando");
         el.tabsEditarBtn.innerHTML = '<i data-lucide="move"></i> Organizar';
         el.tabsEditarBtn.classList.remove("ativo");
         el.tabsMaisWrap.classList.remove("aberto");
+        el.tabsMaisWrap.style.removeProperty("display");
         atualizarVisibilidadeMais();
         atualizarIcones();
     }
@@ -928,7 +949,7 @@ function gerenciarLayoutAbas() {
         sairModoEdicao();
 
         if (modo === "fileira") {
-            [...el.tabsMaisMenu.children].forEach(b => el.tabsFixadas.appendChild(b));
+            [...el.tabsMaisMenu.children].forEach(b => b.classList.contains("tab-btn") && el.tabsFixadas.appendChild(b));
             el.tabsEditarBtn.disabled = true;
             el.tabsModoBtn.innerHTML = '<i data-lucide="layout-grid"></i> Compacto';
             el.tabsModoBtn.classList.add("ativo");
@@ -950,6 +971,7 @@ function gerenciarLayoutAbas() {
             el.tabsModoBtn.innerHTML = '<i data-lucide="rows-3"></i> Fileira';
             el.tabsModoBtn.classList.remove("ativo");
         }
+        atualizarPlaceholderMais();
         atualizarVisibilidadeMais();
         aplicarVisibilidadeAbasNpc();
         salvar();
@@ -968,11 +990,17 @@ function gerenciarLayoutAbas() {
         } else {
             el.tabsNav.classList.add("editando");
             el.tabsMaisWrap.classList.remove("aberto");
+            // Força a exibição da caixa "Mais" direto via JS (em vez de
+            // depender só da cascata do CSS) — remove qualquer chance
+            // de ela ficar com display:none herdado do estado inicial.
+            el.tabsMaisWrap.style.setProperty("display", "block", "important");
+            atualizarPlaceholderMais();
             el.tabsEditarBtn.innerHTML = '<i data-lucide="check"></i> Concluir';
             el.tabsEditarBtn.classList.add("ativo");
             atualizarIcones();
         }
     });
+
 
     // Dropdown do "Mais" (só relevante fora do modo de organizar, onde a
     // caixa fica sempre aberta via CSS pra dar pra soltar abas nela).
@@ -1048,6 +1076,7 @@ function gerenciarLayoutAbas() {
         const container = containerNoPonto(e.clientX, e.clientY) || arrastando.parentElement;
         const ref = posicaoDeInsercao(container, e.clientX, e.clientY);
         if (ref) container.insertBefore(arrastando, ref); else container.appendChild(arrastando);
+        atualizarPlaceholderMais();
     }
     function onPointerUpArrastar(e) {
         if (!arrastando) return;
@@ -1064,6 +1093,7 @@ function gerenciarLayoutAbas() {
         btn.removeEventListener("pointercancel", onPointerUpArrastar);
         arrastando = null;
         arrastoIniciado = false;
+        atualizarPlaceholderMais();
         atualizarVisibilidadeMais();
         salvar();
     }

@@ -432,6 +432,14 @@
 }
 .tabs-nav.editando .tab-btn { cursor: grab; }
 .tab-btn.arrastando { opacity: 0.45; cursor: grabbing; }
+.tabs-mais-vazio {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    font-style: italic;
+    padding: 4px 2px;
+}
 
 @media (max-width: 600px) {
     .tabs-controles { margin-left: 0; flex-basis: 100%; }
