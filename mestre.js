@@ -19,7 +19,7 @@ import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } f
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, ehContainer } from "./dados-manual.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
@@ -1864,7 +1864,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -1881,6 +1881,20 @@ export async function confirmarAcaoPendente(acao) {
     const { tipo, fichaId, payload } = acao;
 
     if (tipo === "remover_item") {
+        // Se o item removido era um recipiente com coisas guardadas
+        // dentro, solta os filhos (dentroDe = null) em vez de deixá-los
+        // "presos" apontando pra um item que não existe mais.
+        const snapFilhos = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+        if (snapFilhos.exists()) {
+            const inventarioAtual = snapFilhos.val();
+            const atualizacoesFilhos = {};
+            Object.entries(inventarioAtual).forEach(([itId, it]) => {
+                if (it && it.dentroDe === payload.itemId) atualizacoesFilhos[`${itId}/dentroDe`] = null;
+            });
+            if (Object.keys(atualizacoesFilhos).length) {
+                await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)), atualizacoesFilhos);
+            }
+        }
         await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
 
     } else if (tipo === "mover_item") {
@@ -1889,6 +1903,29 @@ export async function confirmarAcaoPendente(acao) {
         // (ver itemPodeUsar/itemPodeEquipar em inventario.js).
         if (payload.categoriaNova !== "levando") dadosMover.equipada = false;
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosMover);
+
+        // Se o item movido é um recipiente (mochila etc.), o que estava
+        // guardado dentro dele vai junto — muda de categoria também,
+        // mas continua guardado lá dentro (dentroDe não muda).
+        const snapItemMovido = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}/tag`)));
+        if (snapItemMovido.exists() && ehContainer(snapItemMovido.val())) {
+            const snapInventario = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+            if (snapInventario.exists()) {
+                const inventarioAtual = snapInventario.val();
+                const atualizacoesFilhos = {};
+                Object.entries(inventarioAtual).forEach(([itId, it]) => {
+                    if (it && it.dentroDe === payload.itemId) atualizacoesFilhos[`${itId}/categoria`] = payload.categoriaNova;
+                });
+                if (Object.keys(atualizacoesFilhos).length) {
+                    await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)), atualizacoesFilhos);
+                }
+            }
+        }
+
+    } else if (tipo === "guardar_item") {
+        // Guarda (ou solta, se containerIdNovo vier vazio) um item dentro
+        // de um recipiente — ver select-guardar-dentro em ficha.js.
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), { dentroDe: payload.containerIdNovo || null });
 
     } else if (tipo === "gastar_dinheiro") {
         const saldoId = payload.saldoId;

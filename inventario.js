@@ -4,7 +4,7 @@
 
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, calibresCompativeis
+    ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis
 } from "./dados-manual.js";
 import { calcularCarga } from "./regras.js";
 
@@ -137,4 +137,51 @@ export function listaProjeteisInventario(fichaAtual, calibre) {
         .map(([id, it]) => ({ id, ...it }));
 }
 
-export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag };
+// =====================================================================
+// Itens-recipiente (ex: mochila) — outros itens guardados "dentro"
+// (item.dentroDe = id do item-recipiente). Um item recipiente some da
+// hierarquia (não pode virar filho de si mesmo nem de um dos seus
+// próprios descendentes) — verificado por itemDescendeDe abaixo antes
+// de deixar o jogador escolher onde guardar algo no modal.
+// =====================================================================
+
+// Itens que estão guardados dentro de um recipiente específico.
+export function itensDentroDe(fichaAtual, containerId) {
+    if (!containerId) return [];
+    return Object.entries(fichaAtual.inventario || {})
+        .filter(([, it]) => it.dentroDe === containerId)
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+// Sobe a cadeia de "dentroDe" a partir de itemId — true se em algum
+// ponto encontrar possivelAncestralId (inclusive o próprio itemId).
+// Usado pra impedir guardar um recipiente dentro de si mesmo ou dentro
+// de algo que já está guardado dentro dele (ciclo).
+export function itemDescendeDe(fichaAtual, itemId, possivelAncestralId) {
+    if (!itemId || !possivelAncestralId) return false;
+    let atualId = itemId;
+    let guarda = 0; // trava de segurança contra loop infinito por dado corrompido
+    while (atualId && guarda < 100) {
+        if (atualId === possivelAncestralId) return true;
+        const atual = (fichaAtual.inventario || {})[atualId];
+        atualId = atual ? atual.dentroDe : null;
+        guarda++;
+    }
+    return false;
+}
+
+// Recipientes disponíveis pra guardar um item dentro — só os da mesma
+// categoria (Levando consigo / Em casa) e que não formariam um ciclo
+// (não pode ser o próprio item sendo editado nem um descendente dele).
+export function listaContainersDisponiveis(fichaAtual, categoria, idItemAtual) {
+    return Object.entries(fichaAtual.inventario || {})
+        .filter(([id, it]) =>
+            ehContainer(it.tag) &&
+            it.categoria === categoria &&
+            id !== idItemAtual &&
+            !(idItemAtual && itemDescendeDe(fichaAtual, id, idItemAtual))
+        )
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag };

@@ -748,6 +748,34 @@
 }
 .btn-toggle-equipada.desligado:hover { background: rgba(255,255,255,0.06); }
 .btn-toggle-equipada:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Recipientes de inventário (ex: mochila) e itens guardados dentro
+   deles — ver criarLiItem/renderizarInventario em ficha.js. */
+.btn-toggle-container {
+    background: transparent;
+    border: none;
+    color: var(--neon-blue);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0 2px;
+    line-height: 1;
+    vertical-align: middle;
+}
+.btn-toggle-container:hover { color: var(--neon-lime); }
+.entity-list-nested {
+    margin: 8px 0 0 18px !important;
+    padding-left: 14px;
+    border-left: 2px dashed rgba(255,255,255,0.12);
+}
+.entity-list li.entity-item-aninhado {
+    background: rgba(255, 255, 255, 0.02);
+    border-left-color: var(--neon-blue);
+}
+select.select-guardar-dentro {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+}
+
 .entity-list li.entidade-desativada { border-left-color: rgba(255,255,255,0.15); opacity: 0.6; }
 .entity-list li.entidade-desativada .entity-nome { color: var(--text-dim); }
 .entity-list li.entidade-desativada:hover { opacity: 0.85; }

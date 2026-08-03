@@ -277,6 +277,7 @@ export const TAGS_ITEM = [
     { key: "equipamento_medico", label: "Equipamento médico", temNivel: false },
     { key: "explosivo", label: "Explosivo", temNivel: false },
     { key: "material", label: "Material de criação", temNivel: false },
+    { key: "recipiente", label: "Recipiente (guarda outros itens)", temNivel: false },
     { key: "geral", label: "Geral / diverso", temNivel: false }
 ];
 
@@ -300,6 +301,13 @@ export function ehCarregador(tagKey) {
 
 export function ehProjetil(tagKey) {
     return tagKey === "projetil";
+}
+
+// Item "recipiente" (ex.: mochila, bolsa, malote) — outros itens do
+// inventário podem ser guardados dentro dele (ver item.dentroDe e as
+// funções de container em inventario.js).
+export function ehContainer(tagKey) {
+    return tagKey === "recipiente";
 }
 
 // Carregador, quando criado, define quantos projéteis cabem nele.

@@ -51,7 +51,8 @@ import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./nor
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
-    listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado
+    listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado,
+    ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis
 } from "./inventario.js";
 import {
     estadoInicialCriacao, funcaoDe, calcularPontosAtributoTotais,
@@ -181,6 +182,10 @@ let pvRecuperacaoContexto = null;
 let itensGlobaisCache = [];
 let receitasGlobaisCache = [];
 let categoriaInventarioAtiva = "levando";
+// IDs de itens-recipiente atualmente "abertos" (expandidos) na lista do
+// Inventário — só existe em memória local, não é salvo na ficha; some
+// ao recarregar a página. Ver renderizarInventario.
+let containersInventarioAbertos = new Set();
 let ultimoAvisoCustoVida = {}; // fila de pendentes de `avisoCustoVida/pendentes` no Firebase: { [pendenteId]: timestampDoDomingo }
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
 let combateNpcFormVisivel = false; // controla se o formulário de "Criar novo NPC" está aberto dentro do Gerenciador de Combate
@@ -385,6 +390,8 @@ const el = {
     modalQuantidadePesoTotal: document.getElementById("modal-quantidade-peso-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
+    modalCampoGuardarDentro: document.getElementById("modal-campo-guardar-dentro"),
+    modalGuardarDentro: document.getElementById("modal-guardar-dentro"),
     modalConfigArma: document.getElementById("modal-config-arma"),
     modalArmaDanoBase: document.getElementById("modal-arma-dano-base"),
     modalArmaTipoDano: document.getElementById("modal-arma-tipo-dano"),
@@ -5025,12 +5032,18 @@ function renderizarInventario(modificadoresPlanos) {
     });
 
     const itens = Object.entries(fichaAtual.inventario || {});
-    // Carregador anexado a uma arma some da lista principal — ele virou
-    // parte da arma (ver carregadorEstaAnexado em inventario.js); a
-    // munição dele continua aparecendo junto da própria arma.
+    // Item que está guardado dentro de um recipiente (dentroDe aponta pra
+    // um item que ainda existe) não aparece solto na lista principal —
+    // ele é renderizado aninhado, abaixo do recipiente (ver
+    // renderizarFilhosContainer). Se o recipiente-pai não existe mais
+    // (dado órfão), o item volta a aparecer solto normalmente, como
+    // rede de segurança. Carregador anexado a uma arma some da lista
+    // pela mesma lógica de sempre (virou parte da arma).
+    const estaDentroDeAlgo = (it) => !!(it.dentroDe && fichaAtual.inventario && fichaAtual.inventario[it.dentroDe]);
     const itensCategoria = itens.filter(([id, it]) =>
         it.categoria === categoriaInventarioAtiva &&
-        !(ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id))
+        !(ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id)) &&
+        !estaDentroDeAlgo(it)
     );
     const pesoCategoria = pesoTotalPorCategoria(fichaAtual, categoriaInventarioAtiva);
 
@@ -5049,172 +5062,296 @@ function renderizarInventario(modificadoresPlanos) {
         lista.innerHTML = `<li class="entity-list-empty" style="cursor:default;">Nenhum item aqui ainda.</li>`;
     } else {
         itensCategoria.forEach(([id, it]) => {
-            const li = document.createElement("li");
-            // Item com modificadores estruturados (ex: colete que dá +Defesa)
-            // ganha o mesmo botão de ativo/desativado das vantagens/etc —
-            // pra "vestir/tirar" o efeito sem removê-lo do inventário.
-            const temEfeitoItem = !!(it.modificadores && it.modificadores.length);
-            const ativoItem = it.ativo !== false;
-            if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
-            const kitGeral = ehFerramentaCriacaoGeral(it.tag);
-            const periciasUsoItem = periciaUsoComoArray(it.periciaUso);
-            const podeUsar = itemPodeUsar(it) && (!!periciasUsoItem.length || kitGeral);
-            const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
-            const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
-            const ehArmaItem = ehArma(it.tag);
-            const ehEquipavelItem = itemEhEquipavel(it);
-            const equipadaItem = !!it.equipada;
-            const podeEquipar = itemPodeEquipar(it);
-            const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
-            const periciaLabel = periciasUsoItem.length
-                ? ` · Usa: ${escapeHtml(periciasUsoItem.join(", "))}`
-                : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
-            const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
-            const saldoLabel = it.ehSaldo ? ` · Saldo: CN$ ${Number(it.saldoValor) || 0}` : "";
-            const quantidadeLabel = (it.quantidade && it.quantidade > 1) ? ` (x${it.quantidade})` : "";
-            const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
-            const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
-                ? ` · Reduz: ${it.reducoesDano.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")}`
-                : "";
-            const localProtegidoLabel = it.localProtegido ? ` · Protege: ${escapeHtml(rotuloLocalProtecao(it.localProtegido))}` : "";
-            const carregadorLabel = it.carregador
-                ? ` · Munição: ${it.carregador.municaoAtual || 0}/${it.carregador.capacidadeMax || 0}`
-                : "";
-            const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
-            const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
-            const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
-            const armaEstaCarregadaItem = ehFogo && !escopeta && !!carregadorAnexadoObjItem;
-            const carregadorAnexadoLabel = (ehFogo && it.arma)
-                ? (escopeta
-                    ? ` · Munição em estoque: ${municaoEscopetaDisponivel(it.calibre)} (sem carregador)`
-                    : (carregadorAnexadoObjItem
-                        ? ` · Carregador: ${escapeHtml(carregadorAnexadoObjItem.nome)} (${carregadorAnexadoObjItem.carregador?.municaoAtual || 0}/${carregadorAnexadoObjItem.carregador?.capacidadeMax || 0})`
-                        : " · Sem carregador anexado"))
-                : "";
-            // Tooltip do carregador: só aparece ao passar o mouse por cima,
-            // listando os projéteis carregados dentro dele.
-            const tooltipCarregador = it.carregador
-                ? (it.carregador.projeteisCarregados && it.carregador.projeteisCarregados.length
-                    ? it.carregador.projeteisCarregados.map(p => `${p.nome} x${p.quantidade}`).join("\n")
-                    : "Carregador vazio.")
-                : "";
-
-            li.innerHTML = `
-                <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
-                    <span class="entity-nome">${escapeHtml(it.nome)}</span>
-                    <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}</span>
-                </div>
-                <div class="entity-badges">
-                    ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
-                    ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
-                    ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
-                    <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
-                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
-                    ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
-                    ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
-                    ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
-                    <select class="select-transferir"></select>
-                </div>
-            `;
-            if (temEfeitoItem) {
-                li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    alternarAtivoEntidade("inventario", id, !ativoItem);
-                });
-            }
-            const btnToggleEquipada = li.querySelector(".btn-toggle-equipada");
-            if (btnToggleEquipada) {
-                btnToggleEquipada.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    if (!podeEquipar) return;
-                    alternarEquipadaItem(id, !equipadaItem, it.nome);
-                });
-            }
-            const selectTransferir = li.querySelector(".select-transferir");
-            categorias.forEach(cat => {
-                if (cat.id === it.categoria) return;
-                const opt = document.createElement("option");
-                opt.value = cat.id;
-                opt.innerText = `→ ${cat.nome}`;
-                selectTransferir.appendChild(opt);
-            });
-            const optPlaceholder = document.createElement("option");
-            optPlaceholder.value = "";
-            optPlaceholder.innerText = "Mover para...";
-            optPlaceholder.selected = true;
-            optPlaceholder.disabled = true;
-            selectTransferir.prepend(optPlaceholder);
-
-            selectTransferir.addEventListener("click", (e) => e.stopPropagation());
-            selectTransferir.addEventListener("change", async (e) => {
-                e.stopPropagation();
-                const novaCategoria = e.target.value;
-                if (!novaCategoria) return;
-                if (isMestre) {
-                    const dados = { categoria: novaCategoria };
-                    if (novaCategoria !== "levando" && ehEquipavelItem && equipadaItem) dados.equipada = false;
-                    await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
-                    toast(`${it.nome} movido.`);
-                } else {
-                    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
-                    const nomeCatNova = nomeCategoria(fichaAtual, novaCategoria);
-                    await criarAcaoPendente({
-                        tipo: "mover_item",
-                        fichaId: fichaAtualId,
-                        nomeJogador,
-                        detalhe: `${nomeJogador} quer mover "${it.nome}" para "${nomeCatNova}".`,
-                        payload: { itemId: id, itemNome: it.nome, categoriaAtual: it.categoria, categoriaNova: novaCategoria }
-                    });
-                    toast("Pedido de movimentação enviado ao Mestre.");
-                    selectTransferir.value = "";
-                }
-            });
-
-            li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (!podeUsar) return;
-                await iniciarUsoItem({ id, ...it }, modificadoresPlanos);
-            });
-
-            const btnRecarregar = li.querySelector(".btn-recarregar-item");
-            if (btnRecarregar) {
-                btnRecarregar.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    await recarregarArma(id, it);
-                });
-            }
-
-            const btnRetirarCarregador = li.querySelector(".btn-retirar-carregador-item");
-            if (btnRetirarCarregador) {
-                btnRetirarCarregador.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    if (!armaEstaCarregadaItem) return;
-                    await retirarCarregadorArma(id, it);
-                });
-            }
-
-            const btnCarregar = li.querySelector(".btn-carregar-item");
-            if (btnCarregar) {
-                btnCarregar.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    await carregarCarregador(id, it);
-                });
-            }
-
-            const btnDarItem = li.querySelector(".btn-dar-item");
-            if (btnDarItem) {
-                btnDarItem.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    abrirModalDarItem(id, it);
-                });
-            }
-
-            li.addEventListener("click", () => abrirModalEdicao("inventario", id));
-            lista.appendChild(li);
+            lista.appendChild(criarLiItem(id, it, { categorias, modificadoresPlanos, nivel: 0 }));
         });
     }
     bloco.appendChild(lista);
     el.inventarioListas.appendChild(bloco);
+}
+
+// Monta o <li> de um item do inventário (usado tanto pros itens de topo
+// quanto, recursivamente, pros itens guardados dentro de um recipiente —
+// ver criarUlFilhosContainer abaixo). `nivel` é só a profundidade de
+// aninhamento (0 = solto na categoria), usada pra indentar visualmente.
+function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
+    const li = document.createElement("li");
+    // Item com modificadores estruturados (ex: colete que dá +Defesa)
+    // ganha o mesmo botão de ativo/desativado das vantagens/etc —
+    // pra "vestir/tirar" o efeito sem removê-lo do inventário.
+    const temEfeitoItem = !!(it.modificadores && it.modificadores.length);
+    const ativoItem = it.ativo !== false;
+    if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
+    const kitGeral = ehFerramentaCriacaoGeral(it.tag);
+    const periciasUsoItem = periciaUsoComoArray(it.periciaUso);
+    const podeUsar = itemPodeUsar(it) && (!!periciasUsoItem.length || kitGeral);
+    const ehFogo = ehArma(it.tag) && ehArmaDeFogo(it.periciaUso);
+    const escopeta = ehFogo && ehCalibreEscopeta(it.calibre);
+    const ehArmaItem = ehArma(it.tag);
+    const ehEquipavelItem = itemEhEquipavel(it);
+    const equipadaItem = !!it.equipada;
+    const podeEquipar = itemPodeEquipar(it);
+    const tagLabel = rotuloTag(it.tag) + (it.nivelTag ? ` nível ${it.nivelTag}` : "");
+    const periciaLabel = periciasUsoItem.length
+        ? ` · Usa: ${escapeHtml(periciasUsoItem.join(", "))}`
+        : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
+    const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
+    const saldoLabel = it.ehSaldo ? ` · Saldo: CN$ ${Number(it.saldoValor) || 0}` : "";
+    const quantidadeLabel = (it.quantidade && it.quantidade > 1) ? ` (x${it.quantidade})` : "";
+    const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
+    const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
+        ? ` · Reduz: ${it.reducoesDano.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")}`
+        : "";
+    const localProtegidoLabel = it.localProtegido ? ` · Protege: ${escapeHtml(rotuloLocalProtecao(it.localProtegido))}` : "";
+    const carregadorLabel = it.carregador
+        ? ` · Munição: ${it.carregador.municaoAtual || 0}/${it.carregador.capacidadeMax || 0}`
+        : "";
+    const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
+    const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
+    const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
+    const armaEstaCarregadaItem = ehFogo && !escopeta && !!carregadorAnexadoObjItem;
+    const carregadorAnexadoLabel = (ehFogo && it.arma)
+        ? (escopeta
+            ? ` · Munição em estoque: ${municaoEscopetaDisponivel(it.calibre)} (sem carregador)`
+            : (carregadorAnexadoObjItem
+                ? ` · Carregador: ${escapeHtml(carregadorAnexadoObjItem.nome)} (${carregadorAnexadoObjItem.carregador?.municaoAtual || 0}/${carregadorAnexadoObjItem.carregador?.capacidadeMax || 0})`
+                : " · Sem carregador anexado"))
+        : "";
+    // Tooltip do carregador: só aparece ao passar o mouse por cima,
+    // listando os projéteis carregados dentro dele.
+    const tooltipCarregador = it.carregador
+        ? (it.carregador.projeteisCarregados && it.carregador.projeteisCarregados.length
+            ? it.carregador.projeteisCarregados.map(p => `${p.nome} x${p.quantidade}`).join("\n")
+            : "Carregador vazio.")
+        : "";
+
+    // Recipiente (mochila etc.): mostra quantos itens tem guardado
+    // dentro e um botão de expandir/recolher — a lista de filhos (se
+    // aberto) é montada à parte, em criarUlFilhosContainer, e anexada
+    // logo depois deste <li> na lista principal.
+    const ehContainerItem = ehContainer(it.tag);
+    const filhosContainer = ehContainerItem ? itensDentroDe(fichaAtual, id) : [];
+    const containerAberto = containersInventarioAbertos.has(id);
+    const containerLabel = ehContainerItem
+        ? ` · ${filhosContainer.length ? `${filhosContainer.length} item(ns) guardado(s)` : "Vazio"}`
+        : "";
+
+    if (nivel > 0) li.classList.add("entity-item-aninhado");
+
+    li.innerHTML = `
+        <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
+            <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
+            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${containerLabel}</span>
+        </div>
+        <div class="entity-badges">
+            ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+            ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
+            ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
+            <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
+            ${(ehFogo && !escopeta) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+            ${(ehFogo && !escopeta) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
+            ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
+            ${(!isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
+            <select class="select-guardar-dentro"></select>
+            <select class="select-transferir"></select>
+        </div>
+    `;
+    if (temEfeitoItem) {
+        li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
+            e.stopPropagation();
+            alternarAtivoEntidade("inventario", id, !ativoItem);
+        });
+    }
+    const btnToggleEquipada = li.querySelector(".btn-toggle-equipada");
+    if (btnToggleEquipada) {
+        btnToggleEquipada.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!podeEquipar) return;
+            alternarEquipadaItem(id, !equipadaItem, it.nome);
+        });
+    }
+
+    const btnToggleContainer = li.querySelector(".btn-toggle-container");
+    if (btnToggleContainer) {
+        btnToggleContainer.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (containerAberto) containersInventarioAbertos.delete(id);
+            else containersInventarioAbertos.add(id);
+            renderizarInventario(modificadoresPlanos);
+        });
+    }
+
+    // "Guardar dentro de" — mover o item pra dentro de um recipiente (ou
+    // soltá-lo, se já estiver guardado). Só aparece se existe algum
+    // recipiente disponível na mesma categoria (ou se o item já está
+    // guardado em algum, pra permitir soltá-lo).
+    const selectGuardarDentro = li.querySelector(".select-guardar-dentro");
+    const containersDisponiveis = listaContainersDisponiveis(fichaAtual, it.categoria, id);
+    if (containersDisponiveis.length || it.dentroDe) {
+        const optForaPlaceholder = document.createElement("option");
+        optForaPlaceholder.value = "__guardar__";
+        optForaPlaceholder.innerText = "Guardar dentro de...";
+        optForaPlaceholder.disabled = true;
+        selectGuardarDentro.appendChild(optForaPlaceholder);
+        if (it.dentroDe) {
+            const optFora = document.createElement("option");
+            optFora.value = "";
+            optFora.innerText = "↩ Tirar do recipiente";
+            selectGuardarDentro.appendChild(optFora);
+        }
+        containersDisponiveis.forEach(cont => {
+            const opt = document.createElement("option");
+            opt.value = cont.id;
+            opt.innerText = `🎒 ${cont.nome}`;
+            selectGuardarDentro.appendChild(opt);
+        });
+        selectGuardarDentro.value = "__guardar__";
+    } else {
+        selectGuardarDentro.style.display = "none";
+    }
+    selectGuardarDentro.addEventListener("click", (e) => e.stopPropagation());
+    selectGuardarDentro.addEventListener("change", async (e) => {
+        e.stopPropagation();
+        const novoContainerId = e.target.value;
+        if (novoContainerId === "__guardar__") return;
+        const nomeContainerNovo = novoContainerId ? (fichaAtual.inventario[novoContainerId]?.nome || "") : "";
+        if (isMestre) {
+            await update(ref(db, `${caminhoBase()}/inventario/${id}`), { dentroDe: novoContainerId || null });
+            toast(novoContainerId ? `${it.nome} guardado em ${nomeContainerNovo}.` : `${it.nome} tirado do recipiente.`);
+        } else {
+            const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+            const detalhe = novoContainerId
+                ? `${nomeJogador} quer guardar "${it.nome}" dentro de "${nomeContainerNovo}".`
+                : `${nomeJogador} quer tirar "${it.nome}" do recipiente em que está guardado.`;
+            await criarAcaoPendente({
+                tipo: "guardar_item",
+                fichaId: fichaAtualId,
+                nomeJogador,
+                detalhe,
+                payload: { itemId: id, itemNome: it.nome, containerIdAtual: it.dentroDe || null, containerIdNovo: novoContainerId || null, containerNomeNovo: nomeContainerNovo }
+            });
+            toast("Pedido enviado ao Mestre.");
+            selectGuardarDentro.value = "__guardar__";
+        }
+    });
+
+    const selectTransferir = li.querySelector(".select-transferir");
+    categorias.forEach(cat => {
+        if (cat.id === it.categoria) return;
+        const opt = document.createElement("option");
+        opt.value = cat.id;
+        opt.innerText = `→ ${cat.nome}`;
+        selectTransferir.appendChild(opt);
+    });
+    const optPlaceholder = document.createElement("option");
+    optPlaceholder.value = "";
+    optPlaceholder.innerText = "Mover para...";
+    optPlaceholder.selected = true;
+    optPlaceholder.disabled = true;
+    selectTransferir.prepend(optPlaceholder);
+
+    selectTransferir.addEventListener("click", (e) => e.stopPropagation());
+    selectTransferir.addEventListener("change", async (e) => {
+        e.stopPropagation();
+        const novaCategoria = e.target.value;
+        if (!novaCategoria) return;
+        if (isMestre) {
+            const dados = { categoria: novaCategoria };
+            if (novaCategoria !== "levando" && ehEquipavelItem && equipadaItem) dados.equipada = false;
+            // Item que muda de categoria não pode continuar "guardado"
+            // dentro de um recipiente que ficou pra trás na categoria
+            // antiga (mochila que ficou em casa não segura item que foi
+            // "levado" sozinho, por exemplo).
+            if (it.dentroDe) dados.dentroDe = null;
+            await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
+            // Se o item movido é um recipiente, o que está guardado
+            // dentro dele muda de categoria junto (continua guardado lá).
+            if (ehContainer(it.tag)) {
+                const filhos = itensDentroDe(fichaAtual, id);
+                if (filhos.length) {
+                    const payloadFilhos = {};
+                    filhos.forEach(f => { payloadFilhos[`${f.id}/categoria`] = novaCategoria; });
+                    Object.assign(fichaAtual.inventario, Object.fromEntries(filhos.map(f => [f.id, { ...fichaAtual.inventario[f.id], categoria: novaCategoria }])));
+                    await update(ref(db, `${caminhoBase()}/inventario`), payloadFilhos);
+                }
+            }
+            toast(`${it.nome} movido.`);
+        } else {
+            const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+            const nomeCatNova = nomeCategoria(fichaAtual, novaCategoria);
+            await criarAcaoPendente({
+                tipo: "mover_item",
+                fichaId: fichaAtualId,
+                nomeJogador,
+                detalhe: `${nomeJogador} quer mover "${it.nome}" para "${nomeCatNova}".`,
+                payload: { itemId: id, itemNome: it.nome, categoriaAtual: it.categoria, categoriaNova: novaCategoria }
+            });
+            toast("Pedido de movimentação enviado ao Mestre.");
+            selectTransferir.value = "";
+        }
+    });
+
+    li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!podeUsar) return;
+        await iniciarUsoItem({ id, ...it }, modificadoresPlanos);
+    });
+
+    const btnRecarregar = li.querySelector(".btn-recarregar-item");
+    if (btnRecarregar) {
+        btnRecarregar.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await recarregarArma(id, it);
+        });
+    }
+
+    const btnRetirarCarregador = li.querySelector(".btn-retirar-carregador-item");
+    if (btnRetirarCarregador) {
+        btnRetirarCarregador.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (!armaEstaCarregadaItem) return;
+            await retirarCarregadorArma(id, it);
+        });
+    }
+
+    const btnCarregar = li.querySelector(".btn-carregar-item");
+    if (btnCarregar) {
+        btnCarregar.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await carregarCarregador(id, it);
+        });
+    }
+
+    const btnDarItem = li.querySelector(".btn-dar-item");
+    if (btnDarItem) {
+        btnDarItem.addEventListener("click", (e) => {
+            e.stopPropagation();
+            abrirModalDarItem(id, it);
+        });
+    }
+
+    li.addEventListener("click", (e) => {
+        e.stopPropagation();
+        abrirModalEdicao("inventario", id);
+    });
+
+    // Se é um recipiente aberto (expandido), a lista de filhos entra
+    // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
+    // o conteúdo "viaja" junto se o item pai for movido/filtrado).
+    if (ehContainerItem && containerAberto) {
+        const ulFilhos = document.createElement("ul");
+        ulFilhos.className = "entity-list entity-list-nested";
+        if (!filhosContainer.length) {
+            ulFilhos.innerHTML = `<li class="entity-list-empty" style="cursor:default;">Nada guardado aqui ainda.</li>`;
+        } else {
+            filhosContainer.forEach(filho => {
+                const { id: idFilho, ...itFilho } = filho;
+                ulFilhos.appendChild(criarLiItem(idFilho, itFilho, { categorias, modificadoresPlanos, nivel: nivel + 1 }));
+            });
+        }
+        li.appendChild(ulFilhos);
+    }
+
+    return li;
 }
 
 // ---------------------------------------------------------------------
@@ -6953,6 +7090,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoPeso.style.display = "none";
     el.modalCampoQuantidade.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
+    el.modalCampoGuardarDentro.style.display = "none";
     el.modalCampoMaterialTipo.style.display = "none";
     el.modalCampoMaterialQualidade.style.display = "none";
     el.modalCampoMaterialQuantidade.style.display = "none";
@@ -7115,12 +7253,41 @@ function configurarBuscaPericia() {
 // ---------------------------------------------------------------------
 // Modal: ITEM DE INVENTÁRIO — tag, nível de tag, peso, categoria, arma
 // ---------------------------------------------------------------------
+// Preenche o select "Guardar dentro de" com os itens-recipiente
+// (tag "recipiente") disponíveis na categoria escolhida no momento no
+// modal (Levando consigo / Em casa / custom) — idItemAtual (o próprio
+// item sendo editado, null se for novo) fica de fora das opções, e
+// também qualquer recipiente que já esteja guardado dentro dele (pra
+// não formar um ciclo). valorSelecionado é o dentroDe atual do item
+// (string vazia = nenhum, item solto/fora de qualquer recipiente).
+function popularSelectGuardarDentro(idItemAtual, valorSelecionado) {
+    const categoriaAtual = el.modalCategoriaItem.value || "levando";
+    el.modalGuardarDentro.innerHTML = "";
+    const optNenhum = document.createElement("option");
+    optNenhum.value = "";
+    optNenhum.innerText = "Nenhum (item solto)";
+    el.modalGuardarDentro.appendChild(optNenhum);
+    listaContainersDisponiveis(fichaAtual, categoriaAtual, idItemAtual).forEach(cont => {
+        const opt = document.createElement("option");
+        opt.value = cont.id;
+        opt.innerText = cont.nome;
+        el.modalGuardarDentro.appendChild(opt);
+    });
+    // Se o recipiente salvo não está mais entre as opções (ex: mudou de
+    // categoria, ou o recipiente foi excluído), volta pra "Nenhum".
+    el.modalGuardarDentro.value = [...el.modalGuardarDentro.options].some(o => o.value === valorSelecionado)
+        ? valorSelecionado
+        : "";
+}
+
 function prepararModalItem(existente, ehBanco) {
     el.modalCampoTag.style.display = "flex";
     el.modalCampoPeso.style.display = "flex";
-    // Item do Banco Global não tem "categoria" (levando/casa) — isso só
-    // existe quando o item está de fato dentro de uma ficha.
+    // Item do Banco Global não tem "categoria" (levando/casa) nem
+    // "guardar dentro de" — isso só existe quando o item está de fato
+    // dentro de uma ficha.
     el.modalCampoCategoriaItem.style.display = ehBanco ? "none" : "flex";
+    el.modalCampoGuardarDentro.style.display = ehBanco ? "none" : "flex";
 
     if (!ehBanco) {
         el.modalCategoriaItem.innerHTML = "";
@@ -7130,6 +7297,12 @@ function prepararModalItem(existente, ehBanco) {
             opt.innerText = cat.nome;
             el.modalCategoriaItem.appendChild(opt);
         });
+        // Repopula os recipientes disponíveis sempre que a categoria do
+        // item mudar (só faz sentido guardar dentro de um recipiente da
+        // MESMA categoria — ver listaContainersDisponiveis/inventario.js).
+        el.modalCategoriaItem.onchange = () => {
+            popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, "");
+        };
     }
 
     // Checkbox "Salvar no Banco Global": só faz sentido ao adicionar/editar
@@ -7142,14 +7315,20 @@ function prepararModalItem(existente, ehBanco) {
         el.modalNome.value = existente.nome || "";
         el.modalTag.value = existente.tag || "";
         el.modalPeso.value = existente.pesoUnitario ?? existente.peso ?? 0;
-        if (!ehBanco) el.modalCategoriaItem.value = existente.categoria || "levando";
+        if (!ehBanco) {
+            el.modalCategoriaItem.value = existente.categoria || "levando";
+            popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe || "");
+        }
         atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade);
         el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
         el.modalPeso.value = 0;
-        if (!ehBanco) el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
+        if (!ehBanco) {
+            el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
+            popularSelectGuardarDentro(null, "");
+        }
         atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null);
         el.modalEquipavel.checked = false;
     }
@@ -7903,6 +8082,21 @@ async function salvarItemDoModal(id) {
     const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
     if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
 
+    // "Guardar dentro de" (item-recipiente) — só existe pra item de
+    // ficha (não pro Banco Global). Revalida contra ciclo aqui também
+    // (defesa extra: o select já vem filtrado por popularSelectGuardarDentro,
+    // mas o item pode ter virado recipiente-de-si-mesmo por edição feita
+    // noutra aba/dispositivo entre a abertura do modal e o salvar).
+    let dentroDe = null;
+    if (el.modalCampoGuardarDentro.style.display !== "none") {
+        const valorDentroDe = el.modalGuardarDentro.value || null;
+        if (valorDentroDe && id && itemDescendeDe(fichaAtual, valorDentroDe, id)) {
+            toast("Não dá pra guardar um item dentro dele mesmo (ou de algo já guardado dentro dele).", "erro");
+            return;
+        }
+        dentroDe = valorDentroDe;
+    }
+
     // Carregador — preserva a munição já carregada (se estiver editando um
     // carregador existente); só a capacidade máxima é editável aqui.
     let carregador = null;
@@ -7943,6 +8137,7 @@ async function salvarItemDoModal(id) {
         pesoUnitario,
         quantidade,
         categoria: el.modalCategoriaItem.value || "levando",
+        dentroDe,
         periciaUso,
         ehSaldo,
         saldoValor,
@@ -8155,10 +8350,32 @@ async function excluirEntidadeAtual() {
 
     if (!confirm("Excluir este registro? Essa ação não pode ser desfeita.")) return;
 
+    // Excluir um item-recipiente não pode levar junto (nem "sumir" com)
+    // o que estava guardado dentro dele — os itens filhos voltam a
+    // aparecer soltos na lista (dentroDe some).
+    if (lista === "inventario") {
+        await destravarItensDeDentro(id);
+    }
+
     delete fichaAtual[lista][id];
     await remove(ref(db, `${caminhoBase()}/${caminhoLista(lista)}/${id}`));
     toast("Excluído.");
     fecharModal();
+}
+
+// Solta (dentroDe = null) todos os itens que estavam guardados dentro
+// do recipiente containerId — usado antes de excluir um recipiente
+// (direto pelo Mestre) ou ao processar um "remover_item" pendente que
+// aponta pra um recipiente (ver mestre.js/confirmarAcaoPendente).
+async function destravarItensDeDentro(containerId) {
+    const filhos = itensDentroDe(fichaAtual, containerId);
+    if (!filhos.length) return;
+    const atualizacoes = {};
+    filhos.forEach(f => { atualizacoes[f.id] = { ...fichaAtual.inventario[f.id], dentroDe: null }; });
+    Object.assign(fichaAtual.inventario, atualizacoes);
+    const payload = {};
+    filhos.forEach(f => { payload[`${f.id}/dentroDe`] = null; });
+    await update(ref(db, `${caminhoBase()}/inventario`), payload);
 }
 
 // =====================================================================
