@@ -1925,7 +1925,12 @@ export async function confirmarAcaoPendente(acao) {
     } else if (tipo === "guardar_item") {
         // Guarda (ou solta, se containerIdNovo vier vazio) um item dentro
         // de um recipiente — ver select-guardar-dentro em ficha.js.
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), { dentroDe: payload.containerIdNovo || null });
+        // Guardar move o item junto pra categoria do recipiente
+        // (payload.categoriaNova já vem calculada de lá); soltar mantém
+        // a categoria como está.
+        const dadosGuardar = { dentroDe: payload.containerIdNovo || null };
+        if (payload.containerIdNovo && payload.categoriaNova) dadosGuardar.categoria = payload.categoriaNova;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosGuardar);
 
     } else if (tipo === "gastar_dinheiro") {
         const saldoId = payload.saldoId;

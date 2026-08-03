@@ -5181,11 +5181,10 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     }
 
     // "Guardar dentro de" — mover o item pra dentro de um recipiente (ou
-    // soltá-lo, se já estiver guardado). Só aparece se existe algum
-    // recipiente disponível na mesma categoria (ou se o item já está
-    // guardado em algum, pra permitir soltá-lo).
+    // soltá-lo, se já estiver guardado). Guardar move o item pra
+    // categoria do recipiente automaticamente (ver salvarItemDoModal).
     const selectGuardarDentro = li.querySelector(".select-guardar-dentro");
-    const containersDisponiveis = listaContainersDisponiveis(fichaAtual, it.categoria, id);
+    const containersDisponiveis = listaContainersDisponiveis(fichaAtual, id);
     if (containersDisponiveis.length || it.dentroDe) {
         const optForaPlaceholder = document.createElement("option");
         optForaPlaceholder.value = "__guardar__";
@@ -5201,7 +5200,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         containersDisponiveis.forEach(cont => {
             const opt = document.createElement("option");
             opt.value = cont.id;
-            opt.innerText = `🎒 ${cont.nome}`;
+            opt.innerText = `🎒 ${cont.nome} (${nomeCategoria(fichaAtual, cont.categoria)})`;
             selectGuardarDentro.appendChild(opt);
         });
         selectGuardarDentro.value = "__guardar__";
@@ -5213,9 +5212,15 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         e.stopPropagation();
         const novoContainerId = e.target.value;
         if (novoContainerId === "__guardar__") return;
-        const nomeContainerNovo = novoContainerId ? (fichaAtual.inventario[novoContainerId]?.nome || "") : "";
+        const containerNovo = novoContainerId ? fichaAtual.inventario[novoContainerId] : null;
+        const nomeContainerNovo = containerNovo?.nome || "";
+        const categoriaNova = containerNovo?.categoria || it.categoria;
         if (isMestre) {
-            await update(ref(db, `${caminhoBase()}/inventario/${id}`), { dentroDe: novoContainerId || null });
+            const dados = { dentroDe: novoContainerId || null };
+            // Guardar move o item junto pra categoria do recipiente;
+            // tirar mantém a categoria atual dele (fica onde estava).
+            if (novoContainerId) dados.categoria = categoriaNova;
+            await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
             toast(novoContainerId ? `${it.nome} guardado em ${nomeContainerNovo}.` : `${it.nome} tirado do recipiente.`);
         } else {
             const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
@@ -5227,7 +5232,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
                 fichaId: fichaAtualId,
                 nomeJogador,
                 detalhe,
-                payload: { itemId: id, itemNome: it.nome, containerIdAtual: it.dentroDe || null, containerIdNovo: novoContainerId || null, containerNomeNovo: nomeContainerNovo }
+                payload: { itemId: id, itemNome: it.nome, containerIdAtual: it.dentroDe || null, containerIdNovo: novoContainerId || null, containerNomeNovo: nomeContainerNovo, categoriaNova: novoContainerId ? categoriaNova : null }
             });
             toast("Pedido enviado ao Mestre.");
             selectGuardarDentro.value = "__guardar__";
@@ -7253,31 +7258,40 @@ function configurarBuscaPericia() {
 // ---------------------------------------------------------------------
 // Modal: ITEM DE INVENTÁRIO — tag, nível de tag, peso, categoria, arma
 // ---------------------------------------------------------------------
-// Preenche o select "Guardar dentro de" com os itens-recipiente
-// (tag "recipiente") disponíveis na categoria escolhida no momento no
-// modal (Levando consigo / Em casa / custom) — idItemAtual (o próprio
-// item sendo editado, null se for novo) fica de fora das opções, e
-// também qualquer recipiente que já esteja guardado dentro dele (pra
-// não formar um ciclo). valorSelecionado é o dentroDe atual do item
+// Preenche o select "Guardar dentro de" com TODOS os itens-recipiente
+// (tag "recipiente") da ficha — idItemAtual (o próprio item sendo
+// editado, null se for novo) fica de fora das opções, e também
+// qualquer recipiente que já esteja guardado dentro dele (pra não
+// formar um ciclo). valorSelecionado é o dentroDe atual do item
 // (string vazia = nenhum, item solto/fora de qualquer recipiente).
+// Guardar dentro de um recipiente move o item pra categoria dele
+// automaticamente (ver o listener abaixo e salvarItemDoModal) — por
+// isso a lista não é filtrada por categoria.
 function popularSelectGuardarDentro(idItemAtual, valorSelecionado) {
-    const categoriaAtual = el.modalCategoriaItem.value || "levando";
     el.modalGuardarDentro.innerHTML = "";
     const optNenhum = document.createElement("option");
     optNenhum.value = "";
     optNenhum.innerText = "Nenhum (item solto)";
     el.modalGuardarDentro.appendChild(optNenhum);
-    listaContainersDisponiveis(fichaAtual, categoriaAtual, idItemAtual).forEach(cont => {
+    const containers = listaContainersDisponiveis(fichaAtual, idItemAtual);
+    containers.forEach(cont => {
         const opt = document.createElement("option");
         opt.value = cont.id;
-        opt.innerText = cont.nome;
+        opt.innerText = `${cont.nome} (${nomeCategoria(fichaAtual, cont.categoria)})`;
         el.modalGuardarDentro.appendChild(opt);
     });
-    // Se o recipiente salvo não está mais entre as opções (ex: mudou de
-    // categoria, ou o recipiente foi excluído), volta pra "Nenhum".
+    // Se o recipiente salvo não está mais entre as opções (ex: foi
+    // excluído), volta pra "Nenhum".
     el.modalGuardarDentro.value = [...el.modalGuardarDentro.options].some(o => o.value === valorSelecionado)
         ? valorSelecionado
         : "";
+    // Escolher um recipiente sincroniza a categoria do item com a dele
+    // na hora (só visual — quem garante de verdade é salvarItemDoModal).
+    el.modalGuardarDentro.onchange = () => {
+        const contId = el.modalGuardarDentro.value;
+        const cont = contId ? fichaAtual.inventario[contId] : null;
+        if (cont) el.modalCategoriaItem.value = cont.categoria || "levando";
+    };
 }
 
 function prepararModalItem(existente, ehBanco) {
@@ -7297,12 +7311,6 @@ function prepararModalItem(existente, ehBanco) {
             opt.innerText = cat.nome;
             el.modalCategoriaItem.appendChild(opt);
         });
-        // Repopula os recipientes disponíveis sempre que a categoria do
-        // item mudar (só faz sentido guardar dentro de um recipiente da
-        // MESMA categoria — ver listaContainersDisponiveis/inventario.js).
-        el.modalCategoriaItem.onchange = () => {
-            popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, "");
-        };
     }
 
     // Checkbox "Salvar no Banco Global": só faz sentido ao adicionar/editar
@@ -8087,7 +8095,11 @@ async function salvarItemDoModal(id) {
     // (defesa extra: o select já vem filtrado por popularSelectGuardarDentro,
     // mas o item pode ter virado recipiente-de-si-mesmo por edição feita
     // noutra aba/dispositivo entre a abertura do modal e o salvar).
+    // Guardar dentro de um recipiente SEMPRE move o item pra categoria
+    // dele — não faz sentido um item estar "guardado numa mochila que
+    // está em casa" e ao mesmo tempo listado como "levando consigo".
     let dentroDe = null;
+    let categoriaFinal = el.modalCategoriaItem.value || "levando";
     if (el.modalCampoGuardarDentro.style.display !== "none") {
         const valorDentroDe = el.modalGuardarDentro.value || null;
         if (valorDentroDe && id && itemDescendeDe(fichaAtual, valorDentroDe, id)) {
@@ -8095,6 +8107,9 @@ async function salvarItemDoModal(id) {
             return;
         }
         dentroDe = valorDentroDe;
+        if (dentroDe && fichaAtual.inventario[dentroDe]) {
+            categoriaFinal = fichaAtual.inventario[dentroDe].categoria || categoriaFinal;
+        }
     }
 
     // Carregador — preserva a munição já carregada (se estiver editando um
@@ -8136,7 +8151,7 @@ async function salvarItemDoModal(id) {
         peso,
         pesoUnitario,
         quantidade,
-        categoria: el.modalCategoriaItem.value || "levando",
+        categoria: categoriaFinal,
         dentroDe,
         periciaUso,
         ehSaldo,

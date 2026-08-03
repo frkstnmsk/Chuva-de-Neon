@@ -170,14 +170,15 @@ export function itemDescendeDe(fichaAtual, itemId, possivelAncestralId) {
     return false;
 }
 
-// Recipientes disponíveis pra guardar um item dentro — só os da mesma
-// categoria (Levando consigo / Em casa) e que não formariam um ciclo
+// Recipientes disponíveis pra guardar um item dentro — todos os
+// recipientes da ficha, de qualquer categoria (guardar um item move ele
+// pra categoria do recipiente automaticamente — ver salvarItemDoModal e
+// o select-guardar-dentro em ficha.js), menos os que formariam um ciclo
 // (não pode ser o próprio item sendo editado nem um descendente dele).
-export function listaContainersDisponiveis(fichaAtual, categoria, idItemAtual) {
+export function listaContainersDisponiveis(fichaAtual, idItemAtual) {
     return Object.entries(fichaAtual.inventario || {})
         .filter(([id, it]) =>
             ehContainer(it.tag) &&
-            it.categoria === categoria &&
             id !== idItemAtual &&
             !(idItemAtual && itemDescendeDe(fichaAtual, id, idItemAtual))
         )
