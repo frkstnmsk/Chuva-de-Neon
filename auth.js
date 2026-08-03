@@ -203,6 +203,7 @@ async function criarFichaNova(idLimpo, senha, nomeExibicao, mesaId) {
             padraoDeVida: "",
             ganhoFixo: 0,
             ultimoPagamentoCustoVida: 0,
+            custoVidaPagos: {},
             criacaoConcluida: false
         },
         saldos: {

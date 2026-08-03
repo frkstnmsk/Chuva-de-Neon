@@ -11,9 +11,11 @@ import { caminhoMesa } from "./mesa.js";
 import {
     rolarD20, rolarDado, calcularDerivados, coletarModificadores, somaModificadoresPara,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
-    calcularEstadoEnergia, dificuldadeSangramento, dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO
+    calcularEstadoEnergia, dificuldadeSangramento, dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
+    calcularDificuldadeDefesaJogador, DIFICULDADE_INFECCAO_MINIMA,
+    calcularPvMaximo, avancarRecuperacaoPV
 } from "./regras.js";
-import { registrarRolagem, passarUmDia, dispararAvisoCustoVida } from "./calendario.js";
+import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } from "./calendario.js";
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
@@ -539,6 +541,17 @@ export async function adicionarParticipanteCombate({ tipo, refId, nome }) {
     const novaRef = push(ref(db, caminhoMesa("combateAtivo/participantes")));
     const participanteId = novaRef.key;
     const base = { tipo, refId, nome: nome || refId };
+
+    // Infecção (ver aplicarInfeccao/curarInfeccao acima) é uma flag
+    // PERSISTENTE do personagem, não do participante de combate (que é
+    // recriado a cada combate). Se o personagem já estiver infectado de
+    // antes, o badge precisa aparecer assim que ele entra na luta, sem
+    // precisar que o Mestre role o teste de novo.
+    const caminhoInfeccaoPersistente = tipo === "ficha" ? `fichas/${refId}/dados/infeccao` : tipo === "npc" ? `npcs/${refId}/infeccao` : null;
+    const infeccaoHerdada = caminhoInfeccaoPersistente ? (await get(ref(db, caminhoMesa(caminhoInfeccaoPersistente)))) : null;
+    if (infeccaoHerdada && infeccaoHerdada.exists() && infeccaoHerdada.val() && infeccaoHerdada.val().ativo) {
+        base.infeccao = infeccaoHerdada.val();
+    }
 
     if (!iniciativaJaRolada) {
         await set(novaRef, base);
@@ -1352,6 +1365,111 @@ export async function curarOssosQuebrados(participanteId) {
 }
 
 // ---------------------------------------------------------------------
+// Infecção — Complicações de ferimentos (manual, "Saúde e PVs" /
+// "Complicações"; dificuldade em dificuldadeInfeccao, regras.js).
+//
+// Diferente do Sangramento (dano automático, por turno, com contagem
+// regressiva — Tick System acima), a Infecção não causa dano sozinha: o
+// manual diz que ela AUMENTA EM 50% o tempo de repouso necessário pra
+// recuperação (ver calcularTempoRecuperacaoPV em regras.js, chamado na
+// hora do pedido de Recuperação de PVs — ver ficha.js). Por isso a flag
+// não pode viver só dentro de `combateAtivo/participantes/{id}` — esse
+// nó inteiro é apagado quando o combate termina (ver encerrarCombate
+// acima), e a infecção precisa continuar valendo bem depois do combate
+// acabar, até o personagem receber tratamento médico de verdade.
+// Por isso, além de marcar o participante (pro badge aparecer durante O
+// combate em andamento), espelhamos a mesma flag no registro
+// PERSISTENTE do personagem (`fichas/{id}/dados/infeccao` pra jogador,
+// `npcs/{id}/infeccao` pra NPC) — é essa cópia persistente que
+// calcularTempoRecuperacaoPV/renderizarRecuperacaoPV realmente leem.
+//
+// `garantida` (default false) marca o caso do manual em que NÃO se rola
+// teste nenhum: falha em Remover Projétil com complicação deixa o
+// projétil alojado e a infecção é automática.
+// ---------------------------------------------------------------------
+async function caminhoPersistenteDoParticipante(participanteId) {
+    const snap = await get(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}`)));
+    if (!snap.exists()) return null;
+    const p = snap.val();
+    if (p.tipo === "ficha") return `fichas/${p.refId}/dados/infeccao`;
+    if (p.tipo === "npc") return `npcs/${p.refId}/infeccao`;
+    return null;
+}
+
+export async function aplicarInfeccao(participanteId, origem, garantida = false) {
+    if (!participanteId) return;
+    const dadosInfeccao = { ativo: true, origem: origem || "", garantida: !!garantida };
+    await set(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/infeccao`)), dadosInfeccao);
+    const caminhoPersistente = await caminhoPersistenteDoParticipante(participanteId);
+    if (caminhoPersistente) await set(ref(db, caminhoMesa(caminhoPersistente)), dadosInfeccao);
+}
+
+export async function curarInfeccao(participanteId) {
+    const caminhoPersistente = await caminhoPersistenteDoParticipante(participanteId);
+    await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/infeccao`)));
+    if (caminhoPersistente) await remove(ref(db, caminhoMesa(caminhoPersistente)));
+}
+
+// Constituição efetiva (já com modificadores estruturados) de um
+// participante já cadastrado em combateAtivo, buscada sob demanda —
+// diferente do teste de Sangramento (que já roda dentro de
+// resolverAtaque, com a ficha/NPC do alvo carregada na hora), o teste
+// de Infecção pode ser disparado pelo Mestre a qualquer momento sobre
+// qualquer participante, sem um ataque em andamento. Reaproveita
+// calcularDificuldadeDefesaJogador com base 0 pra devolver só o valor
+// de Constituição (atributo + modificadores), sem somar o "+10" de
+// dificuldade defensiva. NPC "rápido" não tem atributos primários
+// separados — usa a Constituição solta cadastrada nele, sem
+// modificadores (mesma limitação já assumida em calcularStatsCombateParticipante).
+export async function obterConstituicaoParticipante(participanteId) {
+    const participanteSnap = await get(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}`)));
+    if (!participanteSnap.exists()) return 0;
+    const participante = participanteSnap.val();
+
+    if (participante.tipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+        if (!snap.exists()) return 0;
+        const ficha = normalizarFicha(snap.val());
+        const modificadoresPlanos = coletarModificadores(ficha);
+        return calcularDificuldadeDefesaJogador(ficha.dados, "constituicao", modificadoresPlanos, 0);
+    }
+
+    const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+    if (!snap.exists()) return 0;
+    const npc = snap.val();
+    if (npc.modoDetalhado) {
+        const modificadoresVantagensNpc = coletarModificadores({ vantagens: npc.vantagens });
+        return calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modificadoresVantagensNpc, 0);
+    }
+    return Number(npc.constituicao) || 0;
+}
+
+// Teste de Constituição vs. Infecção: d20 + Constituição do alvo vs.
+// `dificuldade` (já calculada pelo chamador via dificuldadeInfeccao em
+// regras.js — dificuldade base 18 fixa, ou 18-22 conforme gravidade,
+// menos qualquer modificador de item/tratamento). Falha aplica a flag
+// via aplicarInfeccao (nunca "garantida" aqui — esse teste É o que
+// decide se infecciona; o caso garantido pula direto pra
+// aplicarInfeccao, sem chamar esta função).
+export async function testarInfeccao(participanteId, dificuldade, origem) {
+    if (!participanteId) return null;
+    const constituicaoAlvo = await obterConstituicaoParticipante(participanteId);
+    const dif = Number(dificuldade) || DIFICULDADE_INFECCAO_MINIMA;
+    const bruto = rolarD20();
+    const resultado = bruto + constituicaoAlvo;
+    const sucesso = resultado >= dif;
+    if (!sucesso) {
+        await aplicarInfeccao(participanteId, origem, false);
+    }
+    return {
+        dificuldade: dif, bruto, modConstituicao: constituicaoAlvo, resultado, sucesso,
+        detalhe: sucesso
+            ? `Teste de Constituição vs. Infecção (dif ${dif}): d20 (${bruto}) ${constituicaoAlvo >= 0 ? "+" : ""}${constituicaoAlvo} = ${resultado} — RESISTIU, não infeccionou.`
+            : `Teste de Constituição vs. Infecção (dif ${dif}): d20 (${bruto}) ${constituicaoAlvo >= 0 ? "+" : ""}${constituicaoAlvo} = ${resultado} — FALHOU, o ferimento INFECCIONOU (tempo de repouso necessário +50% até tratamento médico).`
+    };
+}
+
+// ---------------------------------------------------------------------
 // Delimitar alcance / Retomar alcance (manual): a vítima só pode usar
 // golpes do alcance escolhido pelo atacante (exceto Médio, que sempre
 // pode ser usado "de perto", a metade do dano — ver checagem em
@@ -1548,6 +1666,46 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     return { ...resultadoDano, detalhe: detalheDano };
 }
 
+// Recuperação de PVs (manual) — usado tanto por "Passar o dia" (1 dia)
+// quanto pelo Timeskip (N dias): pra cada ficha com dados/recuperacaoPV
+// ativa (autorizada antes pelo Mestre via Ação Pendente, ver
+// confirmarAcaoPendente "iniciar_recuperacao_pv" abaixo), avança
+// `quantidadeDias`, credita o PV proporcional recuperado e devolve um
+// resumo por ficha (pra reportar ao Mestre quanto PV voltou e, se a
+// recuperação terminou antes do fim do período, quantos dias sobraram).
+async function processarRecuperacoesPV(fichasAtivas, quantidadeDias) {
+    const recuperacoesPV = [];
+    for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
+        const rec = ficha.dados && ficha.dados.recuperacaoPV;
+        const avanco = avancarRecuperacaoPV(rec, quantidadeDias);
+        if (!avanco) continue;
+
+        const pvMax = calcularPvMaximo(ficha);
+        const pvAtualAntes = Number(ficha.dados.pvAtual ?? pvMax);
+        const pvAtualDepois = Math.min(pvMax, pvAtualAntes + avanco.pvRecuperadosNestaLeva);
+
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), {
+            pvAtual: pvAtualDepois,
+            recuperacaoPV: {
+                ...rec,
+                diasDecorridos: avanco.novoDiasDecorridos,
+                ativa: !avanco.completo
+            }
+        });
+
+        recuperacoesPV.push({
+            fichaId,
+            nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId,
+            pvRecuperados: avanco.pvRecuperadosNestaLeva,
+            pvAtual: pvAtualDepois,
+            pvMax,
+            completo: avanco.completo,
+            diasSobrando: avanco.diasSobrando
+        });
+    }
+    return recuperacoesPV;
+}
+
 // ---------------------------------------------------------------------
 // Passar o Dia — avança o calendário, dispara aviso de Domingo, e
 // dispara o popup de treinamento pra cada ficha com treino ativo.
@@ -1581,7 +1739,59 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
         await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
     }
 
-    return { calendario, virouDomingo, popups };
+    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, 1);
+
+    return { calendario, virouDomingo, popups, recuperacoesPV };
+}
+
+// ---------------------------------------------------------------------
+// Timeskip — avança N dias de uma vez (botão "Timeskip" no calendário
+// do Mestre). Mesma ideia de passarODia acima, mas: (1) o calendário só
+// é escrito uma vez no final, e (2) dispara UM aviso de custo de vida
+// pra CADA Domingo atravessado no período (não um só), formando uma
+// fila — cada ficha paga um de cada vez, e o próximo só aparece depois
+// que o anterior for pago (ver avaliarAvisoCustoVida em ficha.js).
+export async function passarVariosDias(calendarioAtual, fichasAtivas, quantidade) {
+    const { calendario, domingos } = await avancarNDias(calendarioAtual, quantidade);
+
+    if (domingos > 0) {
+        await dispararAvisoCustoVida(domingos);
+        // Ganho fixo semanal — creditado automaticamente uma vez por
+        // Domingo atravessado (mesma regra de passarODia, só que
+        // multiplicada pela quantidade de Domingos do período).
+        for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
+            const ganhoFixo = Number(ficha.dados && ficha.dados.ganhoFixo) || 0;
+            if (ganhoFixo > 0) {
+                const atual = Number(ficha.saldos && ficha.saldos.limpo && ficha.saldos.limpo.valor) || 0;
+                await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/limpo`)), { valor: atual + ganhoFixo * domingos });
+            }
+        }
+    }
+
+    // Sinaliza popup de treinamento pro Mestre, por ficha com treino
+    // ativo — igual passarODia (o avanço do treino em si continua
+    // acontecendo dia a dia, via confirmarAvancoTreinamento).
+    const popups = [];
+    for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
+        if (ficha.treinamento && ficha.treinamento.ativo) {
+            popups.push({ fichaId, nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId });
+        }
+    }
+    if (popups.length) {
+        await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
+    }
+
+    // Recuperação de PVs (manual) — pra cada ficha com uma recuperação
+    // já autorizada pelo Mestre e em andamento (dados/recuperacaoPV, ver
+    // criarAcaoPendente "iniciar_recuperacao_pv" / confirmarAcaoPendente
+    // abaixo), avança os `quantidade` dias do Timeskip dentro dela,
+    // credita o PV proporcional recuperado nesta leva e — se a
+    // recuperação terminar ANTES do fim do Timeskip — registra quantos
+    // dias sobraram sem uso. O resumo (recuperacoesPV) volta pro Mestre
+    // ver o que aconteceu com cada ficha durante esse período.
+    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, quantidade);
+
+    return { calendario, domingos, popups, recuperacoesPV };
 }
 
 export function ouvirPopupTreinamento(callback) {
@@ -1612,22 +1822,31 @@ export async function descartarPopupTreinamento(popupId) {
 // Mestre ao responder o aviso de Domingo), debitando do saldo escolhido
 // (por id, ex: "limpo", "sujo", "bolso" ou um saldo customizado).
 // ---------------------------------------------------------------------
-export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId) {
+// `pendenteId` identifica QUAL Domingo pendente da fila (ver
+// avisoCustoVida/pendentes em calendario.js) está sendo pago agora.
+// Marcamos ele como pago só nesta ficha (custoVidaPagos/{pendenteId}),
+// já que cada jogador tem seu próprio ritmo de pagamento — se um
+// Timeskip atravessou 2 Domingos, essa mesma função é chamada 2 vezes
+// (uma por pendente), e o próximo aviso só reaparece pro jogador depois
+// que este for confirmado (ver avaliarAvisoCustoVida em ficha.js).
+export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId, pendenteId) {
     const custoBase = custoSemanalPadraoDeVida(fichaAtual.dados.padraoDeVida);
     const extras = Object.values(fichaAtual.gastosExtras || {}).reduce((acc, g) => acc + (Number(g.valor) || 0), 0);
     const total = custoBase + extras;
+    const atualizacoesDados = { ultimoPagamentoCustoVida: Date.now() };
+    if (pendenteId) atualizacoesDados[`custoVidaPagos/${pendenteId}`] = true;
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
         const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || { saldoValor: 0 };
         const atual = Number(item.saldoValor) || 0;
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - total });
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { ultimoPagamentoCustoVida: Date.now() });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
         return total;
     }
     const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
     const atual = Number(saldo.valor) || 0;
     await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - total });
-    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { ultimoPagamentoCustoVida: Date.now() });
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
     return total;
 }
 
@@ -1748,6 +1967,21 @@ export async function confirmarAcaoPendente(acao) {
         if (payload.ehArmaFogo && payload.idDisparo && payload.itemIdDisparo) {
             await resetarRecuoArma(payload.idDisparo, payload.itemIdDisparo);
         }
+
+    } else if (tipo === "iniciar_recuperacao_pv") {
+        // Autorização do Mestre pro pedido de recuperação de PV do
+        // jogador (ver calcularTempoRecuperacaoPV em regras.js e o botão
+        // "Solicitar recuperação de PVs" em ficha.js). A partir daqui a
+        // recuperação fica "ativa" e passa a avançar sozinha a cada
+        // Timeskip (ver passarVariosDias acima), até completar.
+        await set(ref(db, caminhoMesa(`fichas/${fichaId}/dados/recuperacaoPV`)), {
+            ativa: true,
+            pvPerdidosInicial: Number(payload.pvPerdidos) || 0,
+            diasNecessarios: Number(payload.diasNecessarios) || 0,
+            diasDecorridos: 0,
+            infectadoNoPedido: !!payload.infectado,
+            iniciadoEm: Date.now()
+        });
 
     } else if (tipo === "guardar_acao_combate") {
         // Confirma o pedido criado em avancarTurnoCombate: converte as

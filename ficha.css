@@ -1528,6 +1528,16 @@
     font-size: 0.7rem;
     color: var(--text-dim);
 }
+.log-palavra-acerto {
+    color: var(--neon-lime);
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(163, 230, 53, 0.5);
+}
+.log-palavra-falha {
+    color: var(--neon-red);
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
 .log-resultado-linha {
     display: flex;
     align-items: center;

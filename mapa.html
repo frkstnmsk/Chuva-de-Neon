@@ -468,7 +468,8 @@
             <button id="exportarPoisBtn">Backup de Dados (JSON)</button>
             <button id="importarPoisBtn" style="border-color: var(--text-dim); color: var(--text-dim);">Restaurar Backup</button>
             <input type="file" id="arquivoImportacao" accept=".json" style="display:none;">
-            <button id="btnRecarregarSeed" style="border-color: var(--neon-lime); color: var(--neon-lime);">Recarregar POIs originais da mesa</button>
+            <button id="btnSalvarBackupNuvem" style="border-color: var(--neon-blue); color: var(--neon-blue);">☁️ Salvar Mapa (Backup Nuvem)</button>
+            <button id="btnRecarregarSeed" style="border-color: var(--neon-lime); color: var(--neon-lime);">Recarregar Último Backup</button>
         </div>
     </div>
 </div>
@@ -1063,17 +1064,45 @@
 
     document.getElementById('importarPoisBtn').onclick = () => document.getElementById('arquivoImportacao').click();
 
+    // Backup em Nuvem: salva o estado ATUAL de pois + linhas dessa mesa
+    // num nó separado do Firebase (mapaBackup), sem mexer no mapa "ao
+    // vivo" (mapaPois/mapaLinhas). Serve como ponto de restauração —
+    // ver btnRecarregarSeed logo abaixo, que volta pra essa última
+    // versão salva aqui.
+    document.getElementById('btnSalvarBackupNuvem').onclick = async () => {
+        if (!MESA_ID) { alert("Sem mesa detectada na sessão — abra o mapa pelo botão \"Mapa\" da ficha."); return; }
+        if (!confirm("Salvar o estado atual do mapa dessa mesa como backup na nuvem? Isso substitui o backup salvo anteriormente (se houver).")) return;
+        const poisLimpos = pois.map(p => ({ id: p.id, mapa: p.mapa, nome: p.nome, emoji: p.emoji, lat: p.lat, lng: p.lng, categorias: p.categorias || [], coordMundo: p.coordMundo }));
+        await set(ref(db, caminhoMesa("mapaBackup")), {
+            pois: poisLimpos,
+            linhas: linhasCustomizadas,
+            salvoEm: new Date().toISOString()
+        });
+        alert("Backup do mapa salvo na nuvem.");
+    };
+
     // Botão de recuperação manual: sobrescreve o que estiver salvo AGORA
-    // pra essa mesa com o registro inicial embutido (SEED_*_POR_MESA) —
-    // útil se o navegador já tinha alguma coisa (mesmo vazia) salva antes
-    // de o registro inicial existir, o que bloqueia o carregamento
-    // automático (ver prepararArmazenamentoDaMesa lá em cima).
+    // pra essa mesa com o ÚLTIMO backup em nuvem feito pelo botão
+    // "Salvar Mapa (Backup Nuvem)" acima. Se essa mesa nunca salvou um
+    // backup em nuvem, cai pro registro inicial embutido (SEED_*_POR_MESA)
+    // como antes — hoje só a 77³ (frkstnmsk) tem um desses cadastrado.
     document.getElementById('btnRecarregarSeed').onclick = async () => {
         if (!MESA_ID) { alert("Sem mesa detectada na sessão — abra o mapa pelo botão \"Mapa\" da ficha."); return; }
+
+        const snapBackup = await get(ref(db, caminhoMesa("mapaBackup")));
+        if (snapBackup.exists()) {
+            const backup = snapBackup.val();
+            const dataFormatada = backup.salvoEm ? new Date(backup.salvoEm).toLocaleString("pt-BR") : "data desconhecida";
+            if (!confirm(`Isso substitui TODAS as marcações e linhas dessa mesa (pra todo mundo) pelo último backup salvo (${dataFormatada}). Continuar?`)) return;
+            await set(ref(db, caminhoMesa("mapaPois")), backup.pois || []);
+            await set(ref(db, caminhoMesa("mapaLinhas")), backup.linhas || []);
+            return;
+        }
+
         const temSeedPois = !!SEED_POIS_POR_MESA[MESA_ID];
         const temSeedLinhas = !!SEED_LINHAS_POR_MESA[MESA_ID];
         if (!temSeedPois && !temSeedLinhas) {
-            alert(`Não há registro inicial cadastrado pra mesa "${MESA_ID}" — só a 77³ (frkstnmsk) tem um até agora.`);
+            alert(`Essa mesa ainda não tem nenhum backup em nuvem salvo (use "☁️ Salvar Mapa" primeiro), e não há registro inicial cadastrado pra mesa "${MESA_ID}" — só a 77³ (frkstnmsk) tem um até agora.`);
             return;
         }
         if (!confirm("Isso substitui TODAS as marcações e linhas dessa mesa (pra todo mundo) pelo registro inicial. Continuar?")) return;

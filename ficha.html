@@ -163,6 +163,7 @@
                 </div>
                 <button id="btn-salvar-calendario" class="btn-blue" type="button">Salvar calendário</button>
                 <button id="btn-passar-dia" class="btn-lime" type="button">Passar o dia</button>
+                <button id="btn-timeskip" class="btn-blue" type="button">Timeskip</button>
             </div>
         </aside>
 
@@ -337,6 +338,15 @@
                     <div class="grid-recursos" id="grid-recursos"></div>
                     <div class="estado-saude-badge" id="estado-saude-badge" style="display:none;"></div>
                     <div class="estado-saude-badge estado-energia-badge" id="estado-energia-badge" style="display:none;"></div>
+
+                    <!-- Recuperação de PVs (manual): tempo de recuperação proporcional
+                         à % de PV perdido (ver calcularTempoRecuperacaoPV em regras.js).
+                         Só começa a valer depois que o Mestre aprova o pedido na fila de
+                         Ações Pendentes — ver configurarRecuperacaoPV em ficha.js. -->
+                    <div class="recuperacao-pv-painel" id="recuperacao-pv-painel" style="display:none;">
+                        <p class="hint" id="recuperacao-pv-status"></p>
+                        <button id="btn-solicitar-recuperacao-pv" class="btn-lime" type="button" style="display:none;">Solicitar recuperação de PVs ao Mestre</button>
+                    </div>
 
                     <div class="section-header">Atributos secundários (calculados) <span class="hint-inline">base do manual + modificadores de itens/vantagens/desvantagens/especializações</span></div>
                     <div class="grid-atributos" id="grid-atributos-secundarios"></div>
@@ -770,6 +780,23 @@
         </div>
         <div class="modal-btns">
             <button id="custo-vida-confirmar" class="btn-lime" type="button">Confirmar pagamento</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: TIMESKIP (Mestre) ===================== -->
+<div class="modal-overlay" id="modal-timeskip">
+    <div class="modal-content">
+        <h4>Timeskip</h4>
+        <p class="hint">Avança vários dias de uma vez. Cada Domingo dentro do período dispara um pagamento semanal na ficha dos jogadores — se houver mais de um Domingo, os pagamentos aparecem um de cada vez, na sequência.</p>
+        <div class="modal-field">
+            <label for="timeskip-dias">Quantos dias vão se passar?</label>
+            <input type="number" id="timeskip-dias" min="1" step="1" value="1">
+        </div>
+        <p id="timeskip-preview" class="hint"></p>
+        <div class="modal-btns">
+            <button id="timeskip-cancelar" class="btn-ghost" type="button">Cancelar</button>
+            <button id="timeskip-confirmar" class="btn-lime" type="button">Confirmar timeskip</button>
         </div>
     </div>
 </div>

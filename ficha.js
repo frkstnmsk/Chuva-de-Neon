@@ -14,7 +14,9 @@ import {
     calcularDanoDesarmado, calcularDificuldadeArmaFogo, MAX_ATRIBUTO_JOGO,
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
     calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
-    dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO
+    dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
+    dificuldadeInfeccao, DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
+    calcularTempoRecuperacaoPV
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -71,15 +73,15 @@ import {
 } from "./treinamento.js";
 import {
     garantirCalendarioInicial, ouvirCalendario, salvarCalendario, passarUmDia,
-    diasSemana, climas, registrarRolagem, ouvirLogDados,
-    ouvirAvisoCustoVida, limparAvisoCustoVida
+    calcularAvancoDias, diasSemana, climas, registrarRolagem, ouvirLogDados,
+    ouvirAvisoCustoVida
 } from "./calendario.js";
 import {
     PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal,
     ouvirTodasAsFichas, darXp, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
     mestreRolarDado, aplicarDano, testarSangramento,
-    ouvirNpcs, excluirNpc, passarODia,
+    ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
     pagarCustoSemanal,
@@ -92,7 +94,8 @@ import {
     definirDerrubado, levantarDerrubado,
     definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
     definirAlcanceLimitado, soltarAlcanceLimitado,
-    definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados
+    definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados,
+    aplicarInfeccao, curarInfeccao, testarInfeccao
 } from "./mestre.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -167,13 +170,18 @@ let godmodeAtivo = false;
 let ignorarPenalidadeSaudeAtivo = false;
 let calendarioAtual = null;
 let todasAsFichasCache = {};
+// Guarda { pvPerdidos, diasNecessarios } calculados no último render dos
+// Recursos Vitais, pra o clique em "Solicitar recuperação de PVs" (ver
+// configurarRecuperacaoPV) montar o pedido sem precisar recalcular tudo
+// de novo — null quando não há PV perdido ou já existe recuperação ativa.
+let pvRecuperacaoContexto = null;
 // Cache local do Banco Global de Itens — carregado pra todo mundo (jogador
 // e Mestre), já que o autocompletar do modal de item precisa dele em
 // qualquer ficha, não só na Biblioteca do Painel do Mestre.
 let itensGlobaisCache = [];
 let receitasGlobaisCache = [];
 let categoriaInventarioAtiva = "levando";
-let ultimoAvisoCustoVida = null; // último valor visto de `avisoCustoVida` no Firebase
+let ultimoAvisoCustoVida = {}; // fila de pendentes de `avisoCustoVida/pendentes` no Firebase: { [pendenteId]: timestampDoDomingo }
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
 let combateNpcFormVisivel = false; // controla se o formulário de "Criar novo NPC" está aberto dentro do Gerenciador de Combate
 let painelIniciativaJogadorAberto = false; // controla se o modal "Gerenciador de Combate do Jogador" está na tela
@@ -420,6 +428,16 @@ const el = {
     calEditClima: document.getElementById("cal-edit-clima"),
     btnSalvarCalendario: document.getElementById("btn-salvar-calendario"),
     btnPassarDia: document.getElementById("btn-passar-dia"),
+    btnTimeskip: document.getElementById("btn-timeskip"),
+    modalTimeskip: document.getElementById("modal-timeskip"),
+    timeskipDias: document.getElementById("timeskip-dias"),
+    timeskipPreview: document.getElementById("timeskip-preview"),
+    timeskipCancelar: document.getElementById("timeskip-cancelar"),
+    timeskipConfirmar: document.getElementById("timeskip-confirmar"),
+    // recuperação de PV
+    recuperacaoPvPainel: document.getElementById("recuperacao-pv-painel"),
+    recuperacaoPvStatus: document.getElementById("recuperacao-pv-status"),
+    btnSolicitarRecuperacaoPv: document.getElementById("btn-solicitar-recuperacao-pv"),
     // log de dados
     logDados: document.getElementById("log-dados"),
     logDadosLista: document.getElementById("log-dados-lista"),
@@ -592,6 +610,7 @@ async function init() {
     tentarOuAvisar("modal de alvo", configurarModalSelecionarAlvo);
     tentarOuAvisar("finanças", configurarFinancas);
     tentarOuAvisar("ações pendentes", configurarAcoesPendentes);
+    tentarOuAvisar("recuperação de PV", configurarRecuperacaoPV);
     tentarOuAvisar("dar item", configurarDarItem);
     tentarOuAvisar("cache de fichas", () => {
         ouvirTodasAsFichas((todas) => { todasAsFichasCache = todas || {}; });
@@ -1811,6 +1830,7 @@ function renderizarAtributos(modificadoresPlanos) {
     renderizarEstadoEnergia(estadoEnergia);
 
     renderizarBarrasVitaisTopo(d.pvAtual, pvMaximoTotal, estadoSaude, d.energiaAtual, energiaMaximoTotal, estadoEnergia);
+    renderizarRecuperacaoPV(d, pvMaximoTotal);
 
     // Secundários calculados
     ATRIBUTOS_SECUNDARIOS.forEach(attr => {
@@ -1867,6 +1887,86 @@ function renderizarBarrasVitaisTopo(pvAtual, pvMax, estadoSaude, energiaAtual, e
     const estadoGrave = (estadoSaude && estadoSaude.estado === "muito_machucado")
         || (estadoEnergia && estadoEnergia.estado === "energia_critica");
     if (el.app) el.app.classList.toggle("ficha-muito-ferido", !!estadoGrave);
+}
+
+// ---------------------------------------------------------------------
+// Recuperação de PVs (manual) — painel logo abaixo dos badges de
+// Machucado/Muito Machucado, em "Recursos vitais". Três estados:
+//   1. Sem PV perdido: painel escondido (nada pra recuperar).
+//   2. PV perdido, sem recuperação ativa: mostra o tempo estimado (ver
+//      calcularTempoRecuperacaoPV em regras.js) e o botão de pedir ao
+//      Mestre — o pedido em si vira uma Ação Pendente (ver
+//      configurarRecuperacaoPV abaixo), só concretizado quando o Mestre
+//      aprovar.
+//   3. Recuperação já autorizada e em andamento: mostra o progresso
+//      (dias decorridos / necessários) e some com o botão, já que só o
+//      Mestre autoriza (não dá pra pedir de novo por cima).
+// ---------------------------------------------------------------------
+function renderizarRecuperacaoPV(d, pvMaximoTotal) {
+    if (!el.recuperacaoPvPainel) return;
+    const rec = d.recuperacaoPV;
+
+    if (rec && rec.ativa) {
+        pvRecuperacaoContexto = null;
+        const diasNecessarios = Number(rec.diasNecessarios) || 0;
+        const diasDecorridos = Math.min(diasNecessarios, Number(rec.diasDecorridos) || 0);
+        const diasFaltando = Math.max(0, diasNecessarios - diasDecorridos);
+        const notaInfeccao = rec.infectadoNoPedido ? " (+50% pela infecção ativa no momento do pedido)" : "";
+        el.recuperacaoPvPainel.style.display = "";
+        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
+        if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
+        return;
+    }
+
+    const atual = (d.pvAtual === null || d.pvAtual === undefined) ? pvMaximoTotal : Number(d.pvAtual);
+    const pvPerdidos = Math.max(0, Math.round(pvMaximoTotal - atual));
+
+    if (pvPerdidos <= 0 || pvMaximoTotal <= 0) {
+        pvRecuperacaoContexto = null;
+        el.recuperacaoPvPainel.style.display = "none";
+        return;
+    }
+
+    // Infecção (manual, "Complicações de ferimentos"): aumenta em 50% o
+    // tempo de repouso necessário. A flag é persistente na própria ficha
+    // (fichas/{id}/dados/infeccao — ver aplicarInfeccao/curarInfeccao em
+    // mestre.js), não só durante o combate em que foi aplicada.
+    const infectado = !!(d.infeccao && d.infeccao.ativo);
+    const diasNecessarios = calcularTempoRecuperacaoPV(pvPerdidos, pvMaximoTotal, infectado);
+    pvRecuperacaoContexto = { pvPerdidos, pvMaximoTotal, diasNecessarios, infectado };
+    el.recuperacaoPvPainel.style.display = "";
+    const notaInfeccao = infectado ? " — infecção ativa: +50% no tempo de recuperação" : "";
+    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Tempo estimado de recuperação: ${diasNecessarios} dia(s)${notaInfeccao} (precisa de autorização do Mestre pra começar a contar).`;
+    if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "";
+}
+
+// Botão "Solicitar recuperação de PVs ao Mestre" — cria uma Ação
+// Pendente (mesma fila de remover_item/gastar_dinheiro/etc, ver
+// mestre.js) com o tempo já calculado (incluindo o +50% de infecção, se
+// for o caso); só quando o Mestre confirmar essa pendência é que
+// dados/recuperacaoPV vira ativa de fato (ver confirmarAcaoPendente,
+// tipo "iniciar_recuperacao_pv").
+function configurarRecuperacaoPV() {
+    if (!el.btnSolicitarRecuperacaoPv) return;
+    el.btnSolicitarRecuperacaoPv.addEventListener("click", async () => {
+        if (!fichaAtual || !idAtivo() || !pvRecuperacaoContexto) return;
+        const { pvPerdidos, diasNecessarios, infectado } = pvRecuperacaoContexto;
+        const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+        const notaInfeccao = infectado ? " (já inclui +50% por infecção ativa)" : "";
+        try {
+            await criarAcaoPendente({
+                tipo: "iniciar_recuperacao_pv",
+                fichaId: fichaAtualId,
+                nomeJogador,
+                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvPerdidos} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}.`,
+                payload: { pvPerdidos, diasNecessarios, infectado }
+            });
+            toast("Pedido de recuperação de PVs enviado ao Mestre.");
+        } catch (err) {
+            console.error(err);
+            toast("Falha ao enviar o pedido de recuperação de PVs.", "erro");
+        }
+    });
 }
 
 // Lista de itens equipados agora (armas equipadas + qualquer outro item
@@ -1967,6 +2067,18 @@ function badgeEstadoEnergiaCombate(p) {
         ? "Energia esgotada"
         : (p.estadoEnergia === "energia_critica" ? "-3 em testes físicos, -2 em testes mentais" : "-2 em testes físicos");
     return ` <span class="mod-pill negativo" title="${titulo}">${escapeHtml(p.estadoEnergiaLabel)}</span>`;
+}
+
+// Badge de Infecção (Complicações de ferimentos — manual; ver
+// aplicarInfeccao/testarInfeccao em mestre.js). Flag persistente, sem
+// contagem de turnos (diferente do Sangramento, abaixo): sozinha não
+// causa dano, só aumenta em 50% o tempo de repouso necessário até o
+// personagem receber tratamento médico de verdade — mesmo helper
+// compartilhado entre o painel do jogador e o do Mestre.
+function badgeInfeccaoCombate(p) {
+    if (!p.infeccao || !p.infeccao.ativo) return "";
+    const titulo = `Tempo de repouso necessário +50% até tratamento médico${p.infeccao.garantida ? " (infecção garantida)" : ""}${p.infeccao.origem ? ` — ${p.infeccao.origem}` : ""}`;
+    return ` <span class="mod-pill negativo" title="${escapeHtml(titulo)}">🦠 Infectado</span>`;
 }
 
 // Badges de status ativos por turno (Tick System — ex: Sangramento) pra
@@ -2891,6 +3003,76 @@ function abrirModalQuebrarOssosJJ(modificadorNaoUsado, nivelJJ) {
         el.alvoSelect.appendChild(opt);
     });
     el.modalSelecionarAlvo.classList.add("active");
+}
+
+// Infecção — Complicações de ferimentos (manual; ver dificuldadeInfeccao
+// em regras.js e testarInfeccao/aplicarInfeccao em mestre.js). Modal do
+// Mestre, aberto de dentro do Gerenciador de Combate ("Testar Infecção"
+// em qualquer participante — não depende de já estar infectado). Dois
+// caminhos:
+// - "Rolar teste": monta a dificuldade final com dificuldadeInfeccao
+//   (base 18 fixa pra tratamento malfeito/ambiente sujo, ou 18-22 pra
+//   ferimento profundo — a critério do Mestre — menos o modificador de
+//   itens/tratamento, ex.: -2 com Soro Fisiológico) e chama
+//   testarInfeccao, que já rola e aplica a flag em caso de falha.
+// - "Aplicar infecção direto": cobre o caso do manual em que NÃO há
+//   teste (falha em Remover Projétil com complicação — projétil
+//   alojado, infecção garantida).
+function abrirModalTestarInfeccao(participanteId, nomeParticipante) {
+    let modal = document.getElementById("modal-testar-infeccao");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-testar-infeccao";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Infecção — ${escapeHtml(nomeParticipante)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Manual: dificuldade 18 fixa pra tratamento malfeito/ambiente sujo (não isolar o ferimento, mãos/equipamento não esterilizados); ${DIFICULDADE_INFECCAO_MINIMA} a ${DIFICULDADE_INFECCAO_MAXIMA} pra ferimento profundo/grave, mesmo com tratamento adequado — esse teste se repete uma vez por cena até receber tratamento médico. Itens como Soro Fisiológico reduzem a dificuldade em -2.</p>
+        <label style="display:block;margin-top:10px;">Dificuldade base (${DIFICULDADE_INFECCAO_MINIMA}-${DIFICULDADE_INFECCAO_MAXIMA})
+            <input type="number" id="infeccao-dificuldade" value="${DIFICULDADE_INFECCAO_MINIMA}" min="1" style="width:100%;">
+        </label>
+        <label style="display:block;margin-top:10px;">Modificador de itens/tratamento (ex: -2 com Soro Fisiológico)
+            <input type="number" id="infeccao-modificador" value="0" style="width:100%;">
+        </label>
+        <label style="display:block;margin-top:10px;">Origem / observação
+            <input type="text" id="infeccao-origem" placeholder="Ex: ferimento de bala no torso, tratado sem esterilizar" style="width:100%;">
+        </label>
+        <button type="button" class="btn-lime" id="btn-rolar-teste-infeccao" style="margin-top:14px;width:100%;">Rolar teste de Constituição</button>
+        <button type="button" class="btn-red" id="btn-infeccao-garantida" style="margin-top:8px;width:100%;">Aplicar infecção direto (sem teste — ex: projétil que ficou alojado)</button>
+    `;
+    const fechar = () => modal.remove();
+    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+    modal.querySelector("#btn-rolar-teste-infeccao").addEventListener("click", async () => {
+        const dificuldadeBase = Number(modal.querySelector("#infeccao-dificuldade").value) || DIFICULDADE_INFECCAO_MINIMA;
+        const modificadorItens = Number(modal.querySelector("#infeccao-modificador").value) || 0;
+        const origem = modal.querySelector("#infeccao-origem").value.trim() || "Complicação de ferimento";
+        try {
+            const dificuldade = dificuldadeInfeccao(dificuldadeBase, modificadorItens);
+            const resultado = await testarInfeccao(participanteId, dificuldade, origem);
+            if (!resultado) { toast("Não foi possível testar — participante não encontrado.", "erro"); return; }
+            await registrarRolagem({ quem: nomeParticipante, modificador: resultado.modConstituicao, resultado: resultado.resultado, detalhe: resultado.detalhe });
+            toast(resultado.detalhe, resultado.sucesso ? undefined : "erro");
+            fechar();
+        } catch (e) {
+            toast(e.message || "Falha ao testar infecção.", "erro");
+        }
+    });
+    modal.querySelector("#btn-infeccao-garantida").addEventListener("click", async () => {
+        const origem = modal.querySelector("#infeccao-origem").value.trim() || "Infecção garantida (complicação de tratamento)";
+        try {
+            await aplicarInfeccao(participanteId, origem, true);
+            const detalhe = `${nomeParticipante} recebeu uma infecção GARANTIDA (sem teste): ${origem}.`;
+            await registrarRolagem({ quem: nomeParticipante, modificador: 0, resultado: "Infecção garantida", detalhe });
+            toast(detalhe, "erro");
+            fechar();
+        } catch (e) {
+            toast(e.message || "Falha ao aplicar infecção.", "erro");
+        }
+    });
 }
 
 // CQC nível 2 e nível 4 (manual): checkbox pré-rolagem de iniciativa —
@@ -7995,24 +8177,107 @@ function configurarCalendario() {
             if (!calendarioAtual) return;
             try {
                 const fichasParaPopup = todasAsFichasCache;
-                const { calendario, virouDomingo, popups } = await passarODia(calendarioAtual, fichasParaPopup);
+                const { calendario, virouDomingo, popups, recuperacoesPV } = await passarODia(calendarioAtual, fichasParaPopup);
                 // Mesmo motivo do handler de "Salvar calendário" acima:
                 // evita que um segundo clique rápido em "Passar o dia" (ou
                 // um clique em "Salvar calendário" logo em seguida) use a
                 // versão antiga do dia, de antes deste avanço.
                 calendarioAtual = calendario;
                 toast(virouDomingo ? "Dia avançado — caiu Domingo!" : "Dia avançado.");
+                mostrarResumoRecuperacaoPV(recuperacoesPV);
             } catch (err) {
                 console.error(err);
                 toast(`Falha ao passar o dia: ${err.message || err}`, "erro");
             }
         });
+
+        configurarTimeskip();
     }
+}
+
+// Resumo da Recuperação de PVs (manual) — chamado depois de "Passar o
+// dia" e do Timeskip (ver passarODia/passarVariosDias em mestre.js).
+// Pra cada ficha com recuperação em andamento nesse período, mostra
+// quanto PV foi recuperado; se a recuperação terminou ANTES do fim do
+// período avançado, mostra também quantos dias sobraram sem uso (ver
+// avancarRecuperacaoPV em regras.js).
+function mostrarResumoRecuperacaoPV(recuperacoesPV) {
+    (recuperacoesPV || []).forEach(r => {
+        if (r.pvRecuperados <= 0 && !r.completo) return;
+        const partes = [`${r.nomeFicha}: +${r.pvRecuperados} PV recuperado(s) (${r.pvAtual}/${r.pvMax})`];
+        if (r.completo) {
+            partes.push("recuperação concluída");
+            if (r.diasSobrando > 0) partes.push(`${r.diasSobrando} dia(s) de Timeskip sobrando`);
+        }
+        toast(partes.join(" — "));
+    });
+}
+
+// ---------------------------------------------------------------------
+// Timeskip — o Mestre escolhe quantos dias se passam de uma vez só. A
+// caixa mostra, ao vivo, qual data/dia da semana o calendário vai ter
+// depois de confirmado. Se o período avançado atravessar Domingo(s),
+// cada um deles vira um pagamento semanal na fila dos jogadores (ver
+// passarVariosDias em mestre.js e configurarAvisoCustoVida abaixo).
+// ---------------------------------------------------------------------
+function configurarTimeskip() {
+    function atualizarPreviewTimeskip() {
+        const dias = Math.max(1, Math.trunc(Number(el.timeskipDias.value)) || 1);
+        if (!calendarioAtual) { el.timeskipPreview.innerText = ""; return; }
+        const { calendario, domingos } = calcularAvancoDias(calendarioAtual, dias);
+        const avisoDomingos = domingos > 0
+            ? ` — atravessa ${domingos} Domingo${domingos > 1 ? "s" : ""} (${domingos > 1 ? "dispara pagamentos semanais em fila" : "dispara pagamento semanal"}).`
+            : " — nenhum Domingo nesse período.";
+        el.timeskipPreview.innerText = `Vai ficar: ${calendario.dataLabel} (${calendario.diaSemana})${avisoDomingos}`;
+    }
+
+    el.btnTimeskip.addEventListener("click", () => {
+        if (!calendarioAtual) return;
+        el.timeskipDias.value = "1";
+        atualizarPreviewTimeskip();
+        el.modalTimeskip.classList.add("active");
+    });
+
+    el.timeskipDias.addEventListener("input", atualizarPreviewTimeskip);
+
+    el.timeskipCancelar.addEventListener("click", () => {
+        el.modalTimeskip.classList.remove("active");
+    });
+
+    el.timeskipConfirmar.addEventListener("click", async () => {
+        if (!calendarioAtual) return;
+        const dias = Math.max(1, Math.trunc(Number(el.timeskipDias.value)) || 1);
+        try {
+            const { calendario, domingos, recuperacoesPV } = await passarVariosDias(calendarioAtual, todasAsFichasCache, dias);
+            // Mesmo motivo do handler de "Passar o dia": evita usar a
+            // versão antiga do calendário caso o Mestre clique em outra
+            // coisa (Salvar calendário, Passar o dia) logo em seguida.
+            calendarioAtual = calendario;
+            el.modalTimeskip.classList.remove("active");
+            toast(domingos > 0
+                ? `Timeskip de ${dias} dia(s) — atravessou ${domingos} Domingo(s), pagamento(s) semanal(is) disparado(s).`
+                : `Timeskip de ${dias} dia(s).`);
+            mostrarResumoRecuperacaoPV(recuperacoesPV);
+        } catch (err) {
+            console.error(err);
+            toast(`Falha ao aplicar o timeskip: ${err.message || err}`, "erro");
+        }
+    });
 }
 
 // =====================================================================
 // LOG DE DADOS
 // =====================================================================
+
+// Destaca palavras-chave do texto do log (ACERTO! em verde-neon, FALHOU
+// em vermelho-neon) pra ficarem visíveis mesmo com o texto do detalhe
+// em cinza apagado (.log-detalhe usa --text-dim). Recebe o texto JÁ
+// escapado (escapeHtml) e devolve HTML com os spans de destaque.
+function destacarPalavrasChave(textoEscapado) {
+    return textoEscapado
+        .replace(/ACERTO!/g, '<span class="log-palavra-acerto">ACERTO!</span>')
+        .replace(/FALHOU/g, '<span class="log-palavra-falha">FALHOU</span>');
+}
 
 function configurarLogDados() {
     ouvirLogDados((lista) => {
@@ -8039,7 +8304,7 @@ function configurarLogDados() {
                     <span class="log-hora">${hora}</span>
                 </div>
                 ${badgeCritico}
-                ${entrada.detalhe ? `<span class="log-detalhe">${escapeHtml(entrada.detalhe)}</span>` : ""}
+                ${entrada.detalhe ? `<span class="log-detalhe">${destacarPalavrasChave(escapeHtml(entrada.detalhe))}</span>` : ""}
                 <div class="log-resultado-linha">
                     <span class="log-resultado">${entrada.resultado}</span>
                     <span class="log-detalhe">${modText.trim()}</span>
@@ -8755,6 +9020,7 @@ function montarPainelIniciativaJogador() {
         const badgeSaude = badgeEstadoSaudeCombate(p);
         const badgeEnergia = badgeEstadoEnergiaCombate(p);
         const badgeStatus = badgeStatusAtivosCombate(p);
+        const badgeInfeccao = badgeInfeccaoCombate(p);
         // Jogador não vê o PV de NPC (só o próprio e o de outros
         // jogadores) — só o Mestre tem essa informação, no Gerenciador de
         // Combate dele (montarGerenciadorCombate). Sem isso o painel do
@@ -8766,7 +9032,7 @@ function montarPainelIniciativaJogador() {
         const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
         return `
             <div class="combate-linha ${ativo ? "combate-linha-ativa" : ""}">
-                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${marcadorVoce}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeInfeccao}</span>
                 <span>Iniciativa ${p.iniciativa}${p.bonusCQCIniciativa ? " (+1 CQC nível 2)" : ""}${p.bonusCobraKaiIniciativa ? ` (+${p.bonusCobraKaiIniciativa} Cobra Kai)` : ""}</span>
                 ${pvTexto}
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -8895,8 +9161,8 @@ function montarPainelAcoesPendentes(corpo) {
 // =====================================================================
 
 function configurarAvisoCustoVida() {
-    ouvirAvisoCustoVida((aviso) => {
-        ultimoAvisoCustoVida = aviso;
+    ouvirAvisoCustoVida((pendentes) => {
+        ultimoAvisoCustoVida = pendentes || {};
         avaliarAvisoCustoVida();
     });
 
@@ -8905,24 +9171,53 @@ function configurarAvisoCustoVida() {
         const saldoId = el.custoVidaOrigem.value;
         const saldo = todosOsSaldos(fichaAtual).find(s => s.id === saldoId);
         if (!saldo) { toast("Escolha um saldo válido.", "erro"); return; }
-        const total = await pagarCustoSemanal(fichaAtualId, fichaAtual, saldoId);
+        const pendenteId = el.modalCustoVida.dataset.pendenteId || "";
+        const total = await pagarCustoSemanal(fichaAtualId, fichaAtual, saldoId, pendenteId);
         toast(`Pago CN$ ${total} (${saldo.nome}).`);
         el.modalCustoVida.classList.remove("active");
+        // Não precisa chamar avaliarAvisoCustoVida aqui na mão: o
+        // listener da ficha (onValue, linha ~774) vai ecoar esse
+        // pagamento (custoVidaPagos/{pendenteId} recém-marcado) e disparar
+        // avaliarAvisoCustoVida de novo sozinho — se sobrar mais algum
+        // pendente na fila (ex.: Timeskip que atravessou 2+ Domingos), o
+        // modal reabre automaticamente pro próximo.
     });
 }
 
-function avaliarAvisoCustoVida() {
-    if (!ultimoAvisoCustoVida || !ultimoAvisoCustoVida.ativo || isMestre || !fichaAtual) return;
-    const jaPagouEsteAviso = (fichaAtual.dados.ultimoPagamentoCustoVida || 0) >= (ultimoAvisoCustoVida.timestamp || 0);
-    if (jaPagouEsteAviso) return;
-    abrirModalCustoVida();
+// Acha, na fila de pendentes de custo de vida (`avisoCustoVida/pendentes`
+// no Firebase), o mais antigo que ESTA ficha ainda não pagou. Um
+// Timeskip que atravessa vários Domingos de uma vez gera vários
+// pendentes; cada ficha paga um de cada vez, do mais antigo pro mais
+// novo — nunca vê mais de um aviso simultâneo.
+function proximoPendenteCustoVida() {
+    if (!fichaAtual) return null;
+    const pagos = (fichaAtual.dados && fichaAtual.dados.custoVidaPagos) || {};
+    const pendentesOrdenados = Object.entries(ultimoAvisoCustoVida || {})
+        .sort((a, b) => a[1] - b[1]) // mais antigo (Domingo mais atrás) primeiro
+        .filter(([id]) => !pagos[id]);
+    if (!pendentesOrdenados.length) return null;
+    const [id] = pendentesOrdenados[0];
+    return { id, restantes: pendentesOrdenados.length };
 }
 
-function abrirModalCustoVida() {
+function avaliarAvisoCustoVida() {
+    if (isMestre || !fichaAtual) return;
+    const pendente = proximoPendenteCustoVida();
+    if (!pendente) {
+        if (el.modalCustoVida.classList.contains("active")) el.modalCustoVida.classList.remove("active");
+        return;
+    }
+    // Já está mostrando esse mesmo pendente? Não reabre/repisca à toa.
+    if (el.modalCustoVida.classList.contains("active") && el.modalCustoVida.dataset.pendenteId === pendente.id) return;
+    abrirModalCustoVida(pendente);
+}
+
+function abrirModalCustoVida(pendente) {
     const total = custoSemanalTotal(fichaAtual);
-    el.custoVidaResumo.innerText = fichaAtual.dados.padraoDeVida
+    const notaFila = pendente.restantes > 1 ? ` (${pendente.restantes} pagamentos semanais pendentes — este é o mais antigo)` : "";
+    el.custoVidaResumo.innerText = (fichaAtual.dados.padraoDeVida
         ? `Gasto semanal total: CN$ ${total}.`
-        : `Defina um padrão de vida no Perfil antes de pagar (gasto atual considera só extras: CN$ ${total}).`;
+        : `Defina um padrão de vida no Perfil antes de pagar (gasto atual considera só extras: CN$ ${total}).`) + notaFila;
 
     const saldos = todosOsSaldos(fichaAtual);
     el.custoVidaOrigem.innerHTML = "";
@@ -8933,6 +9228,7 @@ function abrirModalCustoVida() {
         el.custoVidaOrigem.appendChild(opt);
     });
 
+    el.modalCustoVida.dataset.pendenteId = pendente.id;
     el.modalCustoVida.classList.add("active");
 }
 
@@ -10088,12 +10384,23 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeSaude = badgeEstadoSaudeCombate(p);
             const badgeEnergia = badgeEstadoEnergiaCombate(p);
             const badgeStatus = badgeStatusAtivosCombate(p);
+            // Infecção (Complicações de ferimentos — manual; ver
+            // aplicarInfeccao/testarInfeccao em mestre.js): flag
+            // persistente, igual Ossos Quebrados — botão "Tratar" some a
+            // qualquer momento (tratamento médico de verdade, fim de
+            // cena etc.). "Testar Infecção" fica sempre disponível (não
+            // depende de já estar infectado), pois o Mestre pode disparar
+            // esse teste sobre qualquer participante a qualquer momento.
+            const badgeInfeccao = (p.infeccao && p.infeccao.ativo)
+                ? ` <span class="mod-pill negativo" title="Tempo de repouso necessário +50% até tratamento médico${p.infeccao.garantida ? " (infecção garantida)" : ""}${p.infeccao.origem ? ` — ${escapeHtml(p.infeccao.origem)}` : ""}">🦠 Infectado</span> <button type="button" class="btn-ghost btn-curar-infeccao" data-curar-infeccao="${pid}" style="padding:2px 6px;font-size:0.7rem;">Tratar</button>`
+                : "";
+            const botaoTestarInfeccao = ` <button type="button" class="btn-ghost btn-testar-infeccao" data-testar-infeccao="${pid}" style="padding:2px 6px;font-size:0.7rem;" title="Teste de Constituição vs. Infecção (manual: Complicações de ferimentos)">🦠 Testar Infecção</button>`;
             const badgeIniciativaTravada = p.iniciativaTravada
                 ? ` <span class="mod-pill negativo" title="Tirou 1 no d20 da iniciativa — perde esse turno inteiro (0 ações). Ao encerrar o turno, rerrola automaticamente e reordena a fila.">🎲1 Perdeu o turno</span>`
                 : "";
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeIniciativaTravada}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeInfeccao}${botaoTestarInfeccao}${badgeIniciativaTravada}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""}${p.bonusCobraKaiIniciativa ? ` + ${p.bonusCobraKaiIniciativa} Cobra Kai` : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -10131,6 +10438,21 @@ function montarGerenciadorCombate(corpoOriginal) {
                 btnCurarOssos.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     await curarOssosQuebrados(pid);
+                });
+            }
+            const btnCurarInfeccao = linha.querySelector("[data-curar-infeccao]");
+            if (btnCurarInfeccao) {
+                btnCurarInfeccao.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    await curarInfeccao(pid);
+                    toast(`${p.nome}: infecção tratada.`);
+                });
+            }
+            const btnTestarInfeccao = linha.querySelector("[data-testar-infeccao]");
+            if (btnTestarInfeccao) {
+                btnTestarInfeccao.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    abrirModalTestarInfeccao(pid, p.nome);
                 });
             }
             const btnDispararAvancar = linha.querySelector("[data-disparar-avancar-cqc]");

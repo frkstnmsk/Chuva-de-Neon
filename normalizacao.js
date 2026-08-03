@@ -41,6 +41,12 @@ export function normalizarFicha(raw) {
             padraoDeVida: dados.padraoDeVida ?? "",
             ganhoFixo: dados.ganhoFixo ?? 0,
             ultimoPagamentoCustoVida: dados.ultimoPagamentoCustoVida ?? 0,
+            // Mapa { pendenteId: true } dos avisos de custo de vida (fila
+            // de Domingos — ver calendario.js) que ESTA ficha já pagou.
+            // Substitui a antiga comparação por timestamp único, que não
+            // dava pra saber quantos Domingos em aberto ainda faltavam
+            // pagar depois de um Timeskip com mais de um Domingo.
+            custoVidaPagos: dados.custoVidaPagos || {},
             criacaoConcluida: dados.criacaoConcluida ?? false
         },
         saldos: normalizarSaldos(raw.saldos, dados),
@@ -219,6 +225,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
             padraoDeVida: "",
             ganhoFixo: 0,
             ultimoPagamentoCustoVida: 0,
+            custoVidaPagos: {},
             criacaoConcluida: false
         },
         saldos: {

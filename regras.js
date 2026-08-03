@@ -74,6 +74,24 @@ export function rotuloAlvo(alvo, pericias = []) {
 // Cada fonte é uma lista de entidades { nome, modificadores: [{alvo, valor}] }.
 // Retorna um array plano: [{ alvo, valor, origem }]
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// PV máximo "final" de uma ficha (base da fórmula + modificadores
+// estruturados + bônus de dado de vida do Level Up + override manual do
+// Mestre, se houver) — mesma conta repetida em vários pontos de
+// ficha.js/mestre.js pra exibir PV de alvo/participante; centralizada
+// aqui pra ser reaproveitada pela Recuperação de PVs (avancarRecuperacaoPV
+// abaixo, chamado durante o Timeskip em mestre.js, onde não há acesso
+// direto aos elementos da UI que normalmente fazem essa conta).
+// ---------------------------------------------------------------------
+export function calcularPvMaximo(ficha) {
+    const dados = (ficha && ficha.dados) || {};
+    const modificadoresPlanos = coletarModificadores(ficha || {});
+    const base = Math.round(calcularDerivados(dados, modificadoresPlanos).recursos.pv.total) + (Number(dados.pvBonusExtra) || 0);
+    const override = dados.pvMaximoOverride;
+    const temOverride = override !== null && override !== undefined && override !== "";
+    return temOverride ? (Number(override) || 0) : base;
+}
+
 export function coletarModificadores(ficha) {
     const fontes = [
         { lista: ficha.inventario, tipo: "Item" },
@@ -298,6 +316,83 @@ export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ig
     return vazio;
 }
 
+// ---------------------------------------------------------------------
+// Recuperação de PVs (manual, seção "Saúde e PVs").
+//
+// O tempo de recuperação NÃO é fixo por PV perdido — é proporcional à
+// porcentagem de PVs perdidos em relação ao total do personagem, numa
+// escala de 30 dias pra recuperar 100% do PV:
+//
+//   Tempo Base (dias) = (PVs Perdidos / PVs Totais) × 30
+//
+// Exemplo do manual: Victor tem 200 PVs totais e perdeu 150.
+//   Tempo Base = (150/200) × 30 = 22,5 dias → arredondado pra baixo: 22 dias.
+//
+// A recuperação só começa DEPOIS que o Mestre autoriza o pedido na fila
+// de Ações Pendentes (ver criarAcaoPendente "iniciar_recuperacao_pv" /
+// confirmarAcaoPendente em mestre.js) — o jogador não pode simplesmente
+// setar isso sozinho.
+//
+// Infecção (manual, "Complicações de ferimentos" — ver aplicarInfeccao
+// em mestre.js): personagem com infecção ativa tem esse tempo de
+// repouso aumentado em 50%. O multiplicador é aplicado ANTES do
+// arredondamento final pra baixo, não depois — senão "Tempo Base
+// arredondado × 1.5" poderia dar um resultado diferente de "Tempo Base
+// × 1.5, arredondado".
+// ---------------------------------------------------------------------
+export function calcularTempoRecuperacaoPV(pvPerdidos, pvTotal, infectado = false) {
+    const perdidos = Number(pvPerdidos) || 0;
+    const total = Number(pvTotal) || 0;
+    if (total <= 0 || perdidos <= 0) return 0;
+    let tempoBase = (perdidos / total) * 30;
+    if (infectado) tempoBase *= 1.5;
+    return Math.floor(tempoBase);
+}
+
+// Avança uma recuperação de PV em andamento pelos dias de um Timeskip
+// (ver passarVariosDias em mestre.js — é lá que isso é chamado pra CADA
+// ficha com recuperação ativa, uma vez por Timeskip confirmado).
+//
+// `rec` é o estado salvo em fichas/{id}/dados/recuperacaoPV:
+//   { ativa, pvPerdidosInicial, diasNecessarios, diasDecorridos }
+// `diasPassados` é a quantidade de dias que o Timeskip avançou.
+//
+// A recuperação é tratada como linear ao longo dos `diasNecessarios`
+// (mesma taxa de PV/dia do início ao fim) — não há como recuperar mais
+// dias do que os que ainda faltavam pra completar, então se o Timeskip
+// for maior do que o necessário, o excedente "sobra" (diasSobrando) em
+// vez de se perder ou de recuperar PV além do que a ficha perdeu.
+//
+// Retorna null se não havia recuperação ativa pra essa ficha. Caso
+// contrário: { pvRecuperadosNestaLeva, diasUsados, diasSobrando,
+// novoDiasDecorridos, completo }.
+export function avancarRecuperacaoPV(rec, diasPassados) {
+    if (!rec || !rec.ativa) return null;
+    const diasNecessarios = Number(rec.diasNecessarios) || 0;
+    const pvPerdidosInicial = Number(rec.pvPerdidosInicial) || 0;
+    if (diasNecessarios <= 0 || pvPerdidosInicial <= 0) return null;
+
+    const diasJa = Number(rec.diasDecorridos) || 0;
+    const passados = Math.max(0, Math.trunc(diasPassados) || 0);
+    const diasFaltantes = Math.max(0, diasNecessarios - diasJa);
+    const diasUsados = Math.min(passados, diasFaltantes);
+    const diasSobrando = passados - diasUsados;
+    const novoDiasDecorridos = diasJa + diasUsados;
+    const completo = novoDiasDecorridos >= diasNecessarios;
+
+    // PV recuperado é a diferença entre o total acumulado "até agora" e
+    // o total acumulado "até antes desta leva de dias" — assim, se o
+    // Timeskip cruzar vários avanços em sequência (não é o caso hoje,
+    // mas evita erro de arredondamento acumulado caso venha a ser
+    // chamado mais de uma vez pro mesmo período), a soma das levas nunca
+    // ultrapassa pvPerdidosInicial.
+    const pvAcumuladoAntes = Math.floor((diasJa / diasNecessarios) * pvPerdidosInicial);
+    const pvAcumuladoAgora = completo ? pvPerdidosInicial : Math.floor((novoDiasDecorridos / diasNecessarios) * pvPerdidosInicial);
+    const pvRecuperadosNestaLeva = pvAcumuladoAgora - pvAcumuladoAntes;
+
+    return { pvRecuperadosNestaLeva, diasUsados, diasSobrando, novoDiasDecorridos, completo };
+}
+
 // Aplica o efeito do estado de saúde em cima de uma Velocidade já
 // calculada (base do manual + modificadores estruturados, ex: carga —
 // ver calcularCarga acima). Recebe/retorna o mesmo formato de
@@ -489,6 +584,35 @@ export const DIFICULDADE_BASE_DESMAIO = 15;
 
 export function dificuldadeDesmaio(difExtra = 0) {
     return DIFICULDADE_BASE_DESMAIO + (Number(difExtra) || 0);
+}
+
+// ---------------------------------------------------------------------
+// Infecção — Complicações de ferimentos (manual, seção "Saúde e PVs" /
+// "Complicações"). O manual descreve DOIS gatilhos pro mesmo teste de
+// Constituição vs. Infecção, ambos usando esta função:
+//
+// 1) Tratamento malfeito: ficar em ambiente sujo, não isolar o
+//    ferimento exposto, ou receber tratamento em local não higienizado
+//    / com equipamento não esterilizado — dificuldade FIXA 18. Falha:
+//    aumenta o tempo de repouso necessário em 50%.
+// 2) Ferimento profundo/traumático: mantém risco de infecção mesmo com
+//    tratamento ADEQUADO — dificuldade VARIÁVEL entre 18 e 22 (a
+//    critério do Mestre, conforme gravidade/exposição). Esse teste se
+//    repete uma vez por cena até o personagem receber tratamento
+//    médico (incluindo a própria cena do tratamento).
+//
+// Itens/tratamento reduzem a dificuldade na hora do teste (ex.: Soro
+// Fisiológico: -2 — manual, Equipamentos médicos). `modificadorItens`
+// é sempre um valor a SUBTRAIR da dificuldade base (positivo = mais
+// fácil resistir). Falha em Remover Projétil com complicação deixa o
+// projétil alojado — infecção GARANTIDA, sem rolar este teste (ver
+// aplicarInfeccao em mestre.js, chamada direto nesse caso).
+// ---------------------------------------------------------------------
+export const DIFICULDADE_INFECCAO_MINIMA = 18;
+export const DIFICULDADE_INFECCAO_MAXIMA = 22;
+
+export function dificuldadeInfeccao(dificuldadeBase = DIFICULDADE_INFECCAO_MINIMA, modificadorItens = 0) {
+    return (Number(dificuldadeBase) || DIFICULDADE_INFECCAO_MINIMA) - (Number(modificadorItens) || 0);
 }
 
 // ---------------------------------------------------------------------
