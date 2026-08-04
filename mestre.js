@@ -2035,6 +2035,32 @@ export async function confirmarAcaoPendente(acao) {
             await resetarRecuoArma(payload.idDisparo, payload.itemIdDisparo);
         }
 
+    } else if (tipo === "validar_determinacao") {
+        // Trava a Determinação daquele índice pro jogador (ver
+        // renderizarDeterminacoes/liberarDeterminacao em ficha.js — só o
+        // Mestre volta a liberá-la, clicando em "Liberar" na própria
+        // aba de Determinações da ficha).
+        //
+        // Regrava o array inteiro (em vez de update() só no índice) de
+        // propósito: um update() com uma chave numérica isolada criaria
+        // um objeto tipo {"3": true} caso ainda não exista nenhuma
+        // posição anterior gravada, e o Realtime Database só devolve
+        // isso como array de verdade (pro Array.isArray funcionar do
+        // lado de ficha.js) quando as chaves são sequenciais a partir do
+        // 0 — por isso lemos o estado atual, preenchemos os buracos com
+        // `false` e escrevemos o array completo de volta.
+        const idx = Number(payload.indice);
+        const snapValidadas = await get(ref(db, caminhoMesa(`fichas/${fichaId}/determinacoesValidadas`)));
+        const validadas = [];
+        if (snapValidadas.exists()) {
+            const v = snapValidadas.val();
+            if (Array.isArray(v)) v.forEach((val, i) => { validadas[i] = !!val; });
+            else Object.entries(v).forEach(([k, val]) => { validadas[Number(k)] = !!val; });
+        }
+        for (let i = 0; i <= idx; i++) if (validadas[i] === undefined) validadas[i] = false;
+        validadas[idx] = true;
+        await set(ref(db, caminhoMesa(`fichas/${fichaId}/determinacoesValidadas`)), validadas);
+
     } else if (tipo === "iniciar_recuperacao_pv") {
         // Autorização do Mestre pro pedido de recuperação de PV do
         // jogador (ver calcularTempoRecuperacaoPV em regras.js e o botão

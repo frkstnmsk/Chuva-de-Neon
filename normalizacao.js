@@ -80,6 +80,13 @@ export function normalizarFicha(raw) {
         treinamento: normalizarTreinamento(raw.treinamento),
         levelUpPendente: raw.levelUpPendente || null,
         determinacoes: normalizarDeterminacoes(raw.determinacoes),
+        // Índices do array `determinacoes` já validados pelo Mestre —
+        // ver renderizarDeterminacoes/liberarDeterminacao em ficha.js e
+        // confirmarAcaoPendente (tipo "validar_determinacao") em
+        // mestre.js. Mesma lógica de normalizarDeterminacoes: aceita só
+        // array (o Realtime Database já entrega array quando as chaves
+        // são sequenciais a partir do 0 — ver comentário em mestre.js).
+        determinacoesValidadas: Array.isArray(raw.determinacoesValidadas) ? raw.determinacoesValidadas : [],
         notas: raw.notas || ""
     };
     return ficha;
@@ -308,6 +315,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
         levelUpPendente: null,
         determinacoes: [],
+        determinacoesValidadas: [],
         notas: ""
     };
 }
@@ -405,6 +413,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
         treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
         levelUpPendente: null,
         determinacoes: [],
+        determinacoesValidadas: [],
         notas: npc.funcaoNarrativa || ""
     };
 }

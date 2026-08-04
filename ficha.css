@@ -508,17 +508,35 @@
 }
 
 /* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
+.determinacoes-rolagem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.determinacoes-rolagem .btn-ghost {
+    padding: 4px 10px;
+    font-size: 0.72rem;
+}
 .determinacoes-lista {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 12px;
     margin-bottom: 20px;
+    max-height: 480px;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    padding-right: 6px;
 }
-.determinacao-item { display: flex; flex-direction: column; gap: 4px; }
+.determinacao-item { display: flex; flex-direction: column; gap: 4px; scroll-margin-top: 12px; }
 .determinacao-item label {
     color: var(--text-dim);
     font-size: 0.72rem;
     font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
 }
 .determinacao-item textarea { min-height: 64px; }
 /* Slot preenchido antes de uma queda de Nível: mantém o texto salvo
@@ -526,6 +544,34 @@
    está acima do limite atual do personagem. */
 .determinacao-item.determinacao-excedente label { color: var(--neon-gold); }
 .determinacao-item.determinacao-excedente textarea { border-color: rgba(250, 204, 21, 0.4); }
+
+/* Selo de status (aguardando validação / validada) e botões de ação de
+   cada Determinação — ver renderizarDeterminacoes em ficha.js. */
+.determinacao-status {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 1px 7px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.determinacao-status.status-aguardando {
+    color: var(--neon-gold);
+    background: rgba(250, 204, 21, 0.12);
+    border: 1px solid rgba(250, 204, 21, 0.4);
+}
+.determinacao-status.status-validada {
+    color: var(--neon-lime, #a3e635);
+    background: rgba(163, 230, 53, 0.12);
+    border: 1px solid rgba(163, 230, 53, 0.4);
+}
+.determinacao-item.determinacao-validada textarea { opacity: 0.75; }
+.determinacao-acoes { display: flex; justify-content: flex-end; }
+.determinacao-acoes .btn-lime, .determinacao-acoes .btn-ghost {
+    padding: 3px 10px;
+    font-size: 0.68rem;
+}
 
 .checkbox-inline {
     display: flex;
