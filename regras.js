@@ -83,18 +83,30 @@ export function rotuloAlvo(alvo, pericias = []) {
 // abaixo, chamado durante o Timeskip em mestre.js, onde não há acesso
 // direto aos elementos da UI que normalmente fazem essa conta).
 // ---------------------------------------------------------------------
-export function calcularPvMaximo(ficha) {
+export function calcularPvMaximo(ficha, diaIndiceAtual) {
     const dados = (ficha && ficha.dados) || {};
-    const modificadoresPlanos = coletarModificadores(ficha || {});
+    const modificadoresPlanos = coletarModificadores(ficha || {}, diaIndiceAtual);
     const base = Math.round(calcularDerivados(dados, modificadoresPlanos).recursos.pv.total) + (Number(dados.pvBonusExtra) || 0);
     const override = dados.pvMaximoOverride;
     const temOverride = override !== null && override !== undefined && override !== "";
     return temOverride ? (Number(override) || 0) : base;
 }
 
-export function coletarModificadores(ficha) {
+export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
+    // Item com tag "droga" NUNCA contribui com seus modificadores só por
+    // estar na mochila — esse é o mesmo campo "Modificadores automáticos"
+    // editável do item (ver modal), mas pra uma droga ele descreve o
+    // efeito de QUANDO CONSUMIDA (ver consumirDroga em ficha.js), não um
+    // bônus passivo por carregar o item. O efeito de verdade entra pela
+    // fonte de baixo (calcularModificadoresDrogasAtivas), só enquanto
+    // durar o efeito ativo.
+    const inventarioSemDrogas = {};
+    for (const [id, it] of Object.entries(ficha.inventario || {})) {
+        if (it && it.tag === "droga") continue;
+        inventarioSemDrogas[id] = it;
+    }
     const fontes = [
-        { lista: ficha.inventario, tipo: "Item" },
+        { lista: inventarioSemDrogas, tipo: "Item" },
         { lista: ficha.vantagens, tipo: "Vantagem" },
         { lista: ficha.desvantagens, tipo: "Desvantagem" },
         { lista: ficha.especializacoes, tipo: "Especialização" },
@@ -119,6 +131,150 @@ export function coletarModificadores(ficha) {
                     origem: `${fonte.tipo}: ${entidade.nome || "(sem nome)"}`
                 });
             }
+        }
+    }
+    // Abstinência (manual, cap. Drogas) + efeito ativo de droga consumida:
+    // diferente das fontes acima, o valor não fica gravado direto no
+    // `modificadores` da entidade — é calculado na hora. Só entra na
+    // conta se quem chamou souber o dia atual (`diaIndiceAtual`); chamadas
+    // antigas que não passam esse parâmetro continuam funcionando exatamente
+    // como antes, sem quebrar nada.
+    if (diaIndiceAtual !== undefined && diaIndiceAtual !== null) {
+        todos.push(...calcularModificadoresAbstinencia(ficha, diaIndiceAtual));
+        todos.push(...calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtualTexto));
+    }
+    return todos;
+}
+
+// ---------------------------------------------------------------------
+// Abstinência (manual, cap. Drogas, pág. 58).
+//
+// "Após três dias sem contato com o objeto de dependência, o personagem
+// começa a sofrer de abstinência. -1 em todos os testes para cada semana
+// em abstinência e ao alcançar -3 o efeito negativo também afeta os PVs;
+// -4 PVs máximos para cada semana em abstinência."
+//
+// Leitura adotada aqui (a mais direta do texto): a partir do 3º dia sem
+// uso já conta como "semana 1" de abstinência (-1 em testes); a cada 7
+// dias completos depois disso, mais uma semana (-2, -3...). Quando a
+// contagem chega na semana 3 (malus -3), o corpo também começa a perder
+// PV máximo: -4 por semana, contados a partir dessa 3ª semana em diante.
+// `diaIndiceAtual`/`vicio.diaIndiceUltimoUso` usam o contador de dias
+// corridos do calendário da mesa (ver calendario.js, campo `diaIndice`),
+// não uma data em texto — assim não precisa parsear "DD/MM/AAAA".
+//
+// A ORIGEM do vício não é mais um nó próprio da ficha — é a Desvantagem
+// "Vício" (qualquer desvantagem com um campo `substancia` preenchido, ver
+// modal-campo-substancia-vicio em ficha.js), e quem zera a contagem é o
+// botão "Consumir" de um item de inventário com a tag "droga" (ver
+// consumirDroga em ficha.js).
+// ---------------------------------------------------------------------
+export function calcularAbstinenciaVicio(vicio, diaIndiceAtual) {
+    const vazio = { diasDesdeUltimoUso: 0, semanas: 0, malusTestes: 0, malusPV: 0 };
+    if (!vicio || vicio.ativo === false || !vicio.substancia) return vazio;
+    if (diaIndiceAtual === undefined || diaIndiceAtual === null) return vazio;
+
+    const diaUso = Number(vicio.diaIndiceUltimoUso);
+    if (!Number.isFinite(diaUso)) return vazio;
+
+    const dias = Math.max(0, Number(diaIndiceAtual) - diaUso);
+    if (dias < 3) return { ...vazio, diasDesdeUltimoUso: dias };
+
+    const semanas = Math.floor((dias - 3) / 7) + 1;
+    const malusTestes = -semanas;
+    const malusPV = semanas >= 3 ? -4 * (semanas - 2) : 0;
+    return { diasDesdeUltimoUso: dias, semanas, malusTestes, malusPV };
+}
+
+// Modificadores estruturados (mesmo formato de coletarModificadores)
+// gerados pelas Desvantagens "Vício" ativas de uma ficha, prontos pra
+// plugar em testes_fisicos/mentais/sociais (geral) e recurso:pv (máximo).
+export function calcularModificadoresAbstinencia(ficha, diaIndiceAtual) {
+    const desvantagens = ficha.desvantagens || {};
+    const todos = [];
+    for (const id of Object.keys(desvantagens)) {
+        const vicio = desvantagens[id];
+        if (!vicio || !vicio.substancia) continue;
+        const { semanas, malusTestes, malusPV } = calcularAbstinenciaVicio(vicio, diaIndiceAtual);
+        if (semanas <= 0) continue;
+        const origem = `Abstinência: ${vicio.substancia}`;
+        todos.push({ alvo: "testes_fisicos", valor: malusTestes, origem });
+        todos.push({ alvo: "testes_mentais", valor: malusTestes, origem });
+        todos.push({ alvo: "testes_sociais", valor: malusTestes, origem });
+        if (malusPV) todos.push({ alvo: "recurso:pv", valor: malusPV, origem });
+    }
+    return todos;
+}
+
+// ---------------------------------------------------------------------
+// Duração em horas de um efeito, lida do texto livre da descrição do
+// item (campo "Descrição / efeito narrativo" do modal — ver
+// configurarAutocompleteItemBanco em ficha.js, que já sugere esse texto
+// a partir do Catálogo de Drogas, mas continua 100% editável). Procura
+// o primeiro padrão "<número>h" ou "<número> hora(s)" no texto — ex:
+// "por 4h", "dura 2 horas", "duração: 6h" — e devolve o número de horas.
+// `null` quando não encontra nenhum padrão (item sem duração explícita
+// na descrição).
+// ---------------------------------------------------------------------
+export function extrairDuracaoHorasDaDescricao(texto) {
+    if (!texto) return null;
+    const m = String(texto).match(/(\d+(?:[.,]\d+)?)\s*h(?:oras?)?\b/i);
+    if (!m) return null;
+    const valor = Number(m[1].replace(",", "."));
+    return Number.isFinite(valor) && valor > 0 ? valor : null;
+}
+
+// Converte o texto livre de "hora" do calendário (ex: "08:00", "23:30")
+// pra um número decimal de horas (8, 23.5). Texto ausente/mal formatado
+// (o Mestre edita isso à mão, ver configurarCalendario em ficha.js) cai
+// pra 0, sem quebrar a conta de quem chamou.
+export function horaParaDecimal(horaTexto) {
+    const m = String(horaTexto || "").match(/(\d{1,2}):(\d{2})/);
+    if (!m) return 0;
+    const h = Number(m[1]) || 0;
+    const min = Number(m[2]) || 0;
+    return h + (min / 60);
+}
+
+// "Timestamp" contínuo em horas desde o início da campanha (diaIndice
+// vira horas cheias + a hora do dia, já decimal) — usado só pra saber
+// se um efeito de droga (com duração em horas) já expirou ou não, sem
+// precisar de nenhum campo novo de data/hora combinada no banco.
+export function horasTotaisCalendario(diaIndiceAtual, horaTexto) {
+    const dia = Number(diaIndiceAtual);
+    if (!Number.isFinite(dia)) return null;
+    return dia * 24 + horaParaDecimal(horaTexto);
+}
+
+// ---------------------------------------------------------------------
+// Efeito ativo de droga consumida. Gravado em `ficha.efeitosDrogas` por
+// consumirDroga (ficha.js) ao clicar "Consumir" num item com tag
+// "droga" — a duração usada é a que estiver escrita na descrição do
+// próprio item (ver extrairDuracaoHorasDaDescricao acima); sem nenhum
+// padrão "Xh" no texto, cai no comportamento antigo de "até acabar o
+// dia em jogo em que foi consumida". O efeito guarda `horasExpira`
+// (timestamp contínuo em horas — ver horasTotaisCalendario) calculado
+// na hora do consumo; a partir daí só compara com a hora atual, sem
+// precisar de nenhuma limpeza/expiração ativa no banco.
+// ---------------------------------------------------------------------
+export function calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtualTexto) {
+    const efeitos = ficha.efeitosDrogas || {};
+    const horasAtuais = horasTotaisCalendario(diaIndiceAtual, horaAtualTexto);
+    const todos = [];
+    for (const chave of Object.keys(efeitos)) {
+        const efeito = efeitos[chave];
+        if (!efeito) continue;
+        // Fichas/efeitos gravados antes da duração em horas existir só
+        // tinham `diaIndiceConsumido` — continuam valendo "até acabar o
+        // dia" (compatibilidade retroativa), sem precisar re-consumir.
+        const aindaAtivo = (efeito.horasExpira !== undefined && efeito.horasExpira !== null && horasAtuais !== null)
+            ? horasAtuais < efeito.horasExpira
+            : efeito.diaIndiceConsumido === diaIndiceAtual;
+        if (!aindaAtivo) continue;
+        const origem = `Sob efeito: ${efeito.nome || "(droga)"}`;
+        for (const m of (efeito.modificadores || [])) {
+            if (!m.alvo || !m.valor) continue;
+            todos.push({ alvo: m.alvo, valor: Number(m.valor) || 0, origem });
         }
     }
     return todos;

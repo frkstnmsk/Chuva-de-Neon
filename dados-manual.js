@@ -1432,3 +1432,144 @@ export function danoQuebrarOssosJiuJitsu(nivelJJ) {
     if (nivel >= 4) return { escalaMult: 2, label: "Destreza C", pontosPenalidade: 1 }; // Escala C = 2x
     return null;
 }
+
+// ---------------------------------------------------------------------
+// Catálogo de Drogas (manual, cap. Drogas, pág. 58–62) — dados fixos de
+// referência. `modificadores`: versão estruturada do `efeito` (mesmo
+// formato de qualquer entidade — alvo/valor, ver listaAlvosModificador
+// em regras.js), aplicada automaticamente quando o item correspondente
+// (tag "droga") é consumido — ver consumirDroga em ficha.js — e dura até
+// o fim do dia em jogo em que foi consumida (o calendário da mesa não
+// conta hora a hora, só dia — ver calcularModificadoresDrogasAtivas em
+// regras.js). Efeitos que não têm como virar um número direto (ex.:
+// "reduz tempo de aprendizado", "retira necessidade de sono") ficam só
+// no texto de `efeito`, sem entrar em `modificadores`.
+// `testeVicio`/`testeOverdose` ficam como texto livre — o resultado de
+// cada rolagem continua sendo apurado manualmente pelo jogador/Mestre,
+// igual qualquer outro teste do manual.
+// ---------------------------------------------------------------------
+export const CATALOGO_DROGAS = [
+    {
+        nome: "Maconha", preco: "CN$10-20", dose: "a partir de 0,5 g (um fino)",
+        efeito: "-1 em Percepção e testes mentais e de destreza.",
+        modificadores: [
+            { alvo: "secundario:percepcao", valor: -1 },
+            { alvo: "testes_mentais", valor: -1 },
+            { alvo: "atributo:destreza", valor: -1 }
+        ],
+        testeVicio: "Consumida todos os dias durante um mês: teste de Constituição, dif. 18 — falha vicia."
+    },
+    {
+        nome: "Álcool", preco: "CN$5-200", dose: "destilado: 1 copo pequeno · cerveja: 3 latas · vinho: 1 taça",
+        efeito: "-1 em testes sociais, mentais e de destreza; -1 em Velocidade.",
+        modificadores: [
+            { alvo: "testes_sociais", valor: -1 },
+            { alvo: "testes_mentais", valor: -1 },
+            { alvo: "atributo:destreza", valor: -1 },
+            { alvo: "secundario:velocidade", valor: -1 }
+        ],
+        testeVicio: "Consumido 1x/semana durante um mês: teste de Constituição, dif. 18 — falha vicia.",
+        testeOverdose: "A partir de 4 doses: teste de Resistência Imunológica, dif. 16 — falha: coma alcoólico (PV reduzido a 1); sucesso: desmaia; crítico: nenhum efeito."
+    },
+    {
+        nome: "Anfetamina", preco: "CN$50", dose: "meia pílula (0,5 g)",
+        efeito: "-1 em testes mentais; +1 em Agilidade e Percepção.",
+        modificadores: [
+            { alvo: "testes_mentais", valor: -1 },
+            { alvo: "secundario:agilidade", valor: 1 },
+            { alvo: "secundario:percepcao", valor: 1 }
+        ],
+        testeVicio: "Consumida 1x/semana durante um mês: teste de Constituição, dif. 20 — falha vicia.",
+        testeOverdose: "A partir de 3 doses: teste de Resistência Imunológica, dif. 16 — falha: convulsão, 10 de dano por turno até tratamento médico; sucesso: nenhum efeito."
+    },
+    {
+        nome: "LSD", preco: "CN$200", dose: "¼ de drop, 0,001 de gota",
+        efeito: "-3 em todas as rolagens de perícia; exige teste de Concentração pra atividades do dia a dia (servir comida, dirigir, pedir carro por aplicativo).",
+        modificadores: [
+            { alvo: "testes_fisicos", valor: -3 },
+            { alvo: "testes_mentais", valor: -3 },
+            { alvo: "testes_sociais", valor: -3 }
+        ],
+        testeVicio: "Não vicia, mas perde o efeito se usada toda semana durante um mês."
+    },
+    {
+        nome: "NBomb", preco: "CN$70", dose: "¼ de drop, 0,01 de gota", efeitoExtra: "LSD falsa.",
+        efeito: "-3 em todas as rolagens de perícia; exige teste de Concentração pra atividades do dia a dia.",
+        modificadores: [
+            { alvo: "testes_fisicos", valor: -3 },
+            { alvo: "testes_mentais", valor: -3 },
+            { alvo: "testes_sociais", valor: -3 }
+        ],
+        testeVicio: "Não vicia, mas perde o efeito se usada toda semana durante um mês.",
+        testeOverdose: "A partir de 3 doses: teste de Resistência Imunológica, dif. 17 — falha: convulsão, 10 de dano por turno até atendimento médico; sucesso: nenhum efeito."
+    },
+    {
+        nome: "Cocaína", preco: "CN$100", dose: "0,5 g",
+        efeito: "-1 em testes que exigem concentração; +1 em Raciocínio; retira a necessidade de sono por 4h.",
+        modificadores: [
+            { alvo: "testes_mentais", valor: -1 },
+            { alvo: "atributo:raciocinio", valor: 1 }
+        ],
+        testeVicio: "Consumida 1x/mês: teste de Constituição, dif. 19 — falha vicia.",
+        testeOverdose: "Sempre que usar: teste de Resistência Imunológica, dif. 15 — falha: 15 de dano e o próximo uso tem modificador -1."
+    },
+    {
+        nome: "Brilho", preco: "CN$200", dose: "0,5 g",
+        efeito: "Reduz em 1/3 o tempo de aprendizado, se usado dia sim, dia não.",
+        modificadores: [],
+        testeVicio: "Uso intercalado por duas semanas seguidas: teste de Constituição, dif. 20 — falha vicia. Depois de viciado, os efeitos de abstinência afetam em dobro os testes mentais."
+    },
+    {
+        nome: "Phantom", preco: "CN$200", dose: "a partir de 0,5 g (um fino)",
+        efeito: "+1 em Resistência Mental (Força de Vontade); -1 em Destreza e Percepção.",
+        modificadores: [
+            { alvo: "secundario:forca_vontade", valor: 1 },
+            { alvo: "atributo:destreza", valor: -1 },
+            { alvo: "secundario:percepcao", valor: -1 }
+        ],
+        testeVicio: "Consumido 1x/semana durante um mês: teste de Constituição, dif. 18 — falha vicia."
+    },
+    {
+        nome: "Lótus", preco: "CN$200", dose: "a partir de 0,5 g (um fino)",
+        efeito: "-1 em Percepção e testes mentais e de destreza.",
+        modificadores: [
+            { alvo: "secundario:percepcao", valor: -1 },
+            { alvo: "testes_mentais", valor: -1 },
+            { alvo: "atributo:destreza", valor: -1 }
+        ],
+        testeVicio: "Consumido 1x/semana durante um mês: teste de Constituição, dif. 21."
+    },
+    {
+        nome: "Esteroide", preco: "CN$100", dose: "1 ml",
+        efeito: "Reduz em 1/4 a necessidade de treino; aumenta o limite de Massa Corpórea para 16.",
+        modificadores: [],
+        testeVicio: "Não causa vício nem overdose, mas causa problemas de saúde a longo prazo (recomendado fazer exames)."
+    },
+    {
+        nome: "Opioides", preco: "CN$100", dose: "30 mg (dose padrão recreativa)",
+        efeito: "+1 em resistência à dor; -1 em Percepção e Inteligência.",
+        modificadores: [
+            { alvo: "secundario:percepcao", valor: -1 },
+            { alvo: "atributo:inteligencia", valor: -1 }
+        ],
+        testeVicio: "Consumido toda semana por um mês: teste de Constituição, dif. 16 — falha vicia.",
+        testeOverdose: "A partir de 3 doses: teste de Resistência Imunológica, dif. 15 — falha: convulsão, 10 de dano por turno até tratamento médico; sucesso: nenhum efeito."
+    },
+    {
+        nome: "Aderal", preco: "CN$100", dose: "um comprimido",
+        efeito: "+1 em Percepção, Agilidade e testes que exijam concentração, por 2h.",
+        modificadores: [
+            { alvo: "secundario:percepcao", valor: 1 },
+            { alvo: "secundario:agilidade", valor: 1 },
+            { alvo: "testes_mentais", valor: 1 }
+        ],
+        testeVicio: "Consumido todos os dias por uma semana: teste de Constituição, dif. 17 — falha vicia.",
+        testeOverdose: "Três doses sem descanso: teste de Resistência Imunológica, dif. 16 — falha: 15 de dano; sucesso: nenhum efeito."
+    },
+    {
+        nome: "QuickRegen", preco: "CN$10.000", dose: "uma seringa",
+        efeito: "Reduz pela metade o tempo de descanso necessário pra recuperar PVs.",
+        modificadores: [],
+        testeVicio: "Consumido 1x/mês: teste de Constituição, dif. 18 — falha: desenvolve algum tipo de câncer; sucesso: nenhum efeito."
+    }
+];

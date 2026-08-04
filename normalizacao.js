@@ -58,7 +58,16 @@ export function normalizarFicha(raw) {
         desvantagens: raw.desvantagens || {},
         especializacoes: raw.especializacoes || {},
         fatosUniversais: raw.fatosUniversais || {},
-        // Receitas que este personagem CONHECE (diferente do Banco Global de
+        // Efeitos ativos de drogas consumidas (manual, cap. Drogas):
+        // { <substanciaNormalizada>: { nome, diaIndiceConsumido, modificadores } }
+        // — gravado por consumirDroga (ficha.js) ao clicar "Consumir" num
+        // item de inventário com tag "droga"; dura até o fim do dia em
+        // jogo em que foi consumido (ver calcularModificadoresDrogasAtivas
+        // em regras.js). O vício em si (Abstinência) não é um campo à
+        // parte — é a Desvantagem "Vício", com um campo `substancia` e
+        // `diaIndiceUltimoUso` (ver modal-campo-substancia-vicio).
+        efeitosDrogas: raw.efeitosDrogas || {},
+        // Receitas que este personagem CONHECE (diferente do Banco Global de (diferente do Banco Global de
         // Receitas em si, que é compartilhado entre todas as mesas — ver
         // receitas-globais.js). Cada entrada aqui só guarda a referência
         // (receitaGlobalId) + a perícia/nível daquele slot + a origem:
@@ -70,10 +79,29 @@ export function normalizarFicha(raw) {
         criacao: normalizarCriacao(raw.criacao, dados),
         treinamento: normalizarTreinamento(raw.treinamento),
         levelUpPendente: raw.levelUpPendente || null,
-        determinacoes: raw.determinacoes || "",
+        determinacoes: normalizarDeterminacoes(raw.determinacoes),
         notas: raw.notas || ""
     };
     return ficha;
+}
+
+// Determinações eram um único textarea de texto livre (linhas "1. ...",
+// "2. ...") e viraram uma caixa de texto por slot — a quantidade de
+// slots depende do Nível do personagem (ver maxDeterminacoes em
+// ficha.js: 3 no nível 1, 6 no nível 3, 9 no nível 6, 10 no nível 9).
+// Aqui só normalizamos o formato de armazenamento pra um array de
+// strings; fichas já migradas (raw já é array) passam direto, e o
+// texto livre antigo é quebrado por linha, descartando a numeração
+// manual que o próprio jogador digitava.
+function normalizarDeterminacoes(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string" && raw.trim()) {
+        return raw
+            .split("\n")
+            .map(linha => linha.replace(/^\s*\d+[.)]\s*/, "").trim())
+            .filter(Boolean);
+    }
+    return [];
 }
 
 // Migra o antigo par fixo `dados.dinheiroLimpo` / `dados.dinheiroSujo`
@@ -268,6 +296,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         desvantagens: {},
         especializacoes: {},
         fatosUniversais: {},
+        efeitosDrogas: {},
         receitasConhecidas: {},
         criacao: {
             etapa: 1, funcaoEscolhida: "", escolhaAtributoFuncao: "", etapa1JaConfirmadaAntes: false,
@@ -278,7 +307,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         },
         treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
         levelUpPendente: null,
-        determinacoes: "",
+        determinacoes: [],
         notas: ""
     };
 }
@@ -375,7 +404,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
         },
         treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
         levelUpPendente: null,
-        determinacoes: "",
+        determinacoes: [],
         notas: npc.funcaoNarrativa || ""
     };
 }

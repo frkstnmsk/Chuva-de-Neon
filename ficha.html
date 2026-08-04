@@ -72,6 +72,15 @@
                     <span class="vital-bar-numero" id="vital-energia-numero">—/—</span>
                 </div>
             </div>
+            <!-- Carrossel de status ativos (Machucado, Sangrando, Derrubado,
+                 Inconsciente, Abstinência etc.) — troca de status a cada 1s,
+                 ver configurarStatusTopoCarrossel/coletarStatusAtivosTopo em
+                 ficha.js. Só aparece quando há pelo menos um status ativo. -->
+            <div class="vital-status-carrossel" id="vital-status-carrossel" style="display:none;">
+                <span class="vital-status-icone" id="vital-status-icone">⚠️</span>
+                <span class="vital-status-texto" id="vital-status-texto">—</span>
+            </div>
+
             <div class="vital-equipados" id="vital-equipados" title="Itens equipados"></div>
         </div>
 
@@ -464,7 +473,8 @@
                 <!-- ===================== NOTAS ===================== -->
                 <section class="tab-panel panel" data-tab="notas">
                     <div class="section-header">Determinações <span class="hint-inline">princípios, vínculos e objetivos que seu personagem não abandona</span></div>
-                    <textarea id="f-determinacoes" data-field="determinacoes" placeholder="1. ..."></textarea>
+                    <div class="hint-inline" id="determinacoes-nivel-aviso"></div>
+                    <div class="determinacoes-lista" id="determinacoes-lista"></div>
 
                     <div class="section-header">Notas livres / Background</div>
                     <textarea id="f-notas" data-field="notas" placeholder="Histórico, contatos, anotações de mesa..." style="min-height:160px;"></textarea>
@@ -530,6 +540,17 @@
             <!-- Só aparece pra itens novos de inventário: autocompletar
                  puxando do Banco Global de Itens (itens-globais.js). -->
             <div class="searchable-options" id="modal-item-banco-opcoes" style="display:none;"></div>
+        </div>
+
+        <!-- Desvantagem "Vício": aparece só quando o Nome contém "vício"
+             (ver configurarCampoSubstanciaVicio em ficha.js). Guarda qual
+             droga é o objeto do vício, pra calcular a Abstinência (manual,
+             cap. Drogas) automaticamente e pro botão "Consumir" (aba
+             Inventário) saber qual vício aquele item cura. -->
+        <div class="modal-field" id="modal-campo-substancia-vicio" style="display:none;">
+            <label for="modal-substancia-vicio">Substância (qual droga é o vício)</label>
+            <input type="text" id="modal-substancia-vicio" placeholder="Ex: Cocaína" list="modal-substancia-vicio-opcoes">
+            <datalist id="modal-substancia-vicio-opcoes"></datalist>
         </div>
 
         <!-- Inventário: opção de salvar este item no Banco Global -->

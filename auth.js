@@ -240,7 +240,7 @@ async function criarFichaNova(idLimpo, senha, nomeExibicao, mesaId) {
             atributoMental: null
         },
         levelUpPendente: null,
-        determinacoes: "",
+        determinacoes: [],
         notas: ""
     };
     // Grava a ficha dentro da mesa escolhida E registra no índice global

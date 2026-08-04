@@ -16,7 +16,8 @@ import {
     calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
     dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
     dificuldadeInfeccao, DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
-    calcularTempoRecuperacaoPV
+    calcularTempoRecuperacaoPV, calcularAbstinenciaVicio,
+    extrairDuracaoHorasDaDescricao, horasTotaisCalendario
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -45,7 +46,8 @@ import {
     danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
     danoQuebrarOssosJiuJitsu,
     PERICIAS_CRIACAO_ITEM, MATERIAIS_CRIACAO, qualidadesDoMaterial,
-    ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO
+    ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO,
+    CATALOGO_DROGAS
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -288,6 +290,9 @@ const el = {
     vitalEnergiaFill: document.getElementById("vital-energia-fill"),
     vitalEnergiaNumero: document.getElementById("vital-energia-numero"),
     vitalEquipados: document.getElementById("vital-equipados"),
+    vitalStatusCarrossel: document.getElementById("vital-status-carrossel"),
+    vitalStatusIcone: document.getElementById("vital-status-icone"),
+    vitalStatusTexto: document.getElementById("vital-status-texto"),
     efeitoDanoOverlay: document.getElementById("efeito-dano-overlay"),
     acoesRapidasFlutuante: document.getElementById("acoes-rapidas-flutuante"),
     acoesRapidasLista: document.getElementById("acoes-rapidas-lista"),
@@ -339,6 +344,9 @@ const el = {
     modal: document.getElementById("modal-entidade"),
     modalTitulo: document.getElementById("modal-titulo"),
     modalNome: document.getElementById("modal-nome"),
+    modalCampoSubstanciaVicio: document.getElementById("modal-campo-substancia-vicio"),
+    modalSubstanciaVicio: document.getElementById("modal-substancia-vicio"),
+    modalSubstanciaVicioOpcoes: document.getElementById("modal-substancia-vicio-opcoes"),
     modalItemBancoOpcoes: document.getElementById("modal-item-banco-opcoes"),
     modalCampoSalvarBanco: document.getElementById("modal-campo-salvar-banco"),
     modalSalvarBanco: document.getElementById("modal-salvar-banco"),
@@ -667,6 +675,8 @@ async function init() {
     tentarOuAvisar("busca de perícia", configurarBuscaPericia);
     tentarOuAvisar("modificações de arma", configurarModificacoesArma);
     tentarOuAvisar("modificadores genéricos", configurarModificadoresGenerico);
+    tentarOuAvisar("campo substância (vício)", configurarCampoSubstanciaVicio);
+    tentarOuAvisar("carrossel de status do topo", configurarStatusTopoCarrossel);
 }
 
 // Roda uma função de setup isoladamente: se ela lançar erro (síncrono ou
@@ -1422,9 +1432,18 @@ async function removerReceitaConhecida(id) {
 }
 
 
+// Igual coletarModificadores(fichaAtual), mas já injeta o dia atual do
+// calendário da mesa — necessário pra calcular o malus de Abstinência
+// (ver calcularModificadoresAbstinencia em regras.js). Único ponto usado
+// por toda a ficha do jogador, pra não espalhar `calendarioAtual?.diaIndice`
+// em cada chamada.
+function modificadoresAtuais() {
+    return coletarModificadores(fichaAtual, calendarioAtual ? calendarioAtual.diaIndice : null, calendarioAtual ? calendarioAtual.hora : null);
+}
+
 function renderizarTudo() {
     if (!fichaAtual) return;
-    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    const modificadoresPlanos = modificadoresAtuais();
 
     renderizarPerfil();
     renderizarFinancas();
@@ -1967,6 +1986,155 @@ function renderizarBarrasVitaisTopo(pvAtual, pvMax, estadoSaude, energiaAtual, e
     const estadoGrave = (estadoSaude && estadoSaude.estado === "muito_machucado")
         || (estadoEnergia && estadoEnergia.estado === "energia_critica");
     if (el.app) el.app.classList.toggle("ficha-muito-ferido", !!estadoGrave);
+
+    atualizarStatusTopoCarrossel();
+}
+
+// ---------------------------------------------------------------------
+// Carrossel de status ativos no topo (ao lado das barras de PV/Energia).
+// Junta TODO status que esteja acometendo quem está sendo controlado
+// nesta tela agora (a própria ficha, ou o NPC que o Mestre estiver
+// atuando como — mesmo critério de meuStatusAgarrado/meuStatusImobilizado/
+// meuStatusDesacordado acima): estado de saúde (Machucado/Muito
+// Machucado), estado de Energia, Abstinência de vício, Infecção, e — se
+// estiver em combate — Derrubado, Agarrado, Imobilizado, Inconsciente
+// (Desacordado), Ossos quebrados, Alcance limitado e Sangramento (Tick
+// System). Cada item vira uma entrada { icone, texto, titulo }; o
+// carrossel troca de entrada a cada 1s (ver configurarStatusTopoCarrossel
+// mais abaixo). Quando não há nenhum status ativo, a caixinha some.
+// ---------------------------------------------------------------------
+function coletarStatusAtivosTopo() {
+    const lista = [];
+    if (!fichaAtual) return lista;
+
+    // Estado de saúde (Machucado / Muito Machucado) — já calculado em
+    // renderizarAtributos() e guardado em window._estadoSaudeAtual.
+    const estadoSaude = window._estadoSaudeAtual;
+    if (estadoSaude && estadoSaude.estado && estadoSaude.estado !== "morte") {
+        const efeito = estadoSaude.metadeVelocidade ? "Velocidade pela metade" : `Velocidade ${estadoSaude.penalidadeVelocidade}`;
+        lista.push({
+            icone: estadoSaude.estado === "muito_machucado" ? "🤕" : "🩹",
+            texto: estadoSaude.label,
+            titulo: `${estadoSaude.label} — ${efeito} · ${estadoSaude.penalidadeTestes} em todos os testes`
+        });
+    }
+
+    // Estado de Energia (Energia Baixa / Energia Crítica).
+    const estadoEnergia = window._estadoEnergiaAtual;
+    if (estadoEnergia && estadoEnergia.estado && estadoEnergia.estado !== "morte") {
+        lista.push({
+            icone: "🔋",
+            texto: estadoEnergia.label,
+            titulo: estadoEnergia.estado === "energia_critica"
+                ? "-3 em testes físicos, -2 em testes mentais"
+                : "-2 em testes físicos"
+        });
+    }
+
+    // Abstinência (Desvantagem "Vício" com substância, ver
+    // calcularAbstinenciaVicio em regras.js) — uma entrada por vício em
+    // abstinência (dá pra ter mais de um vício cadastrado ao mesmo tempo).
+    const diaAtual = calendarioAtual ? calendarioAtual.diaIndice : null;
+    if (diaAtual !== null && diaAtual !== undefined) {
+        const desvantagens = fichaAtual.desvantagens || {};
+        Object.values(desvantagens).forEach(v => {
+            if (!v || !v.substancia) return;
+            const { semanas, malusTestes, malusPV } = calcularAbstinenciaVicio(v, diaAtual);
+            if (semanas <= 0) return;
+            lista.push({
+                icone: "💉",
+                texto: `Abstinência: ${v.substancia}`,
+                titulo: `${semanas}ª semana em abstinência — ${malusTestes} em todos os testes${malusPV ? `, ${malusPV} PV máximo` : ""}`
+            });
+        });
+    }
+
+    // Infecção persistente (Complicações de ferimentos, manual) — flag
+    // gravada em fichaAtual.dados.infeccao (ver aplicarInfeccao/mestre.js).
+    if (fichaAtual.dados && fichaAtual.dados.infeccao && fichaAtual.dados.infeccao.ativo) {
+        lista.push({ icone: "🦠", texto: "Infectado", titulo: "Tempo de repouso necessário +50% até tratamento médico" });
+    }
+
+    // Status só existentes durante combate (ver combateAtivoCache) —
+    // lidos do mesmo participante usado por meuStatusAgarrado/
+    // meuStatusImobilizado/meuStatusDesacordado acima.
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    const participante = meuPid && combateAtivoCache.participantes ? combateAtivoCache.participantes[meuPid] : null;
+    if (participante) {
+        if (participante.derrubado && participante.derrubado.ativo) {
+            lista.push({ icone: "🔻", texto: "Derrubado", titulo: `Derrubado por ${participante.derrubado.porNome || "?"} — dificuldade pra ser acertado cai -3` });
+        }
+        if (participante.desacordado && participante.desacordado.ativo) {
+            lista.push({ icone: "💤", texto: "Inconsciente", titulo: "Desacordado — não age nem se defende; só o Mestre pode acordá-lo" });
+        }
+        if (participante.imobilizado && participante.imobilizado.ativo) {
+            lista.push({ icone: "🔒", texto: "Imobilizado", titulo: `Imobilizado por ${participante.imobilizado.porNome || "?"} — não consegue atacar nem se mover` });
+        }
+        if (participante.agarrado && participante.agarrado.ativo) {
+            lista.push({ icone: "🔗", texto: "Agarrado", titulo: `Agarrado por ${participante.agarrado.porNome || "?"} — golpes de alcance médio/longo bloqueados` });
+        }
+        if (participante.ossosQuebrados && participante.ossosQuebrados.ativo) {
+            lista.push({ icone: "🦴", texto: "Ossos quebrados", titulo: `Reduz ${participante.ossosQuebrados.pontosPenalidade} ponto(s) qualquer ação física` });
+        }
+        if (participante.alcanceLimitado && participante.alcanceLimitado.ativo) {
+            lista.push({ icone: "📏", texto: `Alcance limitado: ${participante.alcanceLimitado.valor}`, titulo: `Alcance limitado por ${participante.alcanceLimitado.porNome || "?"}` });
+        }
+        if (participante.statusAtivos) {
+            Object.values(participante.statusAtivos)
+                .filter(s => s && (Number(s.turnosRestantes) || 0) > 0)
+                .forEach(s => {
+                    lista.push({
+                        icone: "🩸",
+                        texto: `${s.label || "Sangrando"} (${s.turnosRestantes})`,
+                        titulo: `${s.origem || ""} — ${s.danoPorTurno ?? `1d${s.faces || 1}`} de dano fixo por turno`
+                    });
+                });
+        }
+    }
+
+    return lista;
+}
+
+let statusTopoLista = [];
+let statusTopoIndice = 0;
+
+// Recalcula a lista de status ativos (chamado sempre que os dados da
+// ficha OU o estado de combate mudam) e mantém o índice atual do
+// carrossel dentro dos limites da nova lista.
+function atualizarStatusTopoCarrossel() {
+    if (!el.vitalStatusCarrossel) return;
+    statusTopoLista = coletarStatusAtivosTopo();
+    if (statusTopoIndice >= statusTopoLista.length) statusTopoIndice = 0;
+    renderizarStatusTopoAtual();
+}
+
+// Só troca o que é exibido na caixinha pro item atual da lista já
+// calculada — chamado a cada 1s pelo setInterval de
+// configurarStatusTopoCarrossel, sem precisar recalcular tudo de novo.
+function renderizarStatusTopoAtual() {
+    if (!el.vitalStatusCarrossel) return;
+    if (!statusTopoLista.length) {
+        el.vitalStatusCarrossel.style.display = "none";
+        return;
+    }
+    const atual = statusTopoLista[statusTopoIndice] || statusTopoLista[0];
+    el.vitalStatusCarrossel.style.display = "flex";
+    el.vitalStatusCarrossel.title = atual.titulo || atual.texto;
+    el.vitalStatusIcone.innerText = atual.icone;
+    el.vitalStatusTexto.innerText = atual.texto;
+}
+
+// Liga o carrossel: a cada 1s avança pro próximo status ativo da lista
+// (recalculada em atualizarStatusTopoCarrossel, chamada sempre que os
+// dados da ficha ou o combate mudam). Um único setInterval, criado uma
+// vez só na inicialização da página.
+function configurarStatusTopoCarrossel() {
+    if (!el.vitalStatusCarrossel) return;
+    setInterval(() => {
+        if (!statusTopoLista.length) return;
+        statusTopoIndice = (statusTopoIndice + 1) % statusTopoLista.length;
+        renderizarStatusTopoAtual();
+    }, 1000);
 }
 
 // ---------------------------------------------------------------------
@@ -3357,7 +3525,7 @@ async function resolverDispararAvancar(alvoId, itemPistola) {
     const alvo = combateAtivoCache.participantes && combateAtivoCache.participantes[alvoId];
     if (!alvo) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
 
-    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    const modificadoresPlanos = modificadoresAtuais();
     toast(`CQC nível 4 — Disparar e Avançar: 2 disparos em ${alvo.nome}, fora da ordem de turno.`);
     await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
     await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
@@ -5165,8 +5333,11 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const li = document.createElement("li");
     // Item com modificadores estruturados (ex: colete que dá +Defesa)
     // ganha o mesmo botão de ativo/desativado das vantagens/etc —
-    // pra "vestir/tirar" o efeito sem removê-lo do inventário.
-    const temEfeitoItem = !!(it.modificadores && it.modificadores.length);
+    // pra "vestir/tirar" o efeito sem removê-lo do inventário. Droga é
+    // exceção: seu campo `modificadores` descreve o efeito de QUANDO
+    // CONSUMIDA (botão "Consumir", ver consumirDroga) — não um efeito
+    // passivo pra ligar/desligar, então não ganha esse botão.
+    const temEfeitoItem = !!(it.modificadores && it.modificadores.length) && it.tag !== "droga";
     const ativoItem = it.ativo !== false;
     if (temEfeitoItem && !ativoItem) li.classList.add("entidade-desativada");
     const kitGeral = ehFerramentaCriacaoGeral(it.tag);
@@ -5239,6 +5410,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
             ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
             <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
+            ${it.tag === "droga" ? `<button type="button" class="btn-consumir-droga btn-lime" title="Consome 1 unidade: aplica o efeito (modificadores do item) pelo tempo em horas escrito na descrição (ex: 'por 4h') — sem isso, dura até o fim do dia em jogo — e zera a abstinência do vício correspondente, se houver">Consumir</button>` : ""}
             ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
             ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
             ${(ehFogo && temCamaraExtraItem) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(itemPodeUsar(it) && !camaraCarregadaItem) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
@@ -5252,6 +5424,13 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
             e.stopPropagation();
             alternarAtivoEntidade("inventario", id, !ativoItem);
+        });
+    }
+    const btnConsumirDroga = li.querySelector(".btn-consumir-droga");
+    if (btnConsumirDroga) {
+        btnConsumirDroga.addEventListener("click", (e) => {
+            e.stopPropagation();
+            consumirDroga(id);
         });
     }
     const btnToggleEquipada = li.querySelector(".btn-toggle-equipada");
@@ -5501,7 +5680,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
 // COMBATE
 // ---------------------------------------------------------------------
 function renderizarCombate() {
-    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    const modificadoresPlanos = modificadoresAtuais();
     const armas = listaArmasInventario(fichaAtual);
     el.listaArmasCombate.innerHTML = "";
     if (!armas.length) {
@@ -5601,7 +5780,7 @@ function renderizarCombate() {
 // Perícias que o jogador não tem ficam só como texto (não clicáveis).
 function renderizarManobrasCombate() {
     if (!el.listaManobrasCombate) return;
-    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    const modificadoresPlanos = modificadoresAtuais();
     el.listaManobrasCombate.innerHTML = "";
 
     // "Arremessar" (CQC nível 3+) e "Imobilizar" (CQC nível 4+) não são
@@ -5919,6 +6098,25 @@ function renderizarManobrasCombate() {
 // ---------------------------------------------------------------------
 // VANTAGENS / DESVANTAGENS / FATOS UNIVERSAIS
 // ---------------------------------------------------------------------
+// Subtítulo de uma Desvantagem: descrição normal, mas se for um "Vício"
+// (tem `.substancia`), acrescenta o status de abstinência calculado na
+// hora — dias desde o último uso (ver botão "Consumir" num item de
+// droga, em consumirDroga) e a penalidade atual, se houver.
+function subDesvantagem(v) {
+    if (!v.substancia) return v.descricao || "";
+    const diaAtual = calendarioAtual ? calendarioAtual.diaIndice : null;
+    const { diasDesdeUltimoUso, semanas, malusTestes, malusPV } = calcularAbstinenciaVicio(v, diaAtual);
+    let statusAbstinencia;
+    if (diaAtual === null) {
+        statusAbstinencia = "calendário da mesa ainda não carregou";
+    } else if (semanas <= 0) {
+        statusAbstinencia = `${diasDesdeUltimoUso} dia(s) desde a última dose de ${v.substancia} · sem abstinência ainda`;
+    } else {
+        statusAbstinencia = `${diasDesdeUltimoUso} dia(s) desde a última dose de ${v.substancia} · ${semanas}ª semana em abstinência (${malusTestes} em todos os testes${malusPV ? `, ${malusPV} PV máximo` : ""})`;
+    }
+    return [v.descricao, statusAbstinencia].filter(Boolean).join(" · ");
+}
+
 function renderizarVantagensDesvantagens() {
     const podeEditar = podeEditarCaracteristicaNarrativa();
     // Botões "+ Adicionar" só ficam visíveis durante a Criação (ou pro
@@ -5942,7 +6140,7 @@ function renderizarVantagensDesvantagens() {
     }), "vantagens");
 
     renderizarListaSimples(el.listaDesvantagens, fichaAtual.desvantagens || {}, (id, v) => ({
-        nome: v.nome || "(sem nome)", sub: v.descricao || "", direita: resumoModificadores(v)
+        nome: v.nome || "(sem nome)", sub: subDesvantagem(v), direita: resumoModificadores(v)
     }), "desvantagens");
 
     renderizarAreaBonusDesvantagens();
@@ -5996,6 +6194,138 @@ function renderizarEspecializacoes() {
         nome: v.nome || "(sem nome)", sub: v.descricao || "", direita: resumoModificadores(v)
     }), "especializacoes");
 }
+
+// ---------------------------------------------------------------------
+// VÍCIOS / ABSTINÊNCIA (manual, cap. Drogas)
+// ---------------------------------------------------------------------
+// Um vício NÃO é mais uma aba própria — é a Desvantagem "Vício" (ver
+// campo Substância no modal, mostrado quando o Nome contém "vício";
+// configurarCampoSubstanciaVicio mais abaixo) com um campo extra
+// `substancia` (qual droga) e `diaIndiceUltimoUso` (contagem de dias do
+// calendário da mesa, pra calcular abstinência — ver
+// calcularAbstinenciaVicio em regras.js). Achar a desvantagem certa pra
+// uma droga usa comparação de texto simples (case-insensitive, ignora
+// acento) — é assim que o botão "Consumir" (ver mais abaixo) sabe qual
+// vício "curar" quando o personagem usa a droga de novo.
+function normalizarTextoBusca(s) {
+    return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+function encontrarDesvantagemVicioPara(substancia) {
+    const alvo = normalizarTextoBusca(substancia);
+    if (!alvo) return null;
+    const desvantagens = fichaAtual.desvantagens || {};
+    const idEncontrado = Object.keys(desvantagens).find(id => normalizarTextoBusca(desvantagens[id].substancia) === alvo);
+    return idEncontrado || null;
+}
+
+// Mostra/esconde o campo "Substância" no modal de Desvantagem, conforme
+// o Nome digitado contém "vício"/"vicio" — e preenche o datalist com o
+// catálogo do manual, pra sugerir só (não trava em texto livre, porque
+// mesa pode ter droga homebrew).
+function configurarCampoSubstanciaVicio() {
+    if (el.modalSubstanciaVicioOpcoes) {
+        el.modalSubstanciaVicioOpcoes.innerHTML = CATALOGO_DROGAS.map(d => `<option value="${escapeHtml(d.nome)}">`).join("");
+    }
+    if (!el.modalNome) return;
+    el.modalNome.addEventListener("input", () => {
+        if (!modalContexto || modalContexto.lista !== "desvantagens" || !el.modalCampoSubstanciaVicio) return;
+        const ehVicio = /vic[ií]o/i.test(el.modalNome.value);
+        el.modalCampoSubstanciaVicio.style.display = ehVicio ? "flex" : "none";
+    });
+}
+
+// ---------------------------------------------------------------------
+// CONSUMIR DROGA (item de inventário com tag "droga")
+// ---------------------------------------------------------------------
+// Consumir um item de droga faz duas coisas:
+// 1) Se existir uma Desvantagem "Vício" cadastrada pra essa mesma
+//    substância, zera a contagem de abstinência dela (diaIndiceUltimoUso
+//    = hoje) — "tomou a dose, a abstinência para por hoje".
+// 2) Aplica o efeito da droga (bônus/penalidade) pelo tempo (em horas)
+//    escrito na própria descrição do item — ex: "...por 4h." (ver
+//    extrairDuracaoHorasDaDescricao em regras.js). Sem nenhum "Xh" no
+//    texto, cai no comportamento antigo: dura até acabar o dia em jogo
+//    atual. O efeito soma diaIndice*24 + hora do calendário da mesa
+//    (ver horasTotaisCalendario) pra saber quando expira de verdade, e
+//    some sozinho — sem precisar de nenhuma limpeza manual — assim que
+//    o calendário passar desse ponto (ver calcularModificadoresDrogasAtivas).
+// IMPORTANTE: o efeito aplicado é sempre `item.modificadores` — o mesmo
+// campo "Modificadores automáticos" editável no modal do item (ver
+// #modal-lista-modificadores em ficha.html). Não existe mais nenhum
+// efeito fixo vindo do CATALOGO_DROGAS (dados-manual.js): aquele
+// catálogo agora só serve de SUGESTÃO pra preencher esse campo (e a
+// descrição, de onde a duração é lida) na hora de cadastrar o item (ver
+// configurarAutocompleteItemBanco), continuando 100% editável depois —
+// inclusive pra drogas homebrew que nem estão no catálogo.
+// Item consumível de verdade: reduz 1 unidade (ou remove, se só tinha 1).
+async function consumirDroga(itemId) {
+    if (!idAtivo()) return;
+    const item = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    if (!item) return;
+    if (calendarioAtual === null || calendarioAtual === undefined) {
+        toast("Calendário da mesa ainda não carregou — espera um instante e tenta de novo.", "erro");
+        return;
+    }
+    const diaAtual = calendarioAtual.diaIndice;
+    const modificadoresDoItem = (item.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
+
+    const atualizacoes = {};
+
+    // 1) Cura a abstinência do vício correspondente, se existir.
+    const idDesvantagem = encontrarDesvantagemVicioPara(item.nome);
+    if (idDesvantagem) {
+        fichaAtual.desvantagens[idDesvantagem].diaIndiceUltimoUso = diaAtual;
+        atualizacoes[`${caminhoBase()}/desvantagens/${idDesvantagem}/diaIndiceUltimoUso`] = diaAtual;
+    }
+
+    // 2) Registra o efeito ativo — direto dos modificadores editáveis do
+    // próprio item; item sem nenhum modificador cadastrado só cura a
+    // abstinência, sem bônus/penalidade automática. A duração vem do
+    // texto da descrição (ex: "por 4h"); sem padrão reconhecido, dura
+    // até o fim do dia em jogo (comportamento antigo).
+    let notaDuracao = "";
+    if (modificadoresDoItem.length) {
+        const horasAgora = horasTotaisCalendario(diaAtual, calendarioAtual.hora);
+        const duracaoHoras = extrairDuracaoHorasDaDescricao(item.descricao);
+        const horasExpira = (duracaoHoras !== null && horasAgora !== null)
+            ? horasAgora + duracaoHoras
+            : ((diaAtual + 1) * 24); // fallback: até acabar o dia em jogo (meia-noite)
+        notaDuracao = duracaoHoras !== null ? `efeito ativo por ${duracaoHoras}h` : "efeito ativo até o fim do dia";
+
+        if (!fichaAtual.efeitosDrogas) fichaAtual.efeitosDrogas = {};
+        const chave = normalizarTextoBusca(item.nome);
+        fichaAtual.efeitosDrogas[chave] = {
+            nome: item.nome,
+            diaIndiceConsumido: diaAtual,
+            horasExpira,
+            modificadores: modificadoresDoItem
+        };
+        atualizacoes[`${caminhoBase()}/efeitosDrogas/${chave}`] = fichaAtual.efeitosDrogas[chave];
+    }
+
+    // 3) Consome 1 unidade do item.
+    const quantidadeAtual = Number(item.quantidade);
+    if (Number.isFinite(quantidadeAtual) && quantidadeAtual > 1) {
+        item.quantidade = quantidadeAtual - 1;
+        atualizacoes[`${caminhoBase()}/inventario/${itemId}/quantidade`] = item.quantidade;
+    } else {
+        delete fichaAtual.inventario[itemId];
+        atualizacoes[`${caminhoBase()}/inventario/${itemId}`] = null;
+    }
+
+    try {
+        await update(ref(db), atualizacoes);
+        const partesAviso = [];
+        if (idDesvantagem) partesAviso.push("abstinência zerada");
+        if (notaDuracao) partesAviso.push(notaDuracao);
+        toast(`${item.nome} consumido${partesAviso.length ? " — " + partesAviso.join(", ") : ""}.`);
+    } catch (e) {
+        toast("Não foi possível consumir o item. Tente de novo.", "erro");
+    }
+}
+
+
 
 // ---------------------------------------------------------------------
 // TREINAMENTO
@@ -6447,7 +6777,15 @@ async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modific
         if (receita.itemGlobalId) {
             try {
                 const itemBanco = await buscarItemBancoPorId(receita.itemGlobalId);
-                if (itemBanco) registroItem = autopreencherItemDoBanco(itemBanco, "levando");
+                if (itemBanco) {
+                    registroItem = autopreencherItemDoBanco(itemBanco, "levando");
+                    // Item novo (criado agora, via receita) com modificador
+                    // estruturado nasce DESLIGADO, igual a qualquer outro item
+                    // novo — exceto droga, que não usa esse botão.
+                    if (registroItem.ativo === undefined) {
+                        registroItem.ativo = (registroItem.modificadores && registroItem.modificadores.length && registroItem.tag !== "droga") ? false : true;
+                    }
+                }
             } catch (e) {
                 // Se o Banco falhar por qualquer motivo, cai pro item
                 // básico abaixo em vez de travar a criação.
@@ -6528,7 +6866,7 @@ function renderizarReceitas() {
     if (!el.receitasLista) return;
     const entradasCriacao = Object.values(fichaAtual.pericias || {})
         .filter(p => PERICIAS_CRIACAO_ITEM.includes(p.nome));
-    const modificadoresPlanos = coletarModificadores(fichaAtual);
+    const modificadoresPlanos = modificadoresAtuais();
 
     const corpoHtml = !entradasCriacao.length
         ? `<p class="entity-list-empty" style="cursor:default;">Nenhuma perícia de criação de item (Mecânica Automotiva, Armeiro, Ofícios Utilitários, Explosivos, Eletrônica ou Química) cadastrada nesta ficha ainda.</p>`
@@ -6989,10 +7327,70 @@ function renderizarDarknetENotas() {
         const input = document.querySelector(`[data-field="${campo}"]`);
         if (input && document.activeElement !== input) input.value = fichaAtual.dados[campo] || "";
     });
-    const determinacoes = document.querySelector('[data-field="determinacoes"]');
-    if (determinacoes && document.activeElement !== determinacoes) determinacoes.value = fichaAtual.determinacoes || "";
+    renderizarDeterminacoes();
     const notas = document.querySelector('[data-field="notas"]');
     if (notas && document.activeElement !== notas) notas.value = fichaAtual.notas || "";
+}
+
+// Quantidade de slots de Determinação liberados pelo Nível do
+// personagem: 3 no nível 1, 6 no nível 3, 9 no nível 6, 10 a partir do
+// nível 9 (nível máximo da ficha).
+function maxDeterminacoes(nivel) {
+    const n = Number(nivel) || 1;
+    if (n >= 9) return 10;
+    if (n >= 6) return 9;
+    if (n >= 3) return 6;
+    return 3;
+}
+
+// Renderiza uma caixa de texto por Determinação (em vez do antigo
+// textarea único de texto livre). A quantidade de caixas visíveis segue
+// o Nível atual (ver maxDeterminacoes); se o personagem já tinha mais
+// determinações escritas do que seu nível atual libera (ex: rebaixado
+// pelo Mestre), essas caixas extras continuam aparecendo — só marcadas
+// visualmente — pra nunca apagar texto já escrito pelo jogador.
+let determinacoesQtdRenderizada = null;
+function renderizarDeterminacoes() {
+    const lista = document.getElementById("determinacoes-lista");
+    if (!lista) return;
+
+    const nivel = fichaAtual.dados ? fichaAtual.dados.nivel : 1;
+    const max = maxDeterminacoes(nivel);
+    const valores = Array.isArray(fichaAtual.determinacoes) ? fichaAtual.determinacoes : [];
+    const total = Math.max(max, valores.length);
+
+    if (determinacoesQtdRenderizada !== total) {
+        lista.innerHTML = "";
+        for (let i = 0; i < total; i++) {
+            const bloco = document.createElement("div");
+            bloco.className = "determinacao-item" + (i >= max ? " determinacao-excedente" : "");
+
+            const label = document.createElement("label");
+            label.setAttribute("for", `f-determinacao-${i}`);
+            label.textContent = (i + 1) + (i >= max ? "  (acima do limite do nível atual)" : "");
+
+            const textarea = document.createElement("textarea");
+            textarea.id = `f-determinacao-${i}`;
+            textarea.dataset.determinacaoIndex = String(i);
+            textarea.placeholder = "Princípio, vínculo ou objetivo...";
+
+            bloco.appendChild(label);
+            bloco.appendChild(textarea);
+            lista.appendChild(bloco);
+        }
+        determinacoesQtdRenderizada = total;
+    }
+
+    lista.querySelectorAll("textarea[data-determinacao-index]").forEach(t => {
+        if (document.activeElement === t) return;
+        const idx = Number(t.dataset.determinacaoIndex);
+        t.value = valores[idx] || "";
+    });
+
+    const aviso = document.getElementById("determinacoes-nivel-aviso");
+    if (aviso) {
+        aviso.textContent = `Nível ${nivel}: ${max} ${max === 1 ? "determinação disponível" : "determinações disponíveis"}.`;
+    }
 }
 
 // =====================================================================
@@ -7080,11 +7478,23 @@ async function salvarTudo(manual) {
 // Listeners genéricos de campo simples ([data-field]) — dispara update
 // pontual em fichas/{id}/dados/{campo} (ou raiz, pra determinacoes/notas).
 document.addEventListener("input", (e) => {
+    // Caixas de Determinação: cada uma grava sua posição no array
+    // fichaAtual.determinacoes, mas o array inteiro é salvo de uma vez
+    // (mesmo padrão de "set na folha inteira" usado pelo resto da ficha).
+    const detIndice = e.target.dataset && e.target.dataset.determinacaoIndex;
+    if (detIndice !== undefined && idAtivo()) {
+        const idx = Number(detIndice);
+        if (!Array.isArray(fichaAtual.determinacoes)) fichaAtual.determinacoes = [];
+        fichaAtual.determinacoes[idx] = e.target.value;
+        agendarSalvamento("determinacoes", fichaAtual.determinacoes);
+        return;
+    }
+
     const campo = e.target.dataset && e.target.dataset.field;
     if (!campo || !idAtivo()) return;
     if (CAMPOS_SO_MESTRE.includes(campo) && !isMestre) return;
 
-    if (campo === "determinacoes" || campo === "notas") {
+    if (campo === "notas") {
         fichaAtual[campo] = e.target.value;
         agendarSalvamento(campo, e.target.value);
         return;
@@ -7133,7 +7543,7 @@ document.addEventListener("input", (e) => {
     if (!recursoKey || !idAtivo()) return;
     let valor = e.target.value === "" ? null : Number(e.target.value);
     if (valor !== null && !Number.isNaN(valor)) {
-        const modificadoresPlanos = coletarModificadores(fichaAtual);
+        const modificadoresPlanos = modificadoresAtuais();
         const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
         const bonusExtra = recursoKey === "pv" ? (Number(fichaAtual.dados.pvBonusExtra) || 0) : 0;
         const totalCalculado = Math.round(derivados.recursos[recursoKey].total) + bonusExtra;
@@ -7256,6 +7666,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoMaterialQuantidade.style.display = "none";
     el.modalConfigArma.style.display = "none";
     el.modalConfigReducaoDano.style.display = "none";
+    el.modalCampoSubstanciaVicio.style.display = "none";
     el.modalNome.parentElement.style.display = "flex";
     document.querySelector('label[for="modal-nivel"]').innerText = "Nível (0–5)";
     el.modalNivel.min = 0; el.modalNivel.max = 5;
@@ -7277,6 +7688,15 @@ function prepararModalParaLista(lista, objetoExistente) {
     } else {
         // vantagens, desvantagens, fatosUniversais, especializacoes: nome + descrição + modificadores
         el.modalNome.value = objetoExistente ? (objetoExistente.nome || "") : "";
+        if (lista === "desvantagens" && el.modalCampoSubstanciaVicio) {
+            const nomeAtual = el.modalNome.value;
+            const ehVicio = /vic[ií]o/i.test(nomeAtual);
+            el.modalCampoSubstanciaVicio.style.display = ehVicio ? "flex" : "none";
+            el.modalSubstanciaVicio.value = objetoExistente ? (objetoExistente.substancia || "") : "";
+        } else if (el.modalCampoSubstanciaVicio) {
+            el.modalCampoSubstanciaVicio.style.display = "none";
+            el.modalSubstanciaVicio.value = "";
+        }
     }
 
     // Trava de edição de item (regra 3): jogador só pode VER um item que
@@ -7530,6 +7950,16 @@ function prepararModalItem(existente, ehBanco) {
 // Quando ligado, digitar no campo Nome mostra sugestões do banco; ao
 // clicar numa sugestão, todos os outros campos do modal são preenchidos
 // automaticamente a partir do molde salvo (tag, peso, perícia, arma...).
+//
+// Também mistura sugestões do Catálogo de Drogas (dados-manual.js,
+// referência do manual) quando o texto digitado bate com o nome de uma
+// substância conhecida — mas SÓ como ponto de partida: ao clicar, o
+// efeito (buffs/debuffs) cai dentro da mesma caixa "Modificadores
+// automáticos" (editável) que qualquer outro item usa, e o jogador/Mestre
+// pode alterar, remover ou adicionar linhas livremente depois — nada
+// fica travado/hardcoded no catálogo. Drogas homebrew que não existem
+// no catálogo funcionam do mesmo jeito, só cadastrando os modificadores
+// na mão.
 function configurarAutocompleteItemBanco(ativo) {
     el.modalItemBancoOpcoes.style.display = "none";
     el.modalItemBancoOpcoes.innerHTML = "";
@@ -7537,10 +7967,17 @@ function configurarAutocompleteItemBanco(ativo) {
     el.modalNome.onfocus = null;
     if (!ativo) return;
 
+    const buscarDrogasCatalogo = (texto) => {
+        const alvo = normalizarTextoBusca(texto);
+        if (!alvo) return [];
+        return CATALOGO_DROGAS.filter(d => normalizarTextoBusca(d.nome).includes(alvo)).slice(0, 8);
+    };
+
     const renderSugestoes = () => {
         const encontrados = buscarItensGlobaisPorNome(itensGlobaisCache, el.modalNome.value);
+        const drogas = buscarDrogasCatalogo(el.modalNome.value);
         el.modalItemBancoOpcoes.innerHTML = "";
-        if (!encontrados.length) { el.modalItemBancoOpcoes.style.display = "none"; return; }
+        if (!encontrados.length && !drogas.length) { el.modalItemBancoOpcoes.style.display = "none"; return; }
         encontrados.forEach(it => {
             const div = document.createElement("div");
             div.className = "opcao";
@@ -7557,6 +7994,22 @@ function configurarAutocompleteItemBanco(ativo) {
                 el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
+            });
+            el.modalItemBancoOpcoes.appendChild(div);
+        });
+        drogas.forEach(d => {
+            const div = document.createElement("div");
+            div.className = "opcao";
+            div.innerText = `${d.nome} — Catálogo de Drogas (sugestão, editável)`;
+            div.addEventListener("click", () => {
+                el.modalNome.value = d.nome;
+                el.modalTag.value = "droga";
+                atualizarCamposPorTag("droga", null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
+                const notas = [d.efeito, d.testeVicio ? `Vício: ${d.testeVicio}` : "", d.testeOverdose ? `Overdose: ${d.testeOverdose}` : ""].filter(Boolean).join("\n");
+                el.modalDescricao.value = notas;
+                montarListaModificadores(d.modificadores || []);
+                el.modalItemBancoOpcoes.style.display = "none";
+                toast(`Sugestão preenchida a partir do Catálogo de Drogas: "${d.nome}" — os modificadores abaixo continuam editáveis.`);
             });
             el.modalItemBancoOpcoes.appendChild(div);
         });
@@ -8185,12 +8638,31 @@ async function salvarEntidadeAtual() {
     // já existente (senão salvar a descrição, por exemplo, reativaria
     // sem querer um efeito que o jogador tinha desligado).
     const existente = (id && fichaAtual[lista] && fichaAtual[lista][id]) || {};
+    const modificadoresRegistro = lerModificadoresDoModal();
+    // Registro NOVO com modificador estruturado nasce DESLIGADO — precisa
+    // do clique no botão "Ativar" pra valer (ver btn-toggle-ativo em
+    // renderizarListaSimples). Sem efeito nenhum cadastrado, o campo
+    // `ativo` não é usado em lugar nenhum, então mantém true por padrão.
     const registro = {
         nome,
         descricao: el.modalDescricao.value.trim(),
-        modificadores: lerModificadoresDoModal(),
-        ativo: existente.ativo ?? true
+        modificadores: modificadoresRegistro,
+        ativo: existente.ativo ?? (modificadoresRegistro.length ? false : true)
     };
+    // Desvantagem "Vício": guarda qual substância é o objeto do vício.
+    // `diaIndiceUltimoUso` só é setado na primeira vez que uma substância
+    // é informada (criação, ou edição que preenche o campo pela primeira
+    // vez) — depois disso, quem zera a contagem é o botão "Consumir" do
+    // item de droga correspondente (ver consumirDroga), não o modal.
+    if (lista === "desvantagens" && el.modalCampoSubstanciaVicio && el.modalCampoSubstanciaVicio.style.display !== "none") {
+        const substancia = el.modalSubstanciaVicio.value.trim();
+        if (substancia) {
+            registro.substancia = substancia;
+            registro.diaIndiceUltimoUso = existente.substancia
+                ? existente.diaIndiceUltimoUso
+                : (calendarioAtual ? calendarioAtual.diaIndice : 0);
+        }
+    }
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual[lista]) fichaAtual[lista] = {};
     fichaAtual[lista][idFinal] = registro;
@@ -8447,11 +8919,16 @@ async function salvarItemDoModal(id) {
     // existente (senão editar peso/descrição, por exemplo, reativaria
     // sem querer um item que o jogador tinha desligado).
     const existenteItem = (id && fichaAtual.inventario && fichaAtual.inventario[id]) || {};
+    const modificadoresItem = lerModificadoresDoModal();
+    // Item NOVO com modificador estruturado nasce DESLIGADO (precisa do
+    // botão "Ativar" — ver criarLiItem) — exceto droga, que não usa esse
+    // botão (o efeito dela só entra ao ser consumida, ver consumirDroga;
+    // `ativo` simplesmente não é lido pra itens com tag "droga").
     const registro = {
         nome,
         descricao: el.modalDescricao.value.trim(),
-        modificadores: lerModificadoresDoModal(),
-        ativo: existenteItem.ativo ?? true,
+        modificadores: modificadoresItem,
+        ativo: existenteItem.ativo ?? (modificadoresItem.length && tag !== "droga" ? false : true),
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         peso,
@@ -8993,6 +9470,10 @@ function configurarCombateAtivo() {
             if (painelIniciativaJogadorAberto) montarPainelIniciativaJogador();
         }
         avaliarReacaoPendente();
+        // Status só de combate (Derrubado, Agarrado, Imobilizado,
+        // Inconsciente, Sangramento...) mudam aqui, não em renderizarTudo()
+        // — precisa atualizar o carrossel do topo também neste listener.
+        atualizarStatusTopoCarrossel();
     });
 }
 
@@ -11591,7 +12072,7 @@ function renderEtapaRevisao() {
         fichaAtual.dados.criacaoConcluida = true;
         fichaAtual.dados.funcao = c.funcaoEscolhida; // persiste a função nos dados da ficha
         // PV/Energia atual começam no máximo calculado.
-        const modificadoresPlanos = coletarModificadores(fichaAtual);
+        const modificadoresPlanos = modificadoresAtuais();
         const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
         fichaAtual.dados.pvAtual = Math.round(derivados.recursos.pv.total);
         fichaAtual.dados.energiaAtual = Math.round(derivados.recursos.energia.total);

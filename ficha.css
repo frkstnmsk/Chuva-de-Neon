@@ -145,6 +145,36 @@
     color: var(--text-dim);
     font-style: italic;
 }
+
+/* ---------- Carrossel de status ativos (topbar) ---------- */
+.vital-status-carrossel {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--neon-red);
+    color: var(--neon-red);
+    background: rgba(239, 68, 68, 0.1);
+    font-size: 0.72rem;
+    white-space: nowrap;
+    max-width: 240px;
+    animation: vital-status-pulso 2.4s ease-in-out infinite;
+}
+.vital-status-icone {
+    font-size: 0.95rem;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.vital-status-texto {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+@keyframes vital-status-pulso {
+    0%, 100% { box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+    50% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.55); }
+}
 @media (max-width: 720px) {
     .topbar-vitals { justify-content: flex-start; margin: 0; width: 100%; order: 3; }
 }
@@ -477,6 +507,26 @@
     font-weight: 400;
 }
 
+/* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
+.determinacoes-lista {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.determinacao-item { display: flex; flex-direction: column; gap: 4px; }
+.determinacao-item label {
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+.determinacao-item textarea { min-height: 64px; }
+/* Slot preenchido antes de uma queda de Nível: mantém o texto salvo
+   visível (nunca é apagado sozinho), mas sinaliza visualmente que ele
+   está acima do limite atual do personagem. */
+.determinacao-item.determinacao-excedente label { color: var(--neon-gold); }
+.determinacao-item.determinacao-excedente textarea { border-color: rgba(250, 204, 21, 0.4); }
+
 .checkbox-inline {
     display: flex;
     align-items: center;
@@ -668,10 +718,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Descrição/detalhes do item: fica escondida por padrão e só aparece
+   ao passar o mouse em cima do item (ou focar nele via teclado), pra
+   não ocupar espaço permanente no card — especialmente importante no
+   celular, onde cada linha extra custa caro. */
 .entity-list .entity-sub {
     font-family: var(--font-mono);
     font-size: 0.72rem;
     color: var(--text-dim);
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.15s ease, opacity 0.15s ease;
+}
+.entity-list li:hover .entity-sub,
+.entity-list li:focus-within .entity-sub,
+.entity-list li.entity-sub-fixa .entity-sub {
+    max-height: 120px;
+    opacity: 1;
 }
 .entity-list .entity-badges {
     display: flex;
@@ -679,12 +743,43 @@
     flex-shrink: 0;
     flex-wrap: wrap;
     justify-content: flex-end;
+    min-width: 0;
+    max-width: 100%;
 }
-/* Em telas estreitas, se os botões forem pra uma linha própria (por
-   causa do flex-wrap acima), fica mais legível alinhados à esquerda,
-   embaixo do nome, em vez de "flutuando" à direita. */
+/* Botões, pills e selects dentro do card do item: sem isso, um <select>
+   com texto de opção longo (ex: nome de um recipiente) recusa a
+   encolher (min-width:auto é o padrão em item flex) e vaza pra fora da
+   caixa do item no celular, em vez de quebrar linha ou truncar. */
+.entity-list .entity-badges > * {
+    min-width: 0;
+    max-width: 100%;
+}
+.entity-list .entity-badges select {
+    text-overflow: ellipsis;
+}
+/* Em telas estreitas, distribui os botões/selects em grade dentro da
+   própria caixa do item, em vez de deixá-los soltos alinhados à
+   direita (onde acabavam vazando pra fora). Selects ocupam a largura
+   toda (linha própria); botões e pills se distribuem em colunas. */
 @media (max-width: 600px) {
-    .entity-list .entity-badges { justify-content: flex-start; width: 100%; }
+    .entity-list .entity-badges {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+        justify-content: stretch;
+        justify-items: stretch;
+        width: 100%;
+        gap: 6px;
+    }
+    .entity-list .entity-badges > * {
+        width: 100%;
+        text-align: center;
+    }
+    .entity-list .entity-badges select,
+    .entity-list .entity-badges .select-guardar-dentro,
+    .entity-list .entity-badges .select-transferir {
+        grid-column: 1 / -1;
+        text-align: left;
+    }
 }
 
 .mod-pill {

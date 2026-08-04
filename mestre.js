@@ -1674,14 +1674,14 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
 // `quantidadeDias`, credita o PV proporcional recuperado e devolve um
 // resumo por ficha (pra reportar ao Mestre quanto PV voltou e, se a
 // recuperação terminou antes do fim do período, quantos dias sobraram).
-async function processarRecuperacoesPV(fichasAtivas, quantidadeDias) {
+async function processarRecuperacoesPV(fichasAtivas, quantidadeDias, diaIndiceAtual) {
     const recuperacoesPV = [];
     for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
         const rec = ficha.dados && ficha.dados.recuperacaoPV;
         const avanco = avancarRecuperacaoPV(rec, quantidadeDias);
         if (!avanco) continue;
 
-        const pvMax = calcularPvMaximo(ficha);
+        const pvMax = calcularPvMaximo(ficha, diaIndiceAtual);
         const pvAtualAntes = Number(ficha.dados.pvAtual ?? pvMax);
         const pvAtualDepois = Math.min(pvMax, pvAtualAntes + avanco.pvRecuperadosNestaLeva);
 
@@ -1740,7 +1740,7 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
         await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
     }
 
-    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, 1);
+    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, 1, calendario.diaIndice);
 
     return { calendario, virouDomingo, popups, recuperacoesPV };
 }
@@ -1790,7 +1790,7 @@ export async function passarVariosDias(calendarioAtual, fichasAtivas, quantidade
     // recuperação terminar ANTES do fim do Timeskip — registra quantos
     // dias sobraram sem uso. O resumo (recuperacoesPV) volta pro Mestre
     // ver o que aconteceu com cada ficha durante esse período.
-    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, quantidade);
+    const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, quantidade, calendario.diaIndice);
 
     return { calendario, domingos, popups, recuperacoesPV };
 }
