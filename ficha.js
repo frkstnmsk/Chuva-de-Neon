@@ -58,7 +58,9 @@ import {
     calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
     listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado,
     ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis,
-    TAMANHOS_ITEM, rotuloTamanho, itemCabeNoContainer, volumeTotalDentroDe
+    TAMANHOS_ITEM, rotuloTamanho, itemCabeNoContainer, volumeTotalDentroDe,
+    SUBTIPOS_PORTE, rotuloSubtipoPorte, itemPodeSerLevadoSolto, listaCompartimentos,
+    maosDisponiveis, itemPodeEquiparContainer, subtipoPorteOcupaMao, subtipoPorteExclusivo
 } from "./inventario.js";
 import {
     estadoInicialCriacao, funcaoDe, calcularPontosAtributoTotais,
@@ -348,6 +350,7 @@ const el = {
     financasGanhoFixo: document.getElementById("financas-ganho-fixo"),
     financasGanhoFixoSalvar: document.getElementById("financas-ganho-fixo-salvar"),
     resumoCarga: document.getElementById("resumo-carga"),
+    resumoMaos: document.getElementById("resumo-maos"),
     inventarioCategoriasNav: document.getElementById("inventario-categorias-nav"),
     inventarioListas: document.getElementById("inventario-listas"),
     listaArmasCombate: document.getElementById("lista-armas-combate"),
@@ -386,6 +389,8 @@ const el = {
     modalTag: document.getElementById("modal-tag"),
     modalCampoEquipavel: document.getElementById("modal-campo-equipavel"),
     modalEquipavel: document.getElementById("modal-equipavel"),
+    modalCampoMaosNecessarias: document.getElementById("modal-campo-maos-necessarias"),
+    modalMaosNecessarias: document.getElementById("modal-maos-necessarias"),
     modalCampoNivelTag: document.getElementById("modal-campo-nivel-tag"),
     modalNivelTag: document.getElementById("modal-nivel-tag"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
@@ -424,10 +429,10 @@ const el = {
     modalVolume: document.getElementById("modal-volume"),
     modalCampoTamanho: document.getElementById("modal-campo-tamanho"),
     modalTamanho: document.getElementById("modal-tamanho"),
-    modalCampoCapacidadeVolume: document.getElementById("modal-campo-capacidade-volume"),
-    modalCapacidadeVolume: document.getElementById("modal-capacidade-volume"),
-    modalCampoTamanhoMaximo: document.getElementById("modal-campo-tamanho-maximo"),
-    modalTamanhoMaximo: document.getElementById("modal-tamanho-maximo"),
+    modalCampoSubtipoPorte: document.getElementById("modal-campo-subtipo-porte"),
+    modalSubtipoPorte: document.getElementById("modal-subtipo-porte"),
+    modalCampoCompartimentos: document.getElementById("modal-campo-compartimentos"),
+    modalListaCompartimentos: document.getElementById("modal-lista-compartimentos"),
     modalCampoQuantidade: document.getElementById("modal-campo-quantidade"),
     modalQuantidade: document.getElementById("modal-quantidade"),
     modalQuantidadePesoTotal: document.getElementById("modal-quantidade-peso-total"),
@@ -467,6 +472,7 @@ const el = {
     modalExcluir: document.getElementById("modal-excluir"),
     modalSalvar: document.getElementById("modal-salvar"),
     templateModificador: document.getElementById("template-modificador"),
+    templateCompartimento: document.getElementById("template-compartimento"),
     templateModificacaoArma: document.getElementById("template-modificacao-arma"),
     // calendário
     calData: document.getElementById("cal-data"),
@@ -702,6 +708,7 @@ async function init() {
     tentarOuAvisar("busca de perícia", configurarBuscaPericia);
     tentarOuAvisar("modificações de arma", configurarModificacoesArma);
     tentarOuAvisar("modificadores genéricos", configurarModificadoresGenerico);
+    tentarOuAvisar("compartimentos de recipiente", configurarCompartimentosGenerico);
     tentarOuAvisar("campo substância (vício)", configurarCampoSubstanciaVicio);
     tentarOuAvisar("carrossel de status do topo", configurarStatusTopoCarrossel);
 }
@@ -5416,6 +5423,22 @@ function renderizarInventario(modificadoresPlanos) {
     const ajustesCarga = modificadoresQueAfetam("carga_extra", modificadoresPlanos);
     el.resumoCarga.title = textoDetalhamento("Limite de carga", carga.limiteBase, "Base (Constituição)", ajustesCarga, carga.limite);
 
+    // Indicador fixo de mãos livres (passo 16, seção 5.3 do
+    // projeto-slots-porte.txt) — sempre visível no topo da aba de
+    // inventário, recalculado a cada render (ver maosDisponiveis em
+    // inventario.js: base 2, menos o que estiver "levando consigo",
+    // equipado, fora de qualquer recipiente e que ocupe mão).
+    const maosBase = 2;
+    const maosLivres = maosDisponiveis(fichaAtual);
+    const itensOcupandoMao = Object.values(fichaAtual.inventario || {}).filter(it2 => {
+        if (it2.categoria !== "levando" || !it2.equipada || it2.dentroDe) return false;
+        return ehContainer(it2.tag) ? subtipoPorteOcupaMao(it2.subtipoPorte) : true;
+    });
+    el.resumoMaos.innerText = `🖐️ Mãos livres: ${maosLivres}/${maosBase}`;
+    el.resumoMaos.title = itensOcupandoMao.length
+        ? `Ocupando mão:\n${itensOcupandoMao.map(it2 => `${it2.nome} (${Number(it2.maosNecessarias) || 1})`).join("\n")}`
+        : "Nenhum item ocupando as mãos agora.";
+
     const categorias = listaCategorias(fichaAtual);
     el.inventarioCategoriasNav.innerHTML = "";
     categorias.forEach(cat => {
@@ -5541,6 +5564,55 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const containerLabel = ehContainerItem
         ? ` · ${filhosContainer.length ? `${filhosContainer.length} item(ns) guardado(s)` : "Vazio"}`
         : "";
+    // Botão "equipada" do container (passo 14, seção 5.2 do
+    // projeto-slots-porte.txt): reaproveita o mesmo campo `equipada` das
+    // armas/itens comuns, mas com rótulo de AÇÃO específico por
+    // subtipoPorte em vez do genérico "Equipado/Desequipado" — reflete
+    // melhor o que "vestir uma calça" ou "carregar uma mochila" significa
+    // na hora de decidir. Container só pode ser (des)equipado estando em
+    // "levando consigo" (mesma regra de itemPodeEquipar pra itens comuns).
+    const podeEquiparContainerItem = ehContainerItem && it.categoria === "levando";
+    const ROTULOS_BOTAO_EQUIPAR_CONTAINER = {
+        roupa: { ligar: "👕 Vestir", desligar: "👕 Tirar", tituloLigar: "Vestir esta peça de roupa", tituloDesligar: "Vestindo agora — clique pra tirar" },
+        cinto: { ligar: "👖 Vestir", desligar: "👖 Tirar", tituloLigar: "Vestir este cinto", tituloDesligar: "Vestindo agora — clique pra tirar" },
+        mochila: { ligar: "🎒 Carregar nas costas", desligar: "🎒 Tirar", tituloLigar: "Carregar esta mochila nas costas", tituloDesligar: "Carregando nas costas agora — clique pra tirar" },
+        bolsa_mao: { ligar: "✋ Segurar", desligar: "✋ Largar", tituloLigar: "Segurar esta bolsa/maleta (ocupa 1 mão)", tituloDesligar: "Segurando agora — clique pra largar" }
+    };
+    const rotuloContainerAtual = ehContainerItem ? (ROTULOS_BOTAO_EQUIPAR_CONTAINER[it.subtipoPorte] || ROTULOS_BOTAO_EQUIPAR_CONTAINER.mochila) : null;
+
+    // Passo 15 (seção 5.2 do projeto-slots-porte.txt) — duas travas extras
+    // que só importam na hora de LIGAR (equipar); desequipar sempre libera
+    // recurso, então nunca é bloqueado por elas:
+    //   a) Mão livre: item comum equipável (arma etc.) sempre ocupa mão;
+    //      container só ocupa se subtipoPorteOcupaMao(subtipoPorte) — hoje
+    //      só bolsa_mao. Ver maosDisponiveis em inventario.js (base 2).
+    //   b) Exclusividade: roupa/cinto (subtipoPorteExclusivo) não deixa
+    //      equipar um segundo enquanto já existe outro do mesmo subtipo
+    //      equipado — ver itemPodeEquiparContainer.
+    const podeEquiparCategoria = ehEquipavelItem ? podeEquipar : podeEquiparContainerItem;
+    const ocupaMaoEsteItem = ehContainerItem ? subtipoPorteOcupaMao(it.subtipoPorte) : ehEquipavelItem;
+    const maosNecessariasItem = Number(it.maosNecessarias) || 1;
+    const maosLivresAtuais = maosDisponiveis(fichaAtual);
+    const semMaosLivres = !equipadaItem && ocupaMaoEsteItem && maosLivresAtuais < maosNecessariasItem;
+    const conflitoExclusividade = ehContainerItem && !equipadaItem && subtipoPorteExclusivo(it.subtipoPorte) && !itemPodeEquiparContainer(fichaAtual, it, id);
+    // Variáveis finais consumidas no template abaixo: container usa seu
+    // próprio texto/título por subtipoPorte; item comum/arma mantém o
+    // rótulo genérico de sempre (✅ Equipado / ○ Desequipado / 🗡️ Equipada).
+    const mostrarBtnEquipar = ehEquipavelItem || ehContainerItem;
+    const podeEquiparBtn = podeEquiparCategoria && !semMaosLivres && !conflitoExclusividade;
+    const textoBtnEquipar = ehEquipavelItem
+        ? (equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado")
+        : (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.desligar : rotuloContainerAtual.ligar) : "");
+    const tituloBtnEquipar = !podeEquiparCategoria
+        ? "Precisa estar em 'Levando consigo' pra equipar"
+        : conflitoExclusividade
+            ? `Já tem outra peça de "${rotuloSubtipoPorte(it.subtipoPorte)}" equipada — desequipe-a primeiro.`
+            : semMaosLivres
+                ? `Sem mãos livres (${maosLivresAtuais}/2)`
+                : (ehEquipavelItem
+                    ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar")
+                    : (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.tituloDesligar : rotuloContainerAtual.tituloLigar) : ""));
+
     // Chave de veículo (ver plano-veiculos.txt, adendo "chave"): mostra
     // qual carro ela destranca, pra não virar uma "Chave" solta sem
     // contexto na lista de inventário. Veículo pode ter sido excluído
@@ -5559,7 +5631,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
             ${camaraCarregadaItem ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
             ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
-            ${ehEquipavelItem ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquipar ? "" : "disabled"} title="${podeEquipar ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado"}</button>` : ""}
+            ${mostrarBtnEquipar ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquiparBtn ? "" : "disabled"} title="${tituloBtnEquipar}">${textoBtnEquipar}</button>` : ""}
             <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
             ${it.tag === "droga" ? `<button type="button" class="btn-consumir-droga btn-lime" title="Consome 1 unidade: aplica o efeito (modificadores do item) pelo tempo em horas escrito na descrição (ex: 'por 4h') — sem isso, dura até o fim do dia em jogo — e zera a abstinência do vício correspondente, se houver">Consumir</button>` : ""}
             ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
@@ -5595,8 +5667,31 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     if (btnToggleEquipada) {
         btnToggleEquipada.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (!podeEquipar) return;
-            alternarEquipadaItem(id, !equipadaItem, it.nome);
+            const querEquipar = !equipadaItem;
+            if (querEquipar) {
+                if (!podeEquiparBtn) return;
+            } else {
+                // Passo 17 (seção 3 do projeto-slots-porte.txt) — tirar
+                // (desequipar) um item que está solto em "levando consigo"
+                // (sem dentroDe) só é permitido se ele continuar válido
+                // depois: mesma trava central do modal (itemPodeSerLevadoSolto,
+                // passo 12), aplicada aqui pro botão rápido da lista também,
+                // pra não deixar o botão "Tirar/Largar" criar um item sem
+                // lugar físico nenhum (nem mão, nem vestido, nem guardado).
+                // Cobre tanto container (roupa/cinto/mochila/bolsa_mao)
+                // quanto arma/item equipável comum, com a mesma regra.
+                // Itens guardados DENTRO do recipiente (dentroDe apontando
+                // pra ele) não são afetados — continuam guardados normalmente
+                // (ver itensDentroDe/itemPodeSerLevadoSolto, que só olha o
+                // próprio item, não filhos) e simplesmente deixam de contar
+                // como "levando consigo ativo" enquanto a peça-mãe não
+                // estiver equipada nem em "levando".
+                if (!itemPodeSerLevadoSolto(fichaAtual, { ...it, equipada: false })) {
+                    toast(`Pra tirar "${it.nome}" primeiro guarde-o dentro de outro recipiente ou mova-o pra outra categoria — solto em "Levando consigo" ele precisa continuar equipado.`, "erro");
+                    return;
+                }
+            }
+            alternarEquipadaItem(id, querEquipar, it.nome);
         });
     }
 
@@ -5610,12 +5705,15 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         });
     }
 
-    // "Guardar dentro de" — mover o item pra dentro de um recipiente (ou
-    // soltá-lo, se já estiver guardado). Guardar move o item pra
+    // "Guardar dentro de" — mover o item pra dentro de um COMPARTIMENTO
+    // específico de um recipiente (ou soltá-lo, se já estiver guardado).
+    // Lista achatada por compartimento (ver listaContainersDisponiveis,
+    // seção 5.1 do projeto-slots-porte.txt) — o value do <option> carrega
+    // "containerId::compartimentoId". Guardar move o item junto pra
     // categoria do recipiente automaticamente (ver salvarItemDoModal).
     const selectGuardarDentro = li.querySelector(".select-guardar-dentro");
-    const containersDisponiveis = listaContainersDisponiveis(fichaAtual, id);
-    if (containersDisponiveis.length || it.dentroDe) {
+    const compartimentosDisponiveis = listaContainersDisponiveis(fichaAtual, id);
+    if (compartimentosDisponiveis.length || it.dentroDe) {
         const optForaPlaceholder = document.createElement("option");
         optForaPlaceholder.value = "__guardar__";
         optForaPlaceholder.innerText = "Guardar dentro de...";
@@ -5627,10 +5725,11 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             optFora.innerText = "↩ Tirar do recipiente";
             selectGuardarDentro.appendChild(optFora);
         }
-        containersDisponiveis.forEach(cont => {
+        compartimentosDisponiveis.forEach(comp => {
+            const containerItem = fichaAtual.inventario[comp.containerId];
             const opt = document.createElement("option");
-            opt.value = cont.id;
-            opt.innerText = `🎒 ${cont.nome} (${nomeCategoria(fichaAtual, cont.categoria)})`;
+            opt.value = `${comp.containerId}::${comp.compartimentoId}`;
+            opt.innerText = `🎒 ${comp.containerNome} → ${comp.compartimentoNome} (${nomeCategoria(fichaAtual, containerItem?.categoria)})`;
             selectGuardarDentro.appendChild(opt);
         });
         selectGuardarDentro.value = "__guardar__";
@@ -5640,10 +5739,13 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     selectGuardarDentro.addEventListener("click", (e) => e.stopPropagation());
     selectGuardarDentro.addEventListener("change", async (e) => {
         e.stopPropagation();
-        const novoContainerId = e.target.value;
-        if (novoContainerId === "__guardar__") return;
+        const valorEscolhido = e.target.value;
+        if (valorEscolhido === "__guardar__") return;
+        const [novoContainerId, novoCompartimentoId] = valorEscolhido ? valorEscolhido.split("::") : [null, null];
         const containerNovo = novoContainerId ? fichaAtual.inventario[novoContainerId] : null;
         const nomeContainerNovo = containerNovo?.nome || "";
+        const compartimentoNovo = (containerNovo?.compartimentos || []).find(c => c.id === novoCompartimentoId);
+        const nomeCompartimentoNovo = compartimentoNovo?.nome || "";
         const categoriaNova = containerNovo?.categoria || it.categoria;
         // "Cabe ou não cabe" (Fase 5) — mesma trava do modal, só que no
         // fluxo rápido do dropdown. Só se aplica ao GUARDAR (tirar do
@@ -5651,34 +5753,36 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         // Vale tanto pro Mestre (aplicaria direto) quanto pro jogador
         // (nem chega a virar pedido pendente se já não couber).
         if (novoContainerId) {
-            const resultado = itemCabeNoContainer(fichaAtual, novoContainerId, it.volume, it.tamanho, id);
+            const resultado = itemCabeNoContainer(fichaAtual, novoContainerId, novoCompartimentoId, it.volume, it.tamanho, id);
             if (!resultado.cabe) {
                 const msg = resultado.motivo === "tamanho"
                     ? `"${nomeContainerNovo}" não aceita item desse tamanho.`
-                    : `"${nomeContainerNovo}" não tem espaço sobrando (capacidade de volume estourada).`;
+                    : resultado.motivo === "compartimento_invalido"
+                        ? `Esse compartimento não existe mais em "${nomeContainerNovo}".`
+                        : `"${nomeContainerNovo}" não tem espaço sobrando (capacidade de volume estourada).`;
                 toast(msg, "erro");
                 selectGuardarDentro.value = "__guardar__";
                 return;
             }
         }
         if (isMestre) {
-            const dados = { dentroDe: novoContainerId || null };
+            const dados = { dentroDe: novoContainerId || null, compartimentoId: novoContainerId ? novoCompartimentoId : null };
             // Guardar move o item junto pra categoria do recipiente;
             // tirar mantém a categoria atual dele (fica onde estava).
             if (novoContainerId) dados.categoria = categoriaNova;
             await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
-            toast(novoContainerId ? `${it.nome} guardado em ${nomeContainerNovo}.` : `${it.nome} tirado do recipiente.`);
+            toast(novoContainerId ? `${it.nome} guardado em ${nomeContainerNovo} → ${nomeCompartimentoNovo}.` : `${it.nome} tirado do recipiente.`);
         } else {
             const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
             const detalhe = novoContainerId
-                ? `${nomeJogador} quer guardar "${it.nome}" dentro de "${nomeContainerNovo}".`
+                ? `${nomeJogador} quer guardar "${it.nome}" dentro de "${nomeContainerNovo} → ${nomeCompartimentoNovo}".`
                 : `${nomeJogador} quer tirar "${it.nome}" do recipiente em que está guardado.`;
             await criarAcaoPendente({
                 tipo: "guardar_item",
                 fichaId: fichaAtualId,
                 nomeJogador,
                 detalhe,
-                payload: { itemId: id, itemNome: it.nome, containerIdAtual: it.dentroDe || null, containerIdNovo: novoContainerId || null, containerNomeNovo: nomeContainerNovo, categoriaNova: novoContainerId ? categoriaNova : null }
+                payload: { itemId: id, itemNome: it.nome, containerIdAtual: it.dentroDe || null, containerIdNovo: novoContainerId || null, compartimentoIdNovo: novoContainerId ? novoCompartimentoId : null, containerNomeNovo: nomeContainerNovo, categoriaNova: novoContainerId ? categoriaNova : null }
             });
             toast("Pedido enviado ao Mestre.");
             selectGuardarDentro.value = "__guardar__";
@@ -5707,7 +5811,10 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         if (!novaCategoria) return;
         if (isMestre) {
             const dados = { categoria: novaCategoria };
-            if (novaCategoria !== "levando" && ehEquipavelItem && equipadaItem) dados.equipada = false;
+            // Sai de "levando consigo" desequipa automaticamente — vale
+            // tanto pra item comum/arma quanto pra container (mochila
+            // guardada em casa não continua "vestida"/"nas costas").
+            if (novaCategoria !== "levando" && (ehEquipavelItem || ehContainerItem) && equipadaItem) dados.equipada = false;
             // Item que muda de categoria não pode continuar "guardado"
             // dentro de um recipiente que ficou pra trás na categoria
             // antiga (mochila que ficou em casa não segura item que foi
@@ -5830,25 +5937,38 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
     // o conteúdo "viaja" junto se o item pai for movido/filtrado).
     if (ehContainerItem && containerAberto) {
-        // Barra de volume (🎒 Volume: usado/capacidade) — mesma ideia da
-        // barra de carga do topo do inventário, só que por recipiente.
-        // Recipiente sem capacidadeVolume definida (dado antigo/Fase 7)
-        // não mostra barra de progresso, só o total guardado — não tem
-        // limite pra comparar. Fica vermelha/pisca se, por alguma
+        // Badge de ocupação POR COMPARTIMENTO (passo 13, seção 5.2 do
+        // projeto-slots-porte.txt) — cada compartimento tem sua própria
+        // capacidade e ocupação (ex: "Bolso frente esq. 1/1 · Bolso de
+        // trás 0/1"), não mais um volume total agregado do container
+        // inteiro. Compartimento sem capacidadeVolume definida (0) não
+        // mostra barra de progresso, só o total guardado — não tem
+        // limite pra comparar. Fica vermelho/pisca se, por alguma
         // inconsistência de dados antigos, passar do limite (a
-        // validação normal — modal e select-guardar-dentro — já
-        // impede isso de acontecer em uso normal).
-        const volumeUsadoContainer = volumeTotalDentroDe(fichaAtual, id);
-        const capacidadeVolumeContainer = Number(it.capacidadeVolume) || 0;
-        const estourado = capacidadeVolumeContainer > 0 && volumeUsadoContainer > capacidadeVolumeContainer;
-        const pctVolumeContainer = capacidadeVolumeContainer > 0 ? Math.min(100, Math.round((volumeUsadoContainer / capacidadeVolumeContainer) * 100)) : 0;
-        const barraVolume = document.createElement("div");
-        barraVolume.className = "volume-bar-wrap";
-        barraVolume.innerHTML = `
-            <span class="volume-bar-texto${estourado ? " volume-bar-texto-estourado" : ""}">🎒 Volume: ${volumeUsadoContainer}${capacidadeVolumeContainer > 0 ? `/${capacidadeVolumeContainer}` : " (sem limite definido)"}</span>
-            ${capacidadeVolumeContainer > 0 ? `<div class="volume-bar-track"><div class="volume-bar-fill${estourado ? " volume-bar-estourado" : ""}" style="width:${pctVolumeContainer}%;"></div></div>` : ""}
-        `;
-        li.appendChild(barraVolume);
+        // validação normal — modal e select-guardar-dentro — já impede
+        // isso de acontecer em uso normal).
+        const compartimentosContainer = listaCompartimentos(it);
+        const painelCompartimentos = document.createElement("div");
+        painelCompartimentos.className = "volume-bar-wrap";
+        painelCompartimentos.innerHTML = compartimentosContainer.length
+            ? compartimentosContainer.map(comp => {
+                const usado = volumeTotalDentroDe(fichaAtual, id, comp.id);
+                const capacidade = Number(comp.capacidadeVolume) || 0;
+                const estourado = capacidade > 0 && usado > capacidade;
+                const pct = capacidade > 0 ? Math.min(100, Math.round((usado / capacidade) * 100)) : 0;
+                return `
+                    <div class="compartimento-badge">
+                        <span class="volume-bar-texto${estourado ? " volume-bar-texto-estourado" : ""}">🎒 ${escapeHtml(comp.nome || "Compartimento")}: ${usado}${capacidade > 0 ? `/${capacidade}` : " (sem limite definido)"}</span>
+                        ${capacidade > 0 ? `<div class="volume-bar-track"><div class="volume-bar-fill${estourado ? " volume-bar-estourado" : ""}" style="width:${pct}%;"></div></div>` : ""}
+                    </div>
+                `;
+            }).join("")
+            // Defesa extra: container sem nenhum compartimento cadastrado
+            // não devia acontecer em uso normal (o modal exige pelo menos
+            // 1 — ver lerCompartimentosDoModal), mas evita tela quebrada
+            // se algum dado antigo escapou da migração.
+            : `<span class="volume-bar-texto volume-bar-texto-estourado">⚠️ Este recipiente não tem nenhum compartimento cadastrado.</span>`;
+        li.appendChild(painelCompartimentos);
 
         const ulFilhos = document.createElement("ul");
         ulFilhos.className = "entity-list entity-list-nested";
@@ -5885,7 +6005,16 @@ function renderizarCombate() {
             const mods = (cfg.modificacoesArma || []).join(", ");
             const podeUsar = itemPodeUsar(arma) && !!arma.periciaUso;
             const equipadaArma = !!arma.equipada;
-            const podeEquiparArma = itemPodeEquipar(arma);
+            // Sistema de Slots de Porte (Fase 8) — este botão é um segundo
+            // caminho pra equipar/desequipar a mesma arma (fora da lista
+            // principal do Inventário), então precisa respeitar a mesma
+            // trava de mãos livres que o botão de lá já respeita (ver
+            // criarLiItem/semMaosLivres) — senão dava pra empunhar uma
+            // arma de 2 mãos aqui mesmo sem mão livre sobrando.
+            const maosNecessariasArma = Number(arma.maosNecessarias) || 1;
+            const maosLivresCombate = maosDisponiveis(fichaAtual);
+            const semMaosLivresArma = !equipadaArma && maosLivresCombate < maosNecessariasArma;
+            const podeEquiparArma = itemPodeEquipar(arma) && !semMaosLivresArma;
             const periciaLabel = arma.periciaUso ? ` · Perícia: ${escapeHtml(arma.periciaUso)}` : " · Sem perícia vinculada";
             const classeLabel = arma.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(arma.classeProtecao))}` : "";
             const calibreLabel = arma.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(arma.calibre))}` : "";
@@ -5915,7 +6044,7 @@ function renderizarCombate() {
                 <div class="entity-badges">
                     ${(ehFogo && !semCarregador && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
                     ${camaraCarregadaArma ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
-                    <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${podeEquiparArma ? (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate") : "Precisa estar em 'Levando consigo' pra equipar"}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
+                    <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${!itemPodeEquipar(arma) ? "Precisa estar em 'Levando consigo' pra equipar" : (semMaosLivresArma ? `Sem mãos livres (${maosLivresCombate}/2)` : (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate"))}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
                     <button type="button" class="btn-usar-item btn-blue" data-quick-key="arma:${escapeHtml(arma.id)}" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
                     ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
                     ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
@@ -5924,8 +6053,16 @@ function renderizarCombate() {
             `;
             li.querySelector(".btn-toggle-equipada").addEventListener("click", (e) => {
                 e.stopPropagation();
-                if (!podeEquiparArma) return;
-                alternarEquipadaItem(arma.id, !equipadaArma, arma.nome);
+                const querEquiparArma = !equipadaArma;
+                if (querEquiparArma) {
+                    if (!podeEquiparArma) return;
+                } else if (!itemPodeSerLevadoSolto(fichaAtual, { ...arma, equipada: false })) {
+                    // Mesma trava do passo 17 (ver criarLiItem) — desequipar
+                    // aqui é o mesmo botão do Painel de Combate pra essa arma.
+                    toast(`Pra guardar "${arma.nome}" primeiro coloque-a dentro de outro recipiente ou mova-a pra outra categoria — solta em "Levando consigo" ela precisa continuar equipada.`, "erro");
+                    return;
+                }
+                alternarEquipadaItem(arma.id, querEquiparArma, arma.nome);
             });
             li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
                 e.stopPropagation();
@@ -8401,8 +8538,8 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoPeso.style.display = "none";
     el.modalCampoVolume.style.display = "none";
     el.modalCampoTamanho.style.display = "none";
-    el.modalCampoCapacidadeVolume.style.display = "none";
-    el.modalCampoTamanhoMaximo.style.display = "none";
+    el.modalCampoSubtipoPorte.style.display = "none";
+    el.modalCampoCompartimentos.style.display = "none";
     el.modalCampoQuantidade.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
     el.modalCampoGuardarDentro.style.display = "none";
@@ -8598,22 +8735,27 @@ function popularSelectGuardarDentro(idItemAtual, valorSelecionado) {
     optNenhum.value = "";
     optNenhum.innerText = "Nenhum (item solto)";
     el.modalGuardarDentro.appendChild(optNenhum);
-    const containers = listaContainersDisponiveis(fichaAtual, idItemAtual);
-    containers.forEach(cont => {
+    // Lista achatada por COMPARTIMENTO (não por container inteiro — ver
+    // listaContainersDisponiveis/seção 5.1 do projeto-slots-porte.txt).
+    // O value do <option> carrega os dois ids ("containerId::compartimentoId")
+    // porque um mesmo container pode ter vários compartimentos.
+    const compartimentosDisponiveis = listaContainersDisponiveis(fichaAtual, idItemAtual);
+    compartimentosDisponiveis.forEach(comp => {
+        const containerItem = fichaAtual.inventario[comp.containerId];
         const opt = document.createElement("option");
-        opt.value = cont.id;
-        opt.innerText = `${cont.nome} (${nomeCategoria(fichaAtual, cont.categoria)})`;
+        opt.value = `${comp.containerId}::${comp.compartimentoId}`;
+        opt.innerText = `${comp.containerNome} → ${comp.compartimentoNome} (${nomeCategoria(fichaAtual, containerItem?.categoria)})`;
         el.modalGuardarDentro.appendChild(opt);
     });
-    // Se o recipiente salvo não está mais entre as opções (ex: foi
-    // excluído), volta pra "Nenhum".
+    // Se o compartimento salvo não está mais entre as opções (ex: o
+    // container ou o compartimento foi excluído), volta pra "Nenhum".
     el.modalGuardarDentro.value = [...el.modalGuardarDentro.options].some(o => o.value === valorSelecionado)
         ? valorSelecionado
         : "";
     // Escolher um recipiente sincroniza a categoria do item com a dele
     // na hora (só visual — quem garante de verdade é salvarItemDoModal).
     el.modalGuardarDentro.onchange = () => {
-        const contId = el.modalGuardarDentro.value;
+        const [contId] = el.modalGuardarDentro.value ? el.modalGuardarDentro.value.split("::") : [""];
         const cont = contId ? fichaAtual.inventario[contId] : null;
         if (cont) el.modalCategoriaItem.value = cont.categoria || "levando";
     };
@@ -8634,6 +8776,107 @@ function popularSelectTamanho(selectEl, valorAtual) {
         selectEl.appendChild(opt);
     });
     selectEl.value = (valorAtual && TAMANHOS_ITEM.some(t => t.key === valorAtual)) ? valorAtual : TAMANHOS_ITEM[0].key;
+}
+
+// Popula o <select> "Tipo de porte" (ver SUBTIPOS_PORTE em dados-manual.js
+// e seção 5.1 do projeto-slots-porte.txt) — só aparece pra tag
+// "recipiente". valorAtual cai pro primeiro da lista ("mochila") se vier
+// vazio/inválido, mesmo default seguro usado por normalizarCompartimentos.
+function popularSelectSubtipoPorte(selectEl, valorAtual) {
+    selectEl.innerHTML = "";
+    SUBTIPOS_PORTE.forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s.key;
+        opt.innerText = s.label;
+        selectEl.appendChild(opt);
+    });
+    selectEl.value = (valorAtual && SUBTIPOS_PORTE.some(s => s.key === valorAtual)) ? valorAtual : SUBTIPOS_PORTE[0].key;
+}
+
+// ---------------------------------------------------------------------
+// Compartimentos de recipiente (linhas dinâmicas: nome + capacidade +
+// tamanho máximo aceito — ver seção 5.1 do projeto-slots-porte.txt).
+// Mesmo padrão das linhas de modificador (template clonado via JS).
+// ---------------------------------------------------------------------
+function montarListaCompartimentos(compartimentos) {
+    el.modalListaCompartimentos.innerHTML = "";
+    (compartimentos || []).forEach(c => adicionarLinhaCompartimento(c.id, c.nome, c.capacidadeVolume, c.tamanhoMaximoAceito));
+}
+
+function adicionarLinhaCompartimento(idExistente, nomeAtual, capacidadeAtual, tamanhoAtual) {
+    const fragmento = el.templateCompartimento.content.cloneNode(true);
+    const row = fragmento.querySelector(".compartimento-row");
+    const nomeInput = row.querySelector(".compartimento-nome");
+    const capacidadeInput = row.querySelector(".compartimento-capacidade");
+    const tamanhoSelect = row.querySelector(".compartimento-tamanho");
+    const btnRemover = row.querySelector(".compartimento-remover");
+
+    // Guarda o id original num dataset — compartimento já existente
+    // mantém o mesmo id ao editar (pra não invalidar item.compartimentoId
+    // de itens já guardados nele); linha nova só ganha id no momento de
+    // salvar (ver lerCompartimentosDoModal/gerarIdLocal).
+    row.dataset.compartimentoId = idExistente || "";
+    nomeInput.value = nomeAtual || "";
+    capacidadeInput.value = capacidadeAtual ?? 0;
+    popularSelectTamanho(tamanhoSelect, tamanhoAtual);
+
+    btnRemover.addEventListener("click", () => {
+        // Sempre deixa pelo menos 1 linha na lista — remover a última
+        // restante seria salvar um container sem nenhum compartimento
+        // (proibido, ver lerCompartimentosDoModal). O jogador pode
+        // limpar o nome/zerar a capacidade se realmente não quiser
+        // aquele compartimento, mas precisa ter algo.
+        if (el.modalListaCompartimentos.querySelectorAll(".compartimento-row").length <= 1) {
+            toast("O recipiente precisa de pelo menos 1 compartimento.", "erro");
+            return;
+        }
+        // Passo 18 (seção 5.4 do projeto-slots-porte.txt) — bloqueia
+        // remover um compartimento que ainda tem item guardado dentro
+        // (ficaria com item.compartimentoId apontando pra um compartimento
+        // que não existe mais). Só se aplica a compartimento JÁ EXISTENTE
+        // (idExistente, guardado no dataset) de um item de INVENTÁRIO já
+        // salvo (modalContexto.id) — linha recém-criada no editor (ainda
+        // sem id persistido) nunca tem item guardado dentro dela, e item
+        // do Banco Global não guarda item de ficha nenhum dentro.
+        const idCompartimento = row.dataset.compartimentoId;
+        if (idCompartimento && modalContexto && modalContexto.lista === "inventario" && modalContexto.id) {
+            const itensDentro = Object.values(fichaAtual.inventario || {})
+                .filter(it2 => it2.dentroDe === modalContexto.id && it2.compartimentoId === idCompartimento);
+            if (itensDentro.length) {
+                const nomes = itensDentro.map(it2 => it2.nome).join(", ");
+                toast(`Não dá pra remover esse compartimento com item guardado dentro (${nomes}). Guarde ${itensDentro.length > 1 ? "os itens" : "o item"} em outro lugar primeiro.`, "erro");
+                return;
+            }
+        }
+        row.remove();
+    });
+
+    el.modalListaCompartimentos.appendChild(row);
+}
+
+function configurarCompartimentosGenerico() {
+    document.getElementById("modal-add-compartimento").addEventListener("click", () => adicionarLinhaCompartimento(null, "", 0, null));
+}
+
+// Lê as linhas do editor e monta o array pra salvar no item. Retorna
+// null (e mostra um toast) se a validação mínima falhar — quem chama
+// deve tratar null como "não salvar". Compartimento sem nome preenchido
+// ganha "Compartimento N" como nome padrão, pra nunca salvar em branco.
+function lerCompartimentosDoModal() {
+    const linhas = [...el.modalListaCompartimentos.querySelectorAll(".compartimento-row")];
+    if (linhas.length === 0) {
+        toast("Adicione pelo menos 1 compartimento a esse recipiente.", "erro");
+        return null;
+    }
+    return linhas.map((row, i) => {
+        const nomeDigitado = row.querySelector(".compartimento-nome").value.trim();
+        return {
+            id: row.dataset.compartimentoId || gerarIdLocal(),
+            nome: nomeDigitado || `Compartimento ${i + 1}`,
+            capacidadeVolume: Math.max(0, Number(row.querySelector(".compartimento-capacidade").value) || 0),
+            tamanhoMaximoAceito: row.querySelector(".compartimento-tamanho").value || null
+        };
+    });
 }
 
 function prepararModalItem(existente, ehBanco) {
@@ -8679,9 +8922,9 @@ function prepararModalItem(existente, ehBanco) {
         popularSelectTamanho(el.modalTamanho, existente.tamanho);
         if (!ehBanco) {
             el.modalCategoriaItem.value = existente.categoria || "levando";
-            popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe || "");
+            popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe ? `${existente.dentroDe}::${existente.compartimentoId || "principal"}` : "");
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { capacidadeVolume: existente.capacidadeVolume, tamanhoMaximoAceito: existente.tamanhoMaximoAceito });
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias);
         el.modalEquipavel.checked = !!existente.equipavel;
     } else {
         el.modalNome.value = "";
@@ -8693,7 +8936,7 @@ function prepararModalItem(existente, ehBanco) {
             el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
             popularSelectGuardarDentro(null, "");
         }
-        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
+        atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
         el.modalEquipavel.checked = false;
     }
 
@@ -8748,7 +8991,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { capacidadeVolume: it.capacidadeVolume, tamanhoMaximoAceito: it.tamanhoMaximoAceito });
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias);
                 el.modalEquipavel.checked = !!it.equipavel;
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
@@ -8762,7 +9005,7 @@ function configurarAutocompleteItemBanco(ativo) {
             div.addEventListener("click", () => {
                 el.modalNome.value = d.nome;
                 el.modalTag.value = "droga";
-                atualizarCamposPorTag("droga", null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
+                atualizarCamposPorTag("droga", null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
                 const notas = [d.efeito, d.testeVicio ? `Vício: ${d.testeVicio}` : "", d.testeOverdose ? `Overdose: ${d.testeOverdose}` : ""].filter(Boolean).join("\n");
                 el.modalDescricao.value = notas;
                 montarListaModificadores(d.modificadores || []);
@@ -8964,7 +9207,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma": arma
     // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
@@ -8973,6 +9216,21 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     const podeMarcarEquipavel = !!tagKey && tagKey !== "arma";
     el.modalCampoEquipavel.style.display = podeMarcarEquipavel ? "flex" : "none";
     if (!podeMarcarEquipavel) el.modalEquipavel.checked = false;
+
+    // Mãos necessárias (ver item.maosNecessarias, seção 2.2 do
+    // projeto-slots-porte.txt) — aparece pra qualquer item que possa vir
+    // a ser segurado/equipado solto na mão: arma (sempre equipável),
+    // qualquer outro item com o checkbox "equipável" disponível acima, ou
+    // recipiente (a mochila em si não ocupa mão, mas "bolsa_mao" consome
+    // — o campo fica aqui, genérico, e quem decide se conta ou não é
+    // maosDisponiveis/itemPodeSerLevadoSolto em inventario.js). Some só
+    // sem tag nenhuma escolhida ainda.
+    const podeTerMaosNecessarias = tagKey === "arma" || podeMarcarEquipavel;
+    el.modalCampoMaosNecessarias.style.display = podeTerMaosNecessarias ? "flex" : "none";
+    if (podeTerMaosNecessarias) {
+        const valor = Number(maosNecessariasAtual) === 2 ? "2" : "1";
+        el.modalMaosNecessarias.value = valor;
+    }
 
     const temNivel = tagTemNivel(tagKey);
     el.modalCampoNivelTag.style.display = temNivel ? "flex" : "none";
@@ -8983,15 +9241,22 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     el.modalCampoCarregadorCapacidade.style.display = exigeCapacidade ? "flex" : "none";
     if (exigeCapacidade) el.modalCarregadorCapacidade.value = (carregadorConfigAtual && carregadorConfigAtual.capacidadeMax) || 10;
 
-    // Recipiente (ex.: mochila) — capacidade em volume (soma máxima do
-    // que cabe dentro) e maior tamanho aceito (trava binária, ver
+    // Recipiente (ex.: mochila) — tipo de porte + compartimentos (cada um
+    // com sua própria capacidade em volume e maior tamanho aceito, ver
     // tamanhoCabe em dados-manual.js). Só aparecem pra tag "recipiente".
     const container = ehContainer(tagKey);
-    el.modalCampoCapacidadeVolume.style.display = container ? "flex" : "none";
-    el.modalCampoTamanhoMaximo.style.display = container ? "flex" : "none";
+    el.modalCampoSubtipoPorte.style.display = container ? "flex" : "none";
+    el.modalCampoCompartimentos.style.display = container ? "flex" : "none";
     if (container) {
-        el.modalCapacidadeVolume.value = (recipienteConfigAtual && recipienteConfigAtual.capacidadeVolume) || 0;
-        popularSelectTamanho(el.modalTamanhoMaximo, recipienteConfigAtual && recipienteConfigAtual.tamanhoMaximoAceito);
+        popularSelectSubtipoPorte(el.modalSubtipoPorte, recipienteConfigAtual && recipienteConfigAtual.subtipoPorte);
+        // Item novo (ou container sem compartimentos ainda, ex: dado
+        // legado que por algum motivo não passou pela migração) começa
+        // com 1 linha em branco pra não deixar salvar sem nenhuma —
+        // ver validação mínima em lerCompartimentosDoModal.
+        const compartimentosAtuais = (recipienteConfigAtual && recipienteConfigAtual.compartimentos && recipienteConfigAtual.compartimentos.length)
+            ? recipienteConfigAtual.compartimentos
+            : [{ nome: "", capacidadeVolume: 0, tamanhoMaximoAceito: null }];
+        montarListaCompartimentos(compartimentosAtuais);
     }
 
     // Projétil/munição — quantidade de rounds que ESTE item representa.
@@ -9163,7 +9428,7 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
-    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null, null);
+    atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
 });
 
 document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
@@ -9693,11 +9958,27 @@ async function salvarItemDoModal(id) {
 
     const tamanho = el.modalTamanho.value || null;
 
-    // Recipiente (mochila, bolsa...) — capacidade em volume e maior
-    // tamanho aceito, só gravados quando a tag é "recipiente" (ver
+    // Mãos necessárias (ver item.maosNecessarias, seção 2.2 do
+    // projeto-slots-porte.txt) — só grava número diferente de 1 quando o
+    // campo está visível (item potencialmente equipável/segurável);
+    // senão fica no default 1 (irrelevante pra item que nunca é
+    // equipado/segurado solto).
+    const maosNecessarias = (el.modalCampoMaosNecessarias.style.display !== "none")
+        ? (Number(el.modalMaosNecessarias.value) === 2 ? 2 : 1)
+        : 1;
+
+    // Recipiente (mochila, bolsa...) — tipo de porte (obrigatório, ver
+    // SUBTIPOS_PORTE em dados-manual.js) e compartimentos (obrigatório
+    // pelo menos 1, cada um com sua própria capacidade/tamanho — ver
+    // editor dinâmico), só gravados quando a tag é "recipiente" (ver
     // ehContainer em dados-manual.js).
-    const capacidadeVolume = ehContainer(tag) ? Math.max(0, Number(el.modalCapacidadeVolume.value) || 0) : null;
-    const tamanhoMaximoAceito = ehContainer(tag) ? (el.modalTamanhoMaximo.value || null) : null;
+    const subtipoPorte = ehContainer(tag) ? (el.modalSubtipoPorte.value || null) : null;
+    if (ehContainer(tag) && !subtipoPorte) { toast("Escolha o tipo de porte deste recipiente.", "erro"); return; }
+    let compartimentos = null;
+    if (ehContainer(tag)) {
+        compartimentos = lerCompartimentosDoModal();
+        if (!compartimentos) return; // toast de erro já disparado dentro da função
+    }
 
     // "Guardar dentro de" (item-recipiente) — só existe pra item de
     // ficha (não pro Banco Global). Revalida contra ciclo aqui também
@@ -9708,29 +9989,39 @@ async function salvarItemDoModal(id) {
     // dele — não faz sentido um item estar "guardado numa mochila que
     // está em casa" e ao mesmo tempo listado como "levando consigo".
     let dentroDe = null;
+    let compartimentoId = null;
     let categoriaFinal = el.modalCategoriaItem.value || "levando";
     if (el.modalCampoGuardarDentro.style.display !== "none") {
-        const valorDentroDe = el.modalGuardarDentro.value || null;
-        if (valorDentroDe && id && itemDescendeDe(fichaAtual, valorDentroDe, id)) {
+        // Valor do select agora é composto ("containerId::compartimentoId"
+        // — ver popularSelectGuardarDentro/listaContainersDisponiveis,
+        // passo 11 do projeto-slots-porte.txt), já que um mesmo container
+        // pode ter mais de um compartimento.
+        const valorSelecionado = el.modalGuardarDentro.value || "";
+        const [containerIdSelecionado, compartimentoIdSelecionado] = valorSelecionado ? valorSelecionado.split("::") : [null, null];
+        if (containerIdSelecionado && id && itemDescendeDe(fichaAtual, containerIdSelecionado, id)) {
             toast("Não dá pra guardar um item dentro dele mesmo (ou de algo já guardado dentro dele).", "erro");
             return;
         }
-        // "Cabe ou não cabe" (Fase 2/3): tamanho e capacidade do
-        // recipiente escolhido, contra o volume/tamanho deste item.
-        // idExcluir = id (quando editando) evita contar o volume do
-        // próprio item duas vezes, caso ele já estivesse guardado ali.
-        if (valorDentroDe) {
-            const resultado = itemCabeNoContainer(fichaAtual, valorDentroDe, volume, tamanho, id || null);
+        // "Cabe ou não cabe" (Fase 2/3, agora por compartimento): tamanho
+        // e capacidade do compartimento escolhido, contra o volume/tamanho
+        // deste item. idExcluir = id (quando editando) evita contar o
+        // volume do próprio item duas vezes, caso ele já estivesse
+        // guardado ali.
+        if (containerIdSelecionado) {
+            const resultado = itemCabeNoContainer(fichaAtual, containerIdSelecionado, compartimentoIdSelecionado, volume, tamanho, id || null);
             if (!resultado.cabe) {
-                const nomeContainer = fichaAtual.inventario[valorDentroDe]?.nome || "recipiente";
+                const nomeContainer = fichaAtual.inventario[containerIdSelecionado]?.nome || "recipiente";
                 const msg = resultado.motivo === "tamanho"
                     ? `"${nomeContainer}" não aceita item desse tamanho.`
-                    : `"${nomeContainer}" não tem espaço sobrando (capacidade de volume estourada).`;
+                    : resultado.motivo === "compartimento_invalido"
+                        ? `O compartimento escolhido em "${nomeContainer}" não existe mais — escolha outro.`
+                        : `"${nomeContainer}" não tem espaço sobrando (capacidade de volume estourada).`;
                 toast(msg, "erro");
                 return;
             }
         }
-        dentroDe = valorDentroDe;
+        dentroDe = containerIdSelecionado || null;
+        compartimentoId = dentroDe ? compartimentoIdSelecionado : null;
         if (dentroDe && fichaAtual.inventario[dentroDe]) {
             categoriaFinal = fichaAtual.inventario[dentroDe].categoria || categoriaFinal;
         }
@@ -9782,11 +10073,15 @@ async function salvarItemDoModal(id) {
         volume,
         volumeUnitario,
         tamanho,
-        capacidadeVolume,
-        tamanhoMaximoAceito,
+        maosNecessarias,
+        subtipoPorte,
+        // Vem do editor dinâmico (lerCompartimentosDoModal) quando é
+        // container; senão fica null (item comum não tem compartimento).
+        compartimentos,
         quantidade,
         categoria: categoriaFinal,
         dentroDe,
+        compartimentoId,
         periciaUso,
         ehSaldo,
         saldoValor,
@@ -9813,6 +10108,20 @@ async function salvarItemDoModal(id) {
         materialQualidade: tag === "material" ? (qualidadesDoMaterial(el.modalMaterialTipo.value) ? el.modalMaterialQualidade.value : null) : (existenteItem.materialQualidade ?? null),
         materialQuantidade: tag === "material" ? Math.max(0, Number(el.modalMaterialQuantidade.value) || 0) : (existenteItem.materialQuantidade ?? null)
     };
+
+    // Trava central de "todo item solto precisa de um lugar físico" (seção
+    // 3 e 5.4 do projeto-slots-porte.txt, passo 12): um item em "levando
+    // consigo" e sem estar guardado dentro de nada só pode existir se
+    // estiver numa mão, vestido, ou carregado (roupa/cinto/mochila/
+    // bolsa_mao equipados) — ver itemPodeSerLevadoSolto em inventario.js.
+    // Roda com o `registro` já montado (não com o item antigo) porque a
+    // edição pode ter mudado categoria/dentroDe/equipada/subtipoPorte
+    // nesta mesma submissão.
+    if (!itemPodeSerLevadoSolto(fichaAtual, registro)) {
+        toast(`"${nome}" precisa estar numa mão, vestido/carregado, ou guardado dentro de um compartimento pra ficar em "levando consigo".`, "erro");
+        return;
+    }
+
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual.inventario) fichaAtual.inventario = {};
     fichaAtual.inventario[idFinal] = registro;
@@ -9860,8 +10169,16 @@ async function salvarItemBancoDoModal(id) {
     const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
     const { peso, pesoUnitario, volume, volumeUnitario, quantidade } = lerPesoVolumeEQuantidadeDoModal(tag);
     const tamanho = el.modalTamanho.value || null;
-    const capacidadeVolume = ehContainer(tag) ? Math.max(0, Number(el.modalCapacidadeVolume.value) || 0) : null;
-    const tamanhoMaximoAceito = ehContainer(tag) ? (el.modalTamanhoMaximo.value || null) : null;
+    const maosNecessarias = (el.modalCampoMaosNecessarias.style.display !== "none")
+        ? (Number(el.modalMaosNecessarias.value) === 2 ? 2 : 1)
+        : 1;
+    const subtipoPorte = ehContainer(tag) ? (el.modalSubtipoPorte.value || null) : null;
+    if (ehContainer(tag) && !subtipoPorte) { toast("Escolha o tipo de porte deste recipiente.", "erro"); return; }
+    let compartimentos = null;
+    if (ehContainer(tag)) {
+        compartimentos = lerCompartimentosDoModal();
+        if (!compartimentos) return; // toast de erro já disparado dentro da função
+    }
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
     const exigeClasseProtecao = tagExigeClasseProtecao(tag, periciaUso);
@@ -9905,8 +10222,9 @@ async function salvarItemBancoDoModal(id) {
         volume,
         volumeUnitario,
         tamanho,
-        capacidadeVolume,
-        tamanhoMaximoAceito,
+        maosNecessarias,
+        subtipoPorte,
+        compartimentos,
         quantidade,
         periciaUso,
         ehSaldo,

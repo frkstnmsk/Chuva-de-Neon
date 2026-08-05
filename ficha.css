@@ -1505,6 +1505,34 @@ select.select-guardar-dentro {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
+/* Um recipiente pode ter mais de um compartimento (passo 13 do
+   projeto-slots-porte.txt) — cada um ganha seu próprio texto + barra
+   dentro do .volume-bar-wrap (que já dá o espaçamento vertical entre
+   eles via gap); esta classe só empilha texto/barra internamente. */
+.compartimento-badge {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+/* Separador sutil entre compartimentos quando o recipiente tem mais
+   de um cadastrado (ex: calça com "Bolso frente esq." + "Bolso de
+   trás") — o primeiro da lista não ganha borda, só os seguintes,
+   pra não duplicar linha com o padding do .volume-bar-wrap. */
+.compartimento-badge + .compartimento-badge {
+    padding-top: 6px;
+    margin-top: 2px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- Indicador fixo de mãos livres (passo 19 — Fase 8.5 do
+   projeto-slots-porte.txt) ---------- */
+/* Reaproveita a caixa .hint (mesmo estilo do #resumo-carga logo
+   acima), só reforça o peso da fonte pra ele ler como um indicador
+   de estado (tipo contador), não como um texto explicativo comum. */
+#resumo-maos {
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
 
 /* ---------- Modal: linhas de modificador ---------- */
 .modificador-row, .modificacao-arma-row {
@@ -1518,6 +1546,23 @@ select.select-guardar-dentro {
 .modificador-row select, .modificador-row input,
 .modificacao-arma-row input { margin: 0; }
 .mod-remover, .modarma-remover {
+    padding: 6px;
+    font-size: 0.9rem;
+    line-height: 1;
+    width: 32px;
+    height: 32px;
+}
+
+/* ---------- Modal: linhas de compartimento (Fase 8 — slots de porte) ---------- */
+.compartimento-row {
+    display: grid;
+    grid-template-columns: 1.5fr 90px 1fr 32px;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+.compartimento-row input, .compartimento-row select { margin: 0; }
+.compartimento-remover {
     padding: 6px;
     font-size: 0.9rem;
     line-height: 1;

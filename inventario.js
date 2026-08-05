@@ -5,7 +5,8 @@
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
-    TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe
+    TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe,
+    SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo
 } from "./dados-manual.js";
 import { calcularCarga } from "./regras.js";
 
@@ -146,49 +147,68 @@ export function listaProjeteisInventario(fichaAtual, calibre) {
 // de deixar o jogador escolher onde guardar algo no modal.
 // =====================================================================
 
-// Itens que estão guardados dentro de um recipiente específico.
-export function itensDentroDe(fichaAtual, containerId) {
+// Itens que estão guardados dentro de um recipiente específico. Com o
+// Sistema de Slots de Porte (Fase 8), um container pode ter mais de um
+// compartimento — passar compartimentoId filtra só o que está NESSE
+// compartimento. Quando compartimentoId vem undefined, mantém o
+// comportamento antigo: agrega tudo que está dentro do container,
+// não importa o compartimento (usado em telas que só querem "o que
+// tem dentro", tipo o resumo do item na lista).
+export function itensDentroDe(fichaAtual, containerId, compartimentoId) {
     if (!containerId) return [];
     return Object.entries(fichaAtual.inventario || {})
-        .filter(([, it]) => it.dentroDe === containerId)
+        .filter(([, it]) => it.dentroDe === containerId &&
+            (compartimentoId === undefined || it.compartimentoId === compartimentoId))
         .map(([id, it]) => ({ id, ...it }));
 }
 
 // Soma o volume (item.volume) de tudo que está guardado dentro de um
-// recipiente. idExcluir tira um item específico da soma — usado
+// recipiente (ou, se compartimentoId for informado, só dentro DESSE
+// compartimento). idExcluir tira um item específico da soma — usado
 // quando o item sendo checado JÁ está guardado ali (edição: não faz
 // sentido contar o volume dele duas vezes contra a própria capacidade
-// do recipiente onde ele já mora).
-export function volumeTotalDentroDe(fichaAtual, containerId, idExcluir) {
-    return itensDentroDe(fichaAtual, containerId)
+// do compartimento onde ele já mora).
+export function volumeTotalDentroDe(fichaAtual, containerId, compartimentoId, idExcluir) {
+    return itensDentroDe(fichaAtual, containerId, compartimentoId)
         .filter(it => it.id !== idExcluir)
         .reduce((acc, it) => acc + (Number(it.volume) || 0), 0);
 }
 
-// A checagem central de "cabe ou não cabe" — duas travas independentes,
-// na ordem que faz mais sentido explicar pro jogador (tamanho primeiro,
-// é o motivo mais "óbvio" fisicamente; capacidade depois, é aritmética):
-//   1. Tamanho: item "Comprido" não entra num recipiente que só aceita
-//      até "Médio", nem que sobre capacidade numérica (ver tamanhoCabe
-//      em dados-manual.js).
-//   2. Capacidade: soma do que já está guardado + o volume do item não
-//      pode passar da capacidadeVolume do recipiente.
-// Recipiente sem capacidadeVolume definida (dado antigo/não configurado
-// ainda — Fase 7) não trava por capacidade, só por tamanho se este
-// estiver definido. Retorna { cabe, motivo } — motivo é null quando cabe,
-// senão "tamanho" ou "capacidade" (pra montar a mensagem de erro certa
-// em ficha.js).
-export function itemCabeNoContainer(fichaAtual, containerId, itemVolume, itemTamanho, idExcluir) {
+// A checagem central de "cabe ou não cabe" — agora por compartimento
+// específico dentro do container (Sistema de Slots de Porte, Fase 8),
+// não mais por container inteiro. Duas travas independentes, na ordem
+// que faz mais sentido explicar pro jogador (tamanho primeiro, é o
+// motivo mais "óbvio" fisicamente; capacidade depois, é aritmética):
+//   0. Compartimento precisa existir de fato no container (proteção
+//      contra dado desatualizado — ex: compartimento removido depois
+//      que o item já apontava pra ele).
+//   1. Tamanho: item "Comprido" não entra num compartimento que só
+//      aceita até "Médio", nem que sobre capacidade numérica (ver
+//      tamanhoCabe em dados-manual.js).
+//   2. Capacidade: soma do que já está guardado nesse compartimento +
+//      o volume do item não pode passar da capacidadeVolume dele.
+// Retorna { cabe, motivo } — motivo é null quando cabe, senão
+// "compartimento_invalido", "tamanho" ou "capacidade" (pra montar a
+// mensagem de erro certa em ficha.js).
+export function itemCabeNoContainer(fichaAtual, containerId, compartimentoId, itemVolume, itemTamanho, idExcluir) {
     const container = (fichaAtual.inventario || {})[containerId];
     if (!container || !ehContainer(container.tag)) return { cabe: true, motivo: null };
 
-    if (!tamanhoCabe(itemTamanho, container.tamanhoMaximoAceito)) {
+    const compartimento = (container.compartimentos || []).find(c => c.id === compartimentoId);
+    if (!compartimento) {
+        // Mensagem amigável (seção 3.2 do doc de projeto): o compartimento
+        // que esse item apontava não existe mais nesse container (foi
+        // removido no modal, por ex.).
+        return { cabe: false, motivo: "compartimento_invalido" };
+    }
+
+    if (!tamanhoCabe(itemTamanho, compartimento.tamanhoMaximoAceito)) {
         return { cabe: false, motivo: "tamanho" };
     }
 
-    const capacidade = Number(container.capacidadeVolume);
+    const capacidade = Number(compartimento.capacidadeVolume);
     if (capacidade > 0) {
-        const jaOcupado = volumeTotalDentroDe(fichaAtual, containerId, idExcluir);
+        const jaOcupado = volumeTotalDentroDe(fichaAtual, containerId, compartimentoId, idExcluir);
         const volumeItem = Number(itemVolume) || 0;
         if (jaOcupado + volumeItem > capacidade) {
             return { cabe: false, motivo: "capacidade" };
@@ -215,19 +235,116 @@ export function itemDescendeDe(fichaAtual, itemId, possivelAncestralId) {
     return false;
 }
 
-// Recipientes disponíveis pra guardar um item dentro — todos os
-// recipientes da ficha, de qualquer categoria (guardar um item move ele
-// pra categoria do recipiente automaticamente — ver salvarItemDoModal e
-// o select-guardar-dentro em ficha.js), menos os que formariam um ciclo
-// (não pode ser o próprio item sendo editado nem um descendente dele).
+// Compartimentos disponíveis pra guardar um item dentro — Sistema de
+// Slots de Porte (Fase 8): agora cada container pode ter mais de um
+// compartimento, então a lista é "achatada" (uma entrada por
+// COMPARTIMENTO, não por container inteiro). No <select> do modal
+// aparece como "Calça → Bolso frente esq.". Continua filtrando ciclos
+// com itemDescendeDe (na base do containerId, não do compartimento —
+// um item não pode ser guardado dentro de si mesmo nem de um
+// descendente dele, não importa em qual compartimento).
 export function listaContainersDisponiveis(fichaAtual, idItemAtual) {
-    return Object.entries(fichaAtual.inventario || {})
+    const containers = Object.entries(fichaAtual.inventario || {})
         .filter(([id, it]) =>
             ehContainer(it.tag) &&
             id !== idItemAtual &&
             !(idItemAtual && itemDescendeDe(fichaAtual, id, idItemAtual))
-        )
-        .map(([id, it]) => ({ id, ...it }));
+        );
+
+    const out = [];
+    for (const [containerId, container] of containers) {
+        const compartimentos = listaCompartimentos(container);
+        for (const comp of compartimentos) {
+            out.push({
+                containerId,
+                containerNome: container.nome,
+                compartimentoId: comp.id,
+                compartimentoNome: comp.nome,
+                capacidadeVolume: comp.capacidadeVolume,
+                tamanhoMaximoAceito: comp.tamanhoMaximoAceito
+            });
+        }
+    }
+    return out;
 }
 
-export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe };
+// Helper simples — devolve os compartimentos de um item, protegendo
+// contra dado antigo/corrompido que ainda não passou pela migração de
+// normalizarCompartimentos (ver normalizacao.js).
+export function listaCompartimentos(item) {
+    return (item && item.compartimentos) || [];
+}
+
+// =====================================================================
+// Sistema de Slots de Porte (Fase 8) — mãos, exclusividade de roupa/
+// cinto, e a trava central de "todo item solto precisa de um lugar
+// físico" (mão, corpo, ou compartimento). Ver projeto-slots-porte.txt,
+// seções 3 e 3.1/3.2 pro detalhamento das regras.
+// =====================================================================
+
+// Quantas mãos livres o personagem tem agora. Base sempre 2. Cada item
+// "levando consigo", equipado, SEM estar guardado dentro de outra
+// coisa, que ocupa mão — seja um item comum equipável (arma etc.) ou
+// um container cujo subtipoPorte ocupa mão (só bolsa_mao hoje) —
+// consome item.maosNecessarias (default 1) do total. Nunca deixa
+// negativo (a UI trava ANTES de deixar equipar algo que estouraria —
+// ver itemPodeEquiparContainer/seção 5.2 do doc de projeto).
+export function maosDisponiveis(fichaAtual) {
+    const base = 2;
+    const itens = Object.values(fichaAtual.inventario || {});
+    const ocupadas = itens.reduce((acc, it) => {
+        if (it.categoria !== "levando") return acc;
+        if (!it.equipada) return acc;
+        if (it.dentroDe) return acc;
+        const ocupaMao = ehContainer(it.tag)
+            ? subtipoPorteOcupaMao(it.subtipoPorte)
+            : true; // item comum equipável (arma etc.) sempre ocupa mão
+        if (!ocupaMao) return acc;
+        return acc + (Number(it.maosNecessarias) || 1);
+    }, 0);
+    return Math.max(0, base - ocupadas);
+}
+
+// Checa exclusividade antes de marcar um container como equipada=true:
+// subtipos exclusivos (roupa, cinto — ver SUBTIPOS_PORTE) só podem ter
+// 1 item equipado por vez daquele subtipo. "mochila" e "bolsa_mao" não
+// têm esse limite (mas bolsa_mao ainda é travada por mão — ver
+// maosDisponiveis acima). idItemAtual exclui o próprio item da busca
+// (pra não bloquear o item verificando contra si mesmo quando ele já
+// está equipado e a checagem é só re-validação).
+export function itemPodeEquiparContainer(fichaAtual, item, idItemAtual) {
+    if (!ehContainer(item.tag)) return true;
+    if (!subtipoPorteExclusivo(item.subtipoPorte)) return true;
+    return !Object.entries(fichaAtual.inventario || {}).some(([id, it]) =>
+        id !== idItemAtual &&
+        it.equipada &&
+        it.subtipoPorte === item.subtipoPorte
+    );
+}
+
+// A regra de validação central (seção 3 do doc de projeto): um item na
+// categoria "levando" e SEM item.dentroDe só é válido se estiver:
+//   a) container roupa/cinto equipada (vestindo)
+//   b) container mochila equipada (carregando nas costas)
+//   c) container bolsa_mao equipada (segurando — consome mão, mas essa
+//      checagem de recurso é feita à parte por maosDisponiveis)
+//   d) item equipável comum (arma etc.) equipada (segurando)
+// Qualquer outra coisa solta nessas condições NÃO é permitida — a UI
+// deve bloquear salvar o item nesse estado (ver seção 5.4 do doc).
+// Item guardado dentro de algo (item.dentroDe) ou fora da categoria
+// "levando" não passa por essa regra (sempre válido aqui).
+export function itemPodeSerLevadoSolto(fichaAtual, item) {
+    if (item.categoria !== "levando") return true;
+    if (item.dentroDe) return true;
+
+    if (ehContainer(item.tag)) {
+        const subtipo = item.subtipoPorte;
+        const subtipoValido = subtipo === "roupa" || subtipo === "cinto" ||
+            subtipo === "mochila" || subtipo === "bolsa_mao";
+        return subtipoValido && !!item.equipada;
+    }
+
+    return itemEhEquipavel(item) && !!item.equipada;
+}
+
+export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo };

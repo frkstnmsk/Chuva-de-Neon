@@ -2099,17 +2099,19 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
             const snapInventario = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
             const inventarioAtual = snapInventario.exists() ? snapInventario.val() : {};
             const itemGuardando = inventarioAtual[payload.itemId] || {};
-            const resultado = itemCabeNoContainer({ inventario: inventarioAtual }, payload.containerIdNovo, itemGuardando.volume, itemGuardando.tamanho, payload.itemId);
+            const resultado = itemCabeNoContainer({ inventario: inventarioAtual }, payload.containerIdNovo, payload.compartimentoIdNovo, itemGuardando.volume, itemGuardando.tamanho, payload.itemId);
             if (!resultado.cabe) {
                 const nomeContainer = inventarioAtual[payload.containerIdNovo]?.nome || payload.containerNomeNovo || "recipiente";
                 const motivo = resultado.motivo === "tamanho"
                     ? `"${nomeContainer}" não aceita item desse tamanho.`
-                    : `"${nomeContainer}" não tem mais espaço sobrando (capacidade de volume estourada).`;
+                    : resultado.motivo === "compartimento_invalido"
+                        ? `Esse compartimento não existe mais em "${nomeContainer}".`
+                        : `"${nomeContainer}" não tem mais espaço sobrando (capacidade de volume estourada).`;
                 await rejeitarAcaoPendente(acao.id);
                 throw new Error(`Pedido cancelado: ${motivo}`);
             }
         }
-        const dadosGuardar = { dentroDe: payload.containerIdNovo || null };
+        const dadosGuardar = { dentroDe: payload.containerIdNovo || null, compartimentoId: payload.containerIdNovo ? (payload.compartimentoIdNovo || null) : null };
         if (payload.containerIdNovo && payload.categoriaNova) dadosGuardar.categoria = payload.categoriaNova;
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosGuardar);
 
