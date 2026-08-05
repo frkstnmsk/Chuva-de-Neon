@@ -4,7 +4,7 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
-import { buscarPericiaPorNome } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo } from "./dados-manual.js";
 
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
@@ -863,4 +863,199 @@ export function calcularDanoDesarmado(forcaValor, escalaMult, opcoes = {}) {
 // ---------------------------------------------------------------------
 export function calcularDificuldadeArmaFogo(dificuldadeBase, percepcaoAtacante) {
     return (Number(dificuldadeBase) || 0) - (Number(percepcaoAtacante) || 0);
+}
+
+// =====================================================================
+// VEÍCULOS (manual pg. 36-43) — Fase 1 do plano (ver plano-veiculos.txt):
+// modificadores derivados dos 5 atributos com escala fixa
+// (ESCALAS_VEICULO em dados-manual.js) + cálculo de manutenção.
+// Acessórios/Armamento fica de fora por enquanto — ver nota em
+// dados-manual.js.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// Proteção: PVs máximos e redução de dano do veículo, direto da escala
+// (manual pg. 37). Não tem fórmula — é tabela pura — mas fica aqui (e
+// não só em dados-manual.js) porque é "regra derivada" igual as outras
+// funções deste arquivo: quem monta a ficha/UI não deveria precisar
+// saber que por baixo é uma lookup em ESCALAS_VEICULO.
+// ---------------------------------------------------------------------
+export function pvMaxVeiculo(protecao) {
+    return nivelVeiculo("protecao", protecao)?.pv ?? 0;
+}
+
+export function reducaoDanoVeiculo(protecao) {
+    return nivelVeiculo("protecao", protecao)?.reducaoDano ?? 0;
+}
+
+// A cada dois pontos em Proteção, o veículo sofre -1 em Velocidade
+// (manual pg. 37). Sempre negativo ou zero.
+export function penalidadeVelocidadePorProtecao(protecao) {
+    // `|| 0` normaliza o -0 que -Math.floor(0/2) produziria — mesmo
+    // valor numérico, mas -0 aparece feio se for exibido direto na UI.
+    return (-Math.floor((Number(protecao) || 0) / 2)) || 0;
+}
+
+// ---------------------------------------------------------------------
+// Velocidade: km/h máximo e ações por turno. O nível EFETIVO de
+// Velocidade já desconta a penalidade de Proteção (ver acima) antes de
+// consultar a escala de km/h — por isso nunca deve ficar negativo (o
+// carro só fica parado, nível 0, não "menos que parado").
+//
+// Ações por turno: "cada ponto determina o número de ações que podem
+// ser realizadas em um turno... limitado pelo atributo Raciocínio do
+// piloto" (manual pg. 36) — usa o mesmo nível efetivo (o carro
+// detonado pela Proteção baixa também fica mais lento pra agir, não só
+// mais lento em km/h).
+// ---------------------------------------------------------------------
+export function nivelVelocidadeEfetivo(velocidade, protecao) {
+    const nivelBase = Number(velocidade) || 0;
+    return Math.max(0, Math.min(5, nivelBase + penalidadeVelocidadePorProtecao(protecao)));
+}
+
+export function kmhMaxVeiculo(nivelVelocidadeEfetivoValor) {
+    return nivelVeiculo("velocidade", nivelVelocidadeEfetivoValor)?.kmhMax ?? 0;
+}
+
+export function acoesPorTurnoVeiculo(nivelVelocidadeEfetivoValor, raciocinioPiloto) {
+    const limitePiloto = Math.max(0, Math.floor(Number(raciocinioPiloto) || 0));
+    return Math.min(Math.max(0, Number(nivelVelocidadeEfetivoValor) || 0), limitePiloto);
+}
+
+// ---------------------------------------------------------------------
+// Eficiência: turnos até atingir a velocidade máxima — tabela pura
+// (manual pg. 36), sem modificador de outro atributo.
+// ---------------------------------------------------------------------
+export function turnosAteVelocidadeMaximaVeiculo(eficiencia) {
+    return nivelVeiculo("eficiencia", eficiencia)?.turnosAteVelMax ?? 8;
+}
+
+// ---------------------------------------------------------------------
+// Capacidade de Carga: kg máximo + penalidade em Contabilidade a
+// partir do nível 3 (manual pg. 37: "cada nível a partir daqui dá -1
+// em Contabilidade" — ou seja, nível 3 = -1, nível 4 = -2, nível 5 = -3).
+// ---------------------------------------------------------------------
+export function kgMaxVeiculo(capacidadeCarga) {
+    return nivelVeiculo("capacidadeCarga", capacidadeCarga)?.kgMax ?? 0;
+}
+
+export function penalidadeContabilidadeCarga(capacidadeCarga) {
+    const nivel = Number(capacidadeCarga) || 0;
+    return nivel >= 3 ? -(nivel - 2) : 0;
+}
+
+// ---------------------------------------------------------------------
+// Controle: bônus/penalidade em drift e em rolagens de fuga/corrida,
+// além de duas capacidades binárias (manobrar, drift) — ver escala
+// completa em ESCALAS_VEICULO.controle.niveis (manual pg. 37-38):
+//   nível 0: -3 em TODAS as rolagens (não só drift/fuga)
+//   nível 1: sem bônus, mas incapaz de realizar manobras
+//   nível 2: pronto pra drift, ainda sem bônus numérico
+//   nível 3-5: +1/+2/+3 em drift e em fuga/corrida
+// ---------------------------------------------------------------------
+export function modificadoresControleVeiculo(controle) {
+    const nivel = Math.max(0, Math.min(5, Number(controle) || 0));
+    return {
+        nivel,
+        penalidadeRolagensGerais: nivel === 0 ? -3 : 0,
+        podeRealizarManobras: nivel >= 2,
+        bonusDrift: nivel >= 3 ? nivel - 2 : 0,
+        bonusFugaCorrida: nivel >= 3 ? nivel - 2 : 0
+    };
+}
+
+// ---------------------------------------------------------------------
+// Pacote único com todos os modificadores derivados dos 5 atributos —
+// pensado pra UI da ficha (fase 4) chamar de uma vez só e ter tudo que
+// precisa pra desenhar o card do veículo, sem repetir lookups.
+// `raciocinioPiloto` é opcional (usa 0 se não vier, zerando ações por
+// turno) — normalmente é o Raciocínio (já com modificadores) de quem
+// está dirigindo, resolvido pela ficha.js.
+// ---------------------------------------------------------------------
+export function calcularModificadoresVeiculo(atributos = {}, raciocinioPiloto = 0) {
+    const velocidade = Number(atributos.velocidade) || 0;
+    const eficiencia = Number(atributos.eficiencia) || 0;
+    const protecao = Number(atributos.protecao) || 0;
+    const capacidadeCarga = Number(atributos.capacidadeCarga) || 0;
+    const controle = Number(atributos.controle) || 0;
+
+    const penalidadeVelocidade = penalidadeVelocidadePorProtecao(protecao);
+    const nivelVelEfetivo = nivelVelocidadeEfetivo(velocidade, protecao);
+
+    return {
+        velocidade: {
+            nivel: velocidade,
+            nivelEfetivo: nivelVelEfetivo,
+            penalidadePorProtecao: penalidadeVelocidade,
+            kmhMax: kmhMaxVeiculo(nivelVelEfetivo),
+            acoesPorTurno: acoesPorTurnoVeiculo(nivelVelEfetivo, raciocinioPiloto)
+        },
+        eficiencia: {
+            nivel: eficiencia,
+            turnosAteVelocidadeMaxima: turnosAteVelocidadeMaximaVeiculo(eficiencia)
+        },
+        protecao: {
+            nivel: protecao,
+            pvMaximo: pvMaxVeiculo(protecao),
+            reducaoDano: reducaoDanoVeiculo(protecao)
+        },
+        capacidadeCarga: {
+            nivel: capacidadeCarga,
+            kgMax: kgMaxVeiculo(capacidadeCarga),
+            penalidadeContabilidade: penalidadeContabilidadeCarga(capacidadeCarga)
+        },
+        controle: modificadoresControleVeiculo(controle)
+    };
+}
+
+// ---------------------------------------------------------------------
+// Manutenção (manual pg. 41): "determinado por 1/20 do valor de cada
+// atributo. Cada atributo tem um valor de manutenção; você deve pagar
+// todos eles somados." O "valor" de um atributo é o preço de mercado
+// do nível atual (ESCALAS_VEICULO); cada fração é arredondada pra
+// baixo — mesma regra geral de arredondamento do sistema — antes de
+// somar, não depois (senão dois atributos "baratos" que juntos
+// fechariam outro vigésimo perderiam esse centavo).
+//
+// Acessórios/Armamento não entra na soma: não tem tabela de preço fixa
+// por nível (cada item tem seu próprio custo) — ver nota em
+// dados-manual.js.
+// ---------------------------------------------------------------------
+export function valorTotalVeiculo(atributos = {}) {
+    return ATRIBUTOS_VEICULO.reduce((soma, chave) => soma + precoNivelVeiculo(chave, atributos[chave]), 0);
+}
+
+export function valorManutencaoVeiculo(atributos = {}) {
+    return ATRIBUTOS_VEICULO.reduce((soma, chave) => soma + Math.floor(precoNivelVeiculo(chave, atributos[chave]) / 20), 0);
+}
+
+// ---------------------------------------------------------------------
+// Chave física do veículo (ver plano-veiculos.txt, adendo "chave"):
+// todo veículo criado pelo Mestre nasce trancado (ver `trancado` em
+// normalizarVeiculos, normalizacao.js) e vem com um item-chave criado
+// junto no inventário da MESMA ficha (ver salvarVeiculoDoModal em
+// ficha.js). Só dá pra destrancar se a ficha tiver, no inventário, um
+// item tag "chave" cujo veiculoId aponte pra esse veículo — não
+// importa qual item exatamente (cópia perdida e recriada pelo Mestre
+// também serve), por isso é uma busca e não uma comparação direta de
+// id. Fora do escopo por enquanto: chave "sumir" da ficha de quem
+// destrancou pra ficha de quem furtou o carro (isso já existe como
+// mecanismo genérico de troca de item entre fichas — "dar_item" — só
+// não tem nenhuma trava especial de veículo em cima disso ainda).
+// ---------------------------------------------------------------------
+export function veiculoTemChaveDisponivel(fichaAtual, veiculoId) {
+    const inventario = (fichaAtual && fichaAtual.inventario) || {};
+    return Object.values(inventario).some(it => it && it.tag === "chave" && it.veiculoId === veiculoId);
+}
+
+// Periodicidade (manual pg. 41): corrida = semanal, carga = quinzenal,
+// pessoal = mensal. Convertido pra dias só como apoio a uma eventual
+// integração futura com o calendário (fila automática, nos moldes do
+// Custo de Vida semanal já existente) — por enquanto o pagamento é
+// manual, sob demanda do jogador (ver plano-veiculos.txt, item 5).
+export const DIAS_POR_PERIODICIDADE_MANUTENCAO = { semanal: 7, quinzenal: 14, mensal: 30 };
+
+export function diasParaProximaManutencaoVeiculo(tipoVeiculo) {
+    const periodicidade = periodicidadeManutencaoVeiculo(tipoVeiculo);
+    return DIAS_POR_PERIODICIDADE_MANUTENCAO[periodicidade] || DIAS_POR_PERIODICIDADE_MANUTENCAO.mensal;
 }

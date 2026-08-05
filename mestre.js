@@ -512,6 +512,131 @@ function resumoSecundariosNpc(secundarios) {
 }
 
 // ---------------------------------------------------------------------
+// CENÁRIOS (ver plano-cenario.txt, Fase 1) — nó de mesa que representa
+// um lugar/situação "ativa" que o Mestre monta: um título, quem tá
+// nela (jogadores e/ou NPCs — mesmo formato de combateAtivo.
+// participantes) e o que tem pra achar ali (itens soltos e veículos).
+// Pode ter mais de um cenário ativo ao mesmo tempo (chaves irmãs dentro
+// de "cenarios"); encerrar um cenário é simplesmente apagar o nó
+// inteiro — o que não foi levado pelos jogadores fica pra trás.
+//
+// Formato de cada cenarios/{cenarioId}:
+//   titulo:        string
+//   criadoEm:      timestamp (Date.now())
+//   participantes: { pid: { tipo: "ficha" | "npc", refId, nome } }
+//   itens:         { itemId: { ...mesmo shape do item de inventário... } }  — sem dono
+//   veiculos:      { veiculoId: {
+//                       ...mesmo shape de veiculos (nome, tipo, atributos)...,
+//                       trancado: true,
+//                       semChave: true   // nunca ganha item "chave" (ver
+//                                        // veiculoTemChaveDisponivel em
+//                                        // regras.js) — destrancar,
+//                                        // trancar e ligar sempre passam
+//                                        // pelo teste de Destrave
+//                                        // (Fase 5 do plano)
+//                   } }
+//
+// Jogador só enxerga (aba Cenário, Fase 4) os cenários em que a própria
+// ficha aparece em `participantes`; o Mestre enxerga e edita todos (via
+// Gerenciador de Cenário, Fase 6). "Pegar item" passa pela fila de
+// acoesPendentes (Fase 3), igual toda entrada/saída de item hoje.
+// As funções de leitura/escrita desse nó (ouvirCenarios, criarCenario
+// etc.) entram na Fase 2.
+// ---------------------------------------------------------------------
+
+export function ouvirCenarios(callback) {
+    return onValue(ref(db, caminhoMesa("cenarios")), (snap) => {
+        if (!snap.exists()) { callback([]); return; }
+        const valores = snap.val();
+        callback(Object.entries(valores).map(([id, v]) => ({ id, ...v })));
+    });
+}
+
+// Retorna o id do cenário recém-criado (útil pro Gerenciador de Cenário
+// já abrir direto nele depois de criar, sem passo extra — mesmo
+// comportamento de criarNpc acima).
+export async function criarCenario({ titulo }) {
+    const novaRef = push(ref(db, caminhoMesa("cenarios")));
+    await set(novaRef, {
+        titulo: titulo || "Cenário sem título",
+        criadoEm: Date.now(),
+        participantes: {},
+        itens: {},
+        veiculos: {},
+        dinheiro: {}
+    });
+    return novaRef.key;
+}
+
+export async function renomearCenario(cenarioId, titulo) {
+    await update(ref(db, caminhoMesa(`cenarios/${cenarioId}`)), { titulo: titulo || "Cenário sem título" });
+}
+
+// Encerrar cenário: apaga o nó inteiro. O que não foi levado pelos
+// jogadores (itens, veículos) se perde junto — não tem "resgate"
+// depois, de propósito (ver plano-cenario.txt, Fase 7).
+export async function excluirCenario(cenarioId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}`)));
+}
+
+// ---- Participantes (mesmo formato de adicionarParticipanteCombate /
+// removerParticipanteCombate, mais abaixo) ----
+export async function adicionarParticipanteCenario(cenarioId, { tipo, refId, nome }) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/participantes`)));
+    await set(novaRef, { tipo, refId, nome: nome || refId });
+    return novaRef.key;
+}
+
+export async function removerParticipanteCenario(cenarioId, participanteId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/participantes/${participanteId}`)));
+}
+
+// ---- Itens soltos no cenário (sem dono — ver "pegar_item_cenario" em
+// criarAcaoPendente/confirmarAcaoPendente, Fase 3) ----
+export async function adicionarItemCenario(cenarioId, itemData) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/itens`)));
+    await set(novaRef, itemData);
+    return novaRef.key;
+}
+
+export async function removerItemCenario(cenarioId, itemId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/itens/${itemId}`)));
+}
+
+// ---- Saldos de dinheiro soltos no cenário (sem dono — mesma ideia dos
+// itens soltos acima, só que em vez de "pegar tudo de uma vez" o
+// jogador escolhe um valor específico, até o limite do saldo. Ver
+// "pegar_dinheiro_cenario" em criarAcaoPendente/confirmarAcaoPendente) ----
+export async function adicionarDinheiroCenario(cenarioId, { nome, valor }) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/dinheiro`)));
+    await set(novaRef, { nome: nome || "Grana", valor: Number(valor) || 0 });
+    return novaRef.key;
+}
+
+export async function removerDinheiroCenario(cenarioId, dinheiroId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/dinheiro/${dinheiroId}`)));
+}
+
+// ---- Veículos do cenário — sempre trancado e semChave (ver Fase 5:
+// "Arrombar" é o único jeito de destrancar/trancar/ligar, nunca ganham
+// item "chave" de verdade) ----
+export async function adicionarVeiculoCenario(cenarioId, veiculoData) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos`)));
+    await set(novaRef, { ...veiculoData, trancado: true, semChave: true });
+    return novaRef.key;
+}
+
+export async function removerVeiculoCenario(cenarioId, veiculoId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos/${veiculoId}`)));
+}
+
+// Uso geral (editar atributos pelo modal do Mestre, ou alternar
+// trancado:false depois de um "Arrombar" bem-sucedido — Fase 5).
+export async function editarVeiculoCenario(cenarioId, veiculoId, dados) {
+    await update(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos/${veiculoId}`)), dados);
+}
+
+// ---------------------------------------------------------------------
 // Gerenciador de Combate — lista compartilhada de participantes ativos
 // (jogadores e/ou NPCs), usada pra alimentar o seletor de alvo no botão
 // "Usar" das armas na ficha do jogador.
@@ -1865,7 +1990,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -1878,7 +2003,38 @@ export async function rejeitarAcaoPendente(acaoId) {
 
 // Executa de fato a ação pendente no banco e remove da fila. Só deve
 // ser chamada pelo Mestre (a UI já restringe isso).
-export async function confirmarAcaoPendente(acao) {
+//
+// Helpers pra debitar/creditar um saldo de uma ficha, aceitando tanto
+// um saldo normal (fichas/{id}/saldos/{saldoId}) quanto a carteira
+// digital de um item (fichas/{id}/inventario/{itemId}/saldoValor) —
+// mesma dualidade de sempre, ver ehIdSaldoDeItem/idItemDoSaldo.
+async function debitarSaldoFicha(fichaId, saldoId, valor) {
+    if (ehIdSaldoDeItem(saldoId)) {
+        const itemId = idItemDoSaldo(saldoId);
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+        const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - valor });
+    } else {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
+        const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - valor });
+    }
+}
+
+async function creditarSaldoFicha(fichaId, saldoId, valor) {
+    if (ehIdSaldoDeItem(saldoId)) {
+        const itemId = idItemDoSaldo(saldoId);
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+        const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual + valor });
+    } else {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
+        const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual + valor });
+    }
+}
+
+export async function confirmarAcaoPendente(acao, extras = {}) {
     const { tipo, fichaId, payload } = acao;
 
     if (tipo === "remover_item") {
@@ -2012,6 +2168,138 @@ export async function confirmarAcaoPendente(acao) {
             await set(novaRefItem, { ...item, categoria: "levando" });
             await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         }
+
+    } else if (tipo === "pegar_item_cenario") {
+        // Pegar item solto de um cenário (ver plano-cenario.txt, Fase 3):
+        // mesmo mecanismo do "dar_item" acima, só que a origem é
+        // cenarios/{cenarioId}/itens em vez do inventário de outra
+        // ficha. Revalida que o item ainda está lá (outro jogador pode
+        // ter pego primeiro enquanto o pedido esperava aprovação) antes
+        // de criar/remover — se já sumiu, cancela a pendência e avisa o
+        // motivo, sem gravar nada quebrado.
+        const snapItemCenario = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
+        if (!snapItemCenario.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" não está mais no cenário (alguém já pegou antes).`);
+        }
+        const itemCenario = snapItemCenario.val();
+        const novaRefItemCenario = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
+        await set(novaRefItemCenario, { ...itemCenario, categoria: "levando" });
+        await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
+
+    } else if (tipo === "pegar_dinheiro_cenario") {
+        // Pegar um valor específico de um saldo solto no cenário: o
+        // jogador escolhe quanto quer (validado no client contra o
+        // valor do saldo no momento do clique), mas revalida de novo
+        // aqui — o saldo pode ter mudado (outro jogador já tirou uma
+        // parte) enquanto o pedido esperava aprovação do Mestre. Se o
+        // valor pedido não cabe mais, cancela a pendência sem gravar
+        // nada quebrado.
+        //
+        // O DESTINO não vem mais fixo em "limpo": o Mestre escolhe, na
+        // hora de confirmar, em qual saldo da ficha o valor cai (ver
+        // caixinha de seleção em montarPainelAcoesPendentes, ficha.js).
+        // extras.saldoDestinoId aceita tanto um saldo normal quanto a
+        // carteira digital de um item (mesmo esquema de
+        // ehIdSaldoDeItem/idItemDoSaldo usado em "mover_dinheiro" acima).
+        const snapDinheiroCenario = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/dinheiro/${payload.dinheiroId}`)));
+        if (!snapDinheiroCenario.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.dinheiroNome || "saldo"}" não está mais no cenário.`);
+        }
+        const dinheiroCenario = snapDinheiroCenario.val();
+        const valorAtualCenario = Number(dinheiroCenario.valor) || 0;
+        const valorPedido = Number(payload.valor) || 0;
+        if (valorPedido <= 0 || valorPedido > valorAtualCenario) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: só sobrou ${valorAtualCenario} em "${dinheiroCenario.nome || "saldo"}" — menos do que os ${valorPedido} pedidos.`);
+        }
+        const saldoDestinoId = extras.saldoDestinoId;
+        if (!saldoDestinoId) {
+            throw new Error("Escolha em qual saldo do jogador o dinheiro vai cair antes de confirmar.");
+        }
+        await update(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/dinheiro/${payload.dinheiroId}`)), { valor: valorAtualCenario - valorPedido });
+        if (ehIdSaldoDeItem(saldoDestinoId)) {
+            const itemId = idItemDoSaldo(saldoDestinoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}/saldoValor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}`)), { saldoValor: atual + valorPedido });
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/saldos/${saldoDestinoId}/valor`)));
+            const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+            await update(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/saldos/${saldoDestinoId}`)), { valor: atual + valorPedido });
+        }
+
+    } else if (tipo === "transformar_dinheiro_item") {
+        // Transforma um valor de um saldo num item físico de dinheiro no
+        // inventário da própria ficha (ver botão "Transformar em item"
+        // na aba Finanças, ficha.js). Revalida o saldo de origem — pode
+        // ter mudado desde o pedido (outro gasto/movimentação aprovado
+        // antes deste, por exemplo).
+        const saldoId = payload.saldoId;
+        const valor = Number(payload.valor) || 0;
+        if (valor <= 0) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error("Pedido cancelado: valor inválido.");
+        }
+        let saldoAtualOrigem;
+        if (ehIdSaldoDeItem(saldoId)) {
+            const itemId = idItemDoSaldo(saldoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            saldoAtualOrigem = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
+            saldoAtualOrigem = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        }
+        if (valor > saldoAtualOrigem) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: o saldo já não tem mais ${valor} disponível (sobrou ${saldoAtualOrigem}).`);
+        }
+        await debitarSaldoFicha(fichaId, saldoId, valor);
+        const novoItemRef = push(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+        await set(novoItemRef, {
+            nome: "Dinheiro", descricao: "Grana física — pode ser dada a outro personagem ou devolvida a um saldo depois.",
+            modificadores: [], ativo: true,
+            tag: "dinheiro", nivelTag: null, peso: 0.05, pesoUnitario: null, volume: 0, volumeUnitario: null,
+            tamanho: "pequeno", capacidadeVolume: null, tamanhoMaximoAceito: null, quantidade: null,
+            categoria: "levando", dentroDe: null, periciaUso: null,
+            ehSaldo: true, saldoValor: valor,
+            classeProtecao: null, calibre: null, reducoesDano: [], localProtegido: null, arma: null,
+            carregador: null, projetil: null, equipavel: false, equipada: false,
+            materialTipo: null, materialQualidade: null, materialQuantidade: null
+        });
+
+    } else if (tipo === "depositar_dinheiro_item") {
+        // Devolve (todo ou parte) o valor de um item de dinheiro físico
+        // (ver "transformar_dinheiro_item" acima) pra um saldo normal —
+        // o Mestre escolhe QUAL saldo na hora de confirmar (mesma
+        // caixinha de seleção do "pegar_dinheiro_cenario", ver
+        // montarPainelAcoesPendentes em ficha.js). Revalida que o item
+        // ainda existe e ainda tem o valor pedido (pode ter sido gasto,
+        // dado a outro personagem ou parcialmente depositado antes
+        // desta confirmação).
+        const snapItem = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
+        if (!snapItem.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" não está mais no inventário.`);
+        }
+        const item = snapItem.val();
+        const valorAtualItem = Number(item.saldoValor) || 0;
+        const valorPedido = Number(payload.valor) || 0;
+        if (valorPedido <= 0 || valorPedido > valorAtualItem) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" só tem ${valorAtualItem} — menos do que os ${valorPedido} pedidos.`);
+        }
+        const saldoDestinoId = extras.saldoDestinoId;
+        if (!saldoDestinoId) {
+            throw new Error("Escolha em qual saldo do jogador o dinheiro vai cair antes de confirmar.");
+        }
+        if (valorPedido === valorAtualItem) {
+            await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
+        } else {
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), { saldoValor: valorAtualItem - valorPedido });
+        }
+        await creditarSaldoFicha(fichaId, saldoDestinoId, valorPedido);
 
     } else if (tipo === "gastar_acao_combate") {
         // Toda rolagem em combate com iniciativa ativo pede aprovação do

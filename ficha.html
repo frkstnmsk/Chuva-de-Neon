@@ -119,6 +119,7 @@
         <div class="painel-info-topo-botoes">
             <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
             <button id="btn-abrir-combate" class="btn-red" type="button" style="display:none;">Gerenciador de Combate</button>
+            <button id="btn-abrir-cenario" class="btn-red" type="button" style="display:none;">Gerenciador de Cenário</button>
         </div>
     </div>
 
@@ -199,6 +200,8 @@
                     <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
                     <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
                     <button class="tab-btn" data-tab="combate" type="button">Combate</button>
+                    <button class="tab-btn" data-tab="veiculos" type="button">Veículos</button>
+                    <button class="tab-btn" data-tab="cenario" type="button">Cenário</button>
                     <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
                     <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
                     <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
@@ -293,6 +296,7 @@
                             </div>
                         </div>
                         <button id="financas-gastar-btn" class="btn-red" type="button">Solicitar gasto ao Mestre</button>
+                        <button id="financas-transformar-item-btn" class="btn-ghost" type="button" title="Transforma o valor num item de dinheiro físico no inventário, em vez de gastar — pode ser dado a outro personagem depois">Transformar em item</button>
                     </div>
 
                     <div id="financas-mover-bloco" style="display:none;">
@@ -398,6 +402,25 @@
 
                     <div class="section-header">Manobras de combate <span class="hint-inline">lista fixa do manual</span></div>
                     <ul class="entity-list manobras-list" id="lista-manobras-combate"></ul>
+                </section>
+
+                <!-- ===================== VEÍCULOS ===================== -->
+                <section class="tab-panel panel" data-tab="veiculos">
+                    <div class="section-header">Veículos</div>
+                    <div class="hint">Só o Mestre pode cadastrar ou editar os atributos de um veículo. Os valores abaixo já vêm calculados a partir da escala do manual (pág. 36-43).</div>
+                    <div id="veiculos-lista"></div>
+                    <button id="btn-add-veiculo" class="btn-lime" type="button">+ Adicionar veículo</button>
+                </section>
+
+                <!-- ===================== CENÁRIO ===================== -->
+                <!-- Espelha os cenários da mesa (ver plano-cenario.txt). Jogador só
+                     vê os cenários onde a própria ficha está listada como
+                     participante; o Mestre vê todos (edição fica no Gerenciador
+                     de Cenário, não aqui). -->
+                <section class="tab-panel panel" data-tab="cenario">
+                    <div class="section-header">Cenário</div>
+                    <div class="hint">Mostra os cenários em que você está presente no momento. Itens e veículos aqui pertencem à cena, não à sua ficha, até você pegá-los.</div>
+                    <div id="cenario-lista"></div>
                 </section>
 
                 <!-- ===================== VANTAGENS / DESVANTAGENS ===================== -->
@@ -775,15 +798,36 @@
             <div id="modal-reducao-dano-lista" class="reducao-dano-grid"></div>
         </div>
 
-        <div class="modal-field">
-            <label for="modal-descricao">Descrição / efeito narrativo</label>
-            <textarea id="modal-descricao" placeholder="Texto livre, regra especial, anotação de mesa..."></textarea>
+        <!-- Veículos: tipo (periodicidade da manutenção) + os 5 atributos
+             com escala fixa (ver prepararModalVeiculo em ficha.js, que
+             popula as opções de cada select a partir de ESCALAS_VEICULO
+             em dados-manual.js). -->
+        <div class="modal-field" id="modal-campo-tipo-veiculo" style="display:none;">
+            <label for="modal-tipo-veiculo">Tipo (periodicidade da manutenção)</label>
+            <select id="modal-tipo-veiculo"></select>
+        </div>
+        <div id="modal-config-veiculo" style="display:none;">
+            <div class="section-header">Atributos (0-5)</div>
+            <p class="hint">Direto da escala do manual (pág. 36-43) — o efeito de cada nível aparece no card da ficha depois de salvar.</p>
+            <div class="grid-atributos" id="modal-veiculo-atributos"></div>
         </div>
 
-        <div class="section-header">Modificadores automáticos</div>
-        <div class="hint">Cada modificador soma (ou subtrai, com valor negativo) direto no cálculo do alvo escolhido.</div>
-        <div id="modal-lista-modificadores"></div>
-        <button id="modal-add-modificador" class="btn-blue" type="button">+ Adicionar modificador</button>
+        <!-- Descrição livre + modificadores estruturados: usados por
+             quase todas as listas (perícias, itens, vantagens...), mas
+             não fazem parte do modelo de dados de Veículo (ver
+             plano-veiculos.txt) — escondidos pra esse caso, ver
+             prepararModalVeiculo/esconderTodosCamposEspeciais. -->
+        <div id="modal-secao-narrativa">
+            <div class="modal-field">
+                <label for="modal-descricao">Descrição / efeito narrativo</label>
+                <textarea id="modal-descricao" placeholder="Texto livre, regra especial, anotação de mesa..."></textarea>
+            </div>
+
+            <div class="section-header">Modificadores automáticos</div>
+            <div class="hint">Cada modificador soma (ou subtrai, com valor negativo) direto no cálculo do alvo escolhido.</div>
+            <div id="modal-lista-modificadores"></div>
+            <button id="modal-add-modificador" class="btn-blue" type="button">+ Adicionar modificador</button>
+        </div>
 
         <div class="modal-btns">
             <button id="modal-cancelar" class="btn-ghost" type="button">Cancelar</button>
@@ -832,6 +876,17 @@
         <button id="combate-mestre-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i> Fechar</button>
     </div>
     <div id="combate-mestre-corpo" class="drawer-combate-corpo"></div>
+</aside>
+
+<!-- ===================== GERENCIADOR DE CENÁRIO (painel lateral direito) ===================== -->
+<!-- Mesmo molde do Gerenciador de Combate acima: drawer encostado na
+     borda direita, ficha continua visível/usável do lado esquerdo. -->
+<aside class="drawer-combate" id="modal-cenario-mestre">
+    <div class="drawer-combate-topo">
+        <h4>Gerenciador de Cenário</h4>
+        <button id="cenario-mestre-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i> Fechar</button>
+    </div>
+    <div id="cenario-mestre-corpo" class="drawer-combate-corpo"></div>
 </aside>
 
 <!-- ===================== MODAL: AVISO CUSTO DE VIDA ===================== -->

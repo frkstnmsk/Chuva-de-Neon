@@ -269,6 +269,7 @@ export const TAGS_ITEM = [
     { key: "ferramenta_criacao_quimica", label: "Ferramenta de criação química", temNivel: true },
     { key: "ferramenta_criacao_biomecanica", label: "Ferramenta de criação biomecânica", temNivel: true },
     { key: "eletronico", label: "Eletrônico", temNivel: false },
+    { key: "dinheiro", label: "Dinheiro", temNivel: false },
     { key: "drone", label: "Drone", temNivel: false },
     { key: "veiculo", label: "Veículo", temNivel: true },
     { key: "biomecanica", label: "Biomecânica / prótese", temNivel: false },
@@ -278,8 +279,20 @@ export const TAGS_ITEM = [
     { key: "explosivo", label: "Explosivo", temNivel: false },
     { key: "material", label: "Material de criação", temNivel: false },
     { key: "recipiente", label: "Recipiente (guarda outros itens)", temNivel: false },
+    { key: "chave", label: "Chave de veículo", temNivel: false },
     { key: "geral", label: "Geral / diverso", temNivel: false }
 ];
+
+// Chave de veículo (ver plano-veiculos.txt, adendo "chave"): item
+// criado automaticamente junto com o veículo, referenciando-o por
+// `veiculoId` (ver normalizarInventario em normalizacao.js). Só serve
+// pra destrancar o veículo correspondente — não tem perícia vinculada,
+// não tem nível, não é arma. Função própria (em vez de comparar
+// `tagKey === "chave"` espalhado pelo código) pro caso de essa
+// classificação crescer depois (ex.: chave mestra, cópia de chave).
+export function ehChaveVeiculo(tagKey) {
+    return tagKey === "chave";
+}
 
 export function rotuloTag(tagKey) {
     const t = TAGS_ITEM.find(t => t.key === tagKey);
@@ -907,15 +920,18 @@ export function periciaUsoComoArray(periciaUso) {
 }
 
 // Alguns Eletrônicos guardam dinheiro digital (moedas e notas virtuais
-// — um pendrive com cripto, um celular com app de banco). Esses itens
-// podem ser marcados (it.ehSaldo) pra funcionar como mais uma "conta"
-// de dinheiro da ficha, com valor próprio (it.saldoValor), ao lado dos
-// saldos fixos (sujo/limpo/bolso) e customizados. Os ids desses saldos
-// "de item" usam o prefixo PREFIXO_SALDO_ITEM pra não colidir com os
-// ids normais e pra dar pra rastrear de volta o item de origem — ver
-// idSaldoDeItem / ehIdSaldoDeItem / idItemDoSaldo e todosOsSaldos.
+// — um pendrive com cripto, um celular com app de banco), e itens com a
+// tag "Dinheiro" (grana física — maços de cash, ver
+// transformar_dinheiro_item/depositar_dinheiro_item em mestre.js) são
+// isso por natureza. Esses itens podem ser marcados (it.ehSaldo) pra
+// funcionar como mais uma "conta" de dinheiro da ficha, com valor
+// próprio (it.saldoValor), ao lado dos saldos fixos (sujo/limpo/bolso)
+// e customizados. Os ids desses saldos "de item" usam o prefixo
+// PREFIXO_SALDO_ITEM pra não colidir com os ids normais e pra dar pra
+// rastrear de volta o item de origem — ver idSaldoDeItem /
+// ehIdSaldoDeItem / idItemDoSaldo e todosOsSaldos.
 export function ehTagQuePodeSerSaldo(tagKey) {
-    return tagKey === "eletronico";
+    return tagKey === "eletronico" || tagKey === "dinheiro";
 }
 
 export const PREFIXO_SALDO_ITEM = "item:";
@@ -935,7 +951,8 @@ export function idItemDoSaldo(saldoId) {
 // Lista unificada de saldos pra exibir/escolher em qualquer lugar da
 // ficha (grid de Finanças, dropdown de "de onde sai" o gasto, origem do
 // pagamento semanal): junta os saldos normais (fichaAtual.saldos) com
-// os saldos guardados em itens marcados como carteira digital.
+// os saldos guardados em itens marcados como carteira digital ou
+// dinheiro físico.
 export function todosOsSaldos(fichaAtual) {
     const saldosFicha = Object.entries(fichaAtual.saldos || {}).map(([id, s]) => ({
         id, nome: s.nome, valor: Number(s.valor) || 0, fixo: !!s.fixo, deItem: false
@@ -943,7 +960,7 @@ export function todosOsSaldos(fichaAtual) {
     const saldosItem = Object.entries(fichaAtual.inventario || {})
         .filter(([, it]) => it.ehSaldo)
         .map(([itemId, it]) => ({
-            id: idSaldoDeItem(itemId), nome: `${it.nome} (carteira digital)`,
+            id: idSaldoDeItem(itemId), nome: `${it.nome} (${it.tag === "dinheiro" ? "dinheiro físico" : "carteira digital"})`,
             valor: Number(it.saldoValor) || 0, fixo: false, deItem: true, itemId
         }));
     return [...saldosFicha, ...saldosItem];
@@ -1573,3 +1590,139 @@ export const CATALOGO_DROGAS = [
         testeVicio: "Consumido 1x/mês: teste de Constituição, dif. 18 — falha: desenvolve algum tipo de câncer; sucesso: nenhum efeito."
     }
 ];
+
+// ---------------------------------------------------------------------
+// Veículos (manual pg. 36-43) — Plano: implementação em fases, ver
+// README/plano-veiculos.txt. Fase 1 (esta aqui) cobre só os cinco
+// atributos com escala fixa de nível 0 a 5: Velocidade, Eficiência,
+// Proteção, Capacidade de Carga e Controle. Cada nível tem um efeito
+// descritivo (direto do manual) e um preço de mercado — o preço é a
+// base do cálculo de manutenção (ver valorManutencaoVeiculo em
+// regras.js, fase 2 do plano).
+//
+// "Acessórios/Armamento" (a sexta área personalizável do veículo) fica
+// de fora por enquanto: é um catálogo de itens com slot próprio, não
+// uma escala de nível com preço fixo como as outras cinco — não entra
+// no cálculo de manutenção do jeito que o manual descreve.
+// ---------------------------------------------------------------------
+export const NIVEIS_VEICULO = [0, 1, 2, 3, 4, 5];
+
+// Tipo do veículo — só define a periodicidade da cobrança de
+// manutenção (manual pg. 41): veículos de corrida pagam toda semana,
+// de carga a cada duas semanas, pessoais uma vez por mês.
+export const TIPOS_VEICULO = [
+    { key: "corrida", label: "Veículo de corrida", periodicidadeManutencao: "semanal" },
+    { key: "carga", label: "Veículo de carga", periodicidadeManutencao: "quinzenal" },
+    { key: "pessoal", label: "Veículo pessoal", periodicidadeManutencao: "mensal" }
+];
+
+export function rotuloTipoVeiculo(tipoKey) {
+    const t = TIPOS_VEICULO.find(t => t.key === tipoKey);
+    return t ? t.label : tipoKey;
+}
+
+export function periodicidadeManutencaoVeiculo(tipoKey) {
+    const t = TIPOS_VEICULO.find(t => t.key === tipoKey);
+    return t ? t.periodicidadeManutencao : "mensal";
+}
+
+// Escala de nível 0-5 de cada atributo. Cada entrada de `niveis` traz:
+//   - efeito: texto descritivo (direto do manual)
+//   - preco: custo em CN$ pra comprar aquele nível (nível 0 é de
+//     fábrica, sem custo) — usado em regras.js pra somar o valor total
+//     do veículo e calcular a manutenção (1/20 do valor de cada
+//     atributo, somados)
+//   - campos extras específicos do atributo (kmhMax, turnosAteVelMax,
+//     pv, reducaoDano, kgMax) — usados pelos modificadores derivados
+//     da fase 2 (regras.js) e pela UI da ficha (fase 4).
+export const ESCALAS_VEICULO = {
+    velocidade: {
+        label: "Velocidade",
+        descricao: "Rapidez, aceleração e mobilidade. Cada ponto determina o número de ações que podem ser realizadas em um turno enquanto dirige (acelerar, atropelar, manobrar) — o número máximo de ações por turno é limitado pelo atributo Raciocínio do piloto.",
+        niveis: [
+            { nivel: 0, efeito: "0 km/h (parado ou quebrado)", kmhMax: 0, preco: 0 },
+            { nivel: 1, efeito: "até 40 km/h (muito lento)", kmhMax: 40, preco: 7000 },
+            { nivel: 2, efeito: "até 100 km/h", kmhMax: 100, preco: 14000 },
+            { nivel: 3, efeito: "até 170 km/h (carro comum em boas condições)", kmhMax: 170, preco: 40000 },
+            { nivel: 4, efeito: "até 200 km/h (esportivo)", kmhMax: 200, preco: 115000 },
+            { nivel: 5, efeito: "até 300 km/h (especializado)", kmhMax: 300, preco: 207000 }
+        ]
+    },
+    eficiencia: {
+        label: "Eficiência",
+        descricao: "Quantos turnos o veículo leva para atingir sua velocidade máxima. Cada ponto reduz o tempo necessário.",
+        niveis: [
+            { nivel: 0, efeito: "8 turnos (aceleração extremamente lenta)", turnosAteVelMax: 8, preco: 0 },
+            { nivel: 1, efeito: "5 turnos", turnosAteVelMax: 5, preco: 8750 },
+            { nivel: 2, efeito: "4 turnos", turnosAteVelMax: 4, preco: 26250 },
+            { nivel: 3, efeito: "3 turnos", turnosAteVelMax: 3, preco: 55000 },
+            { nivel: 4, efeito: "2 turnos", turnosAteVelMax: 2, preco: 293000 },
+            { nivel: 5, efeito: "1 turno", turnosAteVelMax: 1, preco: 775000 }
+        ]
+    },
+    protecao: {
+        label: "Proteção",
+        descricao: "Quanto dano o veículo aguenta e quanto reduz de dano recebido (tanto para a estrutura quanto para os tripulantes). A cada dois pontos em Proteção, o veículo sofre -1 em Velocidade.",
+        niveis: [
+            { nivel: 0, efeito: "sem proteção — o carro está sem carroceria", pv: 70, reducaoDano: 0, preco: 0 },
+            { nivel: 1, efeito: "frágil — reduz -5 de danos sofridos pelos tripulantes e a si mesmo", pv: 200, reducaoDano: 5, preco: 40150 },
+            { nivel: 2, efeito: "padrão — reduz -15 de danos", pv: 300, reducaoDano: 15, preco: 100750 },
+            { nivel: 3, efeito: "blindado — reduz -30 de danos", pv: 500, reducaoDano: 30, preco: 274500 },
+            { nivel: 4, efeito: "blindagem pesada — reduz -45 de danos", pv: 800, reducaoDano: 45, preco: 466000 },
+            { nivel: 5, efeito: "extra blindagem pesada — reduz -100 de danos", pv: 1200, reducaoDano: 100, preco: 750000 }
+        ]
+    },
+    capacidadeCarga: {
+        label: "Capacidade de Carga",
+        descricao: "O quanto o veículo pode aguentar carregar e armazenar, em peso e tamanho. A partir do nível 3, cada nível acima do 2 dá -1 em Contabilidade.",
+        niveis: [
+            { nivel: 0, efeito: "sem porta-malas (ou danificado)", kgMax: 0, preco: 0 },
+            { nivel: 1, efeito: "porta-malas padrão", kgMax: 30, preco: 10000 },
+            { nivel: 2, efeito: "porta-malas grande (SUV ou bancos traseiros removidos)", kgMax: 100, preco: 25000 },
+            { nivel: 3, efeito: "baú de van", kgMax: 300, preco: 240000 },
+            { nivel: 4, efeito: "baú de caminhão", kgMax: 500, preco: 320000 },
+            { nivel: 5, efeito: "ônibus", kgMax: 1000, preco: 900000 }
+        ]
+    },
+    controle: {
+        label: "Controle",
+        descricao: "Sua capacidade de controlar o carro e realizar manobras.",
+        niveis: [
+            { nivel: 0, efeito: "seu carro está muito danificado e patina bastante — recebe -3 em todas as rolagens", preco: 0 },
+            { nivel: 1, efeito: "seu carro está no padrão — anda normalmente, porém é incapaz de realizar manobras", preco: 5750 },
+            { nivel: 2, efeito: "seu carro está mexido — pronto para realizar drifts", preco: 17250 },
+            { nivel: 3, efeito: "seu carro está mexidão — pronto para drifts (+1 para realizá-los) e +1 em rolagens de fuga e corridas", preco: 31000 },
+            { nivel: 4, efeito: "seu carro está mexidíssimo — +2 para drifts, +2 em rolagens de fuga e corridas", preco: 221000 },
+            { nivel: 5, efeito: "o carro mexido da porra — +3 para drifts, +3 em rolagens de fuga e corridas", preco: 475000 }
+        ]
+    }
+};
+
+// Lista fechada das chaves de atributo de veículo, na mesma ordem do
+// manual — usada pra iterar (formulário do Mestre, soma da
+// manutenção) sem depender da ordem de inserção do objeto.
+export const ATRIBUTOS_VEICULO = ["velocidade", "eficiencia", "protecao", "capacidadeCarga", "controle"];
+
+export function rotuloAtributoVeiculo(atributoKey) {
+    const escala = ESCALAS_VEICULO[atributoKey];
+    return escala ? escala.label : atributoKey;
+}
+
+export function escalaVeiculo(atributoKey) {
+    return ESCALAS_VEICULO[atributoKey] || null;
+}
+
+// Devolve a entrada de nível (efeito + preço + campos extras) de um
+// atributo de veículo. Nível fora da escala (undefined/negativo/maior
+// que 5) cai pro nível 0 — nunca deve travar a UI por um dado
+// inconsistente vindo do Firebase.
+export function nivelVeiculo(atributoKey, nivel) {
+    const escala = ESCALAS_VEICULO[atributoKey];
+    if (!escala) return null;
+    return escala.niveis.find(n => n.nivel === Number(nivel)) || escala.niveis[0];
+}
+
+export function precoNivelVeiculo(atributoKey, nivel) {
+    const entrada = nivelVeiculo(atributoKey, nivel);
+    return entrada ? entrada.preco : 0;
+}

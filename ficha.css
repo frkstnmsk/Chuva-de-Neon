@@ -1296,6 +1296,128 @@ select.select-guardar-dentro {
 }
 .btn-usar-item:disabled { opacity: 0.25; }
 
+/* ---------- Veículos ----------
+   Card por veículo (fase 4 do plano de implementação): cabeçalho com
+   nome/tipo/manutenção + grid com os 5 atributos, cada um mostrando o
+   nível e as linhas de efeito já calculadas (ver
+   calcularModificadoresVeiculo em regras.js). Somente leitura pro
+   jogador — criar/editar fica pro formulário do Mestre (fase 5). */
+.veiculo-card {
+    background: #000;
+    border: var(--border-style);
+    border-left: 3px solid var(--neon-gold);
+    border-radius: 2px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+.veiculo-card.editavel { cursor: pointer; }
+.veiculo-card.editavel:hover { background: rgba(255, 255, 255, 0.04); }
+.veiculo-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.veiculo-nome {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    color: var(--text-main);
+    margin-right: 8px;
+}
+.veiculo-tipo {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.veiculo-manutencao { text-align: right; }
+.veiculo-manutencao-valor {
+    display: block;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--neon-gold);
+    font-size: 1rem;
+}
+.veiculo-atributos {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px;
+}
+.veiculo-atributo-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    padding: 8px 10px;
+}
+.veiculo-atributo-label {
+    font-family: var(--font-display);
+    font-size: 0.75rem;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+.veiculo-atributo-nivel {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--neon-lime);
+}
+.veiculo-atributo-linha {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+.veiculo-manutencao-pedido {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.veiculo-manutencao-origem {
+    flex: 1;
+    min-width: 140px;
+}
+.veiculo-manutencao-btn {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+}
+
+/* Trava do veículo (adendo "chave" ao plano de veículos): botão de
+   destrancar/trancar do jogador (some pro Mestre, que mexe em
+   `trancado` direto no modal) + selo de estado só-leitura no header
+   pro Mestre acompanhar sem precisar abrir o modal. */
+.veiculo-tranca-btn {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+    margin-top: 12px;
+}
+.veiculo-tranca-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.veiculo-tranca-estado {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
+#btn-repor-chave-veiculo {
+    margin-left: 10px;
+    font-size: 0.75rem;
+    padding: 5px 10px;
+}
+
 /* ---------- Combate ---------- */
 .entity-list .manobra-alcance {
     font-family: var(--font-mono);

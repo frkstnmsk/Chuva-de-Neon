@@ -9,7 +9,7 @@
 // "livre legada" — não aparecem mais pra criação de novas, mas o
 // registro existente continua editável/visível.
 
-import { buscarPericiaPorNome } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, TIPOS_VEICULO } from "./dados-manual.js";
 import { deltaModificadoresOverrideNpc } from "./npc-detalhado.js";
 
 // Saldos fixos padrão de toda ficha nova. `fixo: true` marca os que não
@@ -87,6 +87,10 @@ export function normalizarFicha(raw) {
         // array (o Realtime Database já entrega array quando as chaves
         // são sequenciais a partir do 0 — ver comentário em mestre.js).
         determinacoesValidadas: Array.isArray(raw.determinacoesValidadas) ? raw.determinacoesValidadas : [],
+        // Veículos (manual pg. 36-43) — Fase 1 do plano (ver
+        // plano-veiculos.txt): só os 5 atributos com escala fixa. Ver
+        // normalizarVeiculos abaixo.
+        veiculos: normalizarVeiculos(raw.veiculos),
         notas: raw.notas || ""
     };
     return ficha;
@@ -109,6 +113,68 @@ function normalizarDeterminacoes(raw) {
             .filter(Boolean);
     }
     return [];
+}
+
+// Veículos (manual pg. 36-43) — Fase 1 do plano (ver plano-veiculos.txt):
+// registro próprio por veículo em fichas/{id}/veiculos/{veiculoId},
+// paralelo ao inventário (mesmo padrão de normalizarInventario). Cada
+// atributo é clampado pra escala válida (0-5) — um valor fora disso só
+// pode vir de edição manual direto no Firebase ou de um bug futuro, e
+// nivelVeiculo (dados-manual.js) já cai pro nível 0 nesse caso, mas
+// clampar aqui também evita salvar o valor inconsistente de volta.
+const NIVEL_VEICULO_MIN = 0;
+const NIVEL_VEICULO_MAX = 5;
+function clamparNivelVeiculo(valor) {
+    const n = Number(valor);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(NIVEL_VEICULO_MIN, Math.min(NIVEL_VEICULO_MAX, Math.round(n)));
+}
+
+// Tipo inválido/ausente (ficha antiga, ou campo nunca preenchido pelo
+// Mestre) cai em "pessoal" — é a periodicidade de manutenção mais
+// tolerante (mensal), então não pune ninguém por um veículo ainda sem
+// tipo definido.
+const TIPOS_VEICULO_VALIDOS = TIPOS_VEICULO.map(t => t.key);
+function normalizarTipoVeiculo(tipo) {
+    return TIPOS_VEICULO_VALIDOS.includes(tipo) ? tipo : "pessoal";
+}
+
+export function normalizarVeiculos(lista) {
+    const out = {};
+    if (!lista) return out;
+    for (const id of Object.keys(lista)) {
+        const v = lista[id] || {};
+        const atributosBrutos = v.atributos || {};
+        const atributos = {};
+        for (const chave of ATRIBUTOS_VEICULO) {
+            atributos[chave] = clamparNivelVeiculo(atributosBrutos[chave]);
+        }
+        out[id] = {
+            nome: v.nome || "",
+            tipo: normalizarTipoVeiculo(v.tipo),
+            atributos,
+            criadoEm: v.criadoEm || Date.now(),
+            // Trava física (ver plano-veiculos.txt, adendo "chave"):
+            // veículo criado pela feature nova já nasce trancado (só
+            // destranca com a chave correspondente no inventário da
+            // mesma ficha). Veículo antigo, migrado de antes dessa
+            // feature existir, não tem `trancado` salvo — cai em
+            // `false` (destrancado) de propósito, senão toda ficha já
+            // em jogo ficaria com o carro trancado do nada, sem chave
+            // nenhuma pra abrir.
+            trancado: typeof v.trancado === "boolean" ? v.trancado : false,
+            // Id do item-chave criado junto (inventário da mesma
+            // ficha) — só um atalho de conveniência pra UI (destacar a
+            // chave "oficial" na lista, por ex.); a checagem de "tem
+            // chave pra destrancar" em si busca por veiculoId no
+            // inventário (ver veiculoTemChaveDisponivel em regras.js),
+            // não por esse id — assim, mesmo se esse item específico
+            // for perdido e outro for criado manualmente com o mesmo
+            // veiculoId, o destrave continua funcionando.
+            chaveItemId: v.chaveItemId || null
+        };
+    }
+    return out;
 }
 
 // Migra o antigo par fixo `dados.dinheiroLimpo` / `dados.dinheiroSujo`
@@ -266,7 +332,13 @@ export function normalizarInventario(lista) {
             // qualidadesDoMaterial, agruparMateriaisPorTipo etc.).
             materialTipo: it.materialTipo ?? null,
             materialQualidade: it.materialQualidade ?? null,
-            materialQuantidade: it.materialQuantidade ?? null
+            materialQuantidade: it.materialQuantidade ?? null,
+            // Chave de veículo (tag "chave" — ver plano-veiculos.txt):
+            // aponta pro id do veículo que essa chave destranca (mesmo
+            // padrão de referência cruzada que dentroDe usa pra
+            // recipientes). Mesma classe de bug do materialTipo/ehSaldo
+            // se esquecido aqui — teria sido apagado a cada recarga.
+            veiculoId: it.veiculoId || null
         };
     }
     return out;
@@ -316,6 +388,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         levelUpPendente: null,
         determinacoes: [],
         determinacoesValidadas: [],
+        veiculos: {},
         notas: ""
     };
 }
@@ -414,6 +487,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
         levelUpPendente: null,
         determinacoes: [],
         determinacoesValidadas: [],
+        veiculos: {},
         notas: npc.funcaoNarrativa || ""
     };
 }
