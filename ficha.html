@@ -25,13 +25,32 @@
 </button>
 
 <aside id="drawer-pendentes" class="drawer-pendentes">
-    <!-- Metade de cima: botão de Painel do Mestre, trazido pra cá pra
-         ficar junto com a caixa de Ações Pendentes (mesmo canto/gaveta).
-         Não força 50/50 — o bloco só ocupa o que o botão precisa, e a
-         metade de baixo (Ações Pendentes) sobe pra ocupar o resto. -->
+    <!-- Metade de cima: o próprio Painel do Mestre, embutido direto aqui
+         (não é mais um botão que abre um painel separado). Ele já aparece
+         pronto assim que a gaveta de Ações Pendentes é aberta, sem precisar
+         de clique extra. Não força 50/50 — o bloco só ocupa o que o
+         conteúdo precisa, e a metade de baixo (Ações Pendentes) sobe pra
+         ocupar o resto. -->
     <div class="drawer-pendentes-secao-mestre">
         <h4>Painel do Mestre</h4>
-        <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
+        <div class="mestre-grid">
+            <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
+            <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
+            <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
+            <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
+            <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
+            <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
+            <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
+            <label class="godmode-toggle">
+                <input type="checkbox" id="chk-godmode">
+                Godmode (ignora trava de edição)
+            </label>
+            <label class="godmode-toggle godmode-suboption">
+                <input type="checkbox" id="chk-godmode-ignorar-saude">
+                Ignorar penalidade de Machucado/Muito Machucado (requer Godmode ativo)
+            </label>
+        </div>
+        <div id="mestre-corpo" class="drawer-mestre-corpo"></div>
     </div>
     <div class="drawer-pendentes-topo">
         <h4>Ações Pendentes</h4>
@@ -105,8 +124,9 @@
          Guarda tudo que não precisa ficar sempre visível: cargo/mesa/godmode,
          o seletor de ficha do Mestre e o botão de atuar como NPC, o indicador
          de sincronização e os botões de Gerenciador de Combate / Gerenciador
-         de Cenário. O botão de Painel do Mestre mudou pra gaveta de Ações
-         Pendentes (ver #drawer-pendentes). A topbar em si (nome + barras de
+         de Cenário. O Painel do Mestre em si mora dentro da gaveta de Ações
+         Pendentes (ver #drawer-pendentes), já visível sem precisar abrir
+         nada. A topbar em si (nome + barras de
          vida/energia + itens equipados + Mapa/Sair) fica fixa no topo o
          tempo todo. -->
     <div id="painel-info-topo" class="painel-info-topo panel">
@@ -846,34 +866,11 @@
     </div>
 </div>
 
-<!-- ===================== PAINEL DO MESTRE (painel lateral direito) ===================== -->
-<!-- Mesmo tratamento do Gerenciador de Combate: painel encostado na
-     borda, sem backdrop cobrindo a tela, pra dar pra ver a ficha e o
-     painel ao mesmo tempo. -->
-<aside class="drawer-mestre" id="modal-mestre">
-    <div class="drawer-mestre-topo">
-        <h4>Painel do Mestre</h4>
-        <button id="mestre-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i> Fechar</button>
-    </div>
-    <div class="mestre-grid">
-        <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
-        <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
-        <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
-        <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
-        <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
-        <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
-        <button class="btn-ghost mestre-acao" data-acao="biblioteca-receitas" type="button">Biblioteca de Receitas</button>
-        <label class="godmode-toggle">
-            <input type="checkbox" id="chk-godmode">
-            Godmode (ignora trava de edição)
-        </label>
-        <label class="godmode-toggle godmode-suboption">
-            <input type="checkbox" id="chk-godmode-ignorar-saude">
-            Ignorar penalidade de Machucado/Muito Machucado (requer Godmode ativo)
-        </label>
-    </div>
-    <div id="mestre-corpo" class="drawer-mestre-corpo"></div>
-</aside>
+<!-- O Painel do Mestre antes vivia aqui, num painel lateral direito à
+     parte, só visível depois de clicar em um botão. Agora ele mora
+     embutido dentro da gaveta de Ações Pendentes (#drawer-pendentes,
+     seção .drawer-pendentes-secao-mestre), então já aparece pronto assim
+     que a gaveta abre. -->
 
 <!-- ===================== GERENCIADOR DE COMBATE (painel lateral direito) ===================== -->
 <!-- Não é mais um modal de tela cheia: fica encostado na borda direita e

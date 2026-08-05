@@ -266,8 +266,10 @@ const el = {
     syncIndicator: document.getElementById("sync-indicator"),
     btnLogout: document.getElementById("btn-logout"),
     btnAbrirMapa: document.getElementById("btn-abrir-mapa"),
-    btnAbrirMestre: document.getElementById("btn-abrir-mestre"),
-    badgePendentes: document.getElementById("badge-pendentes"),
+    // btnAbrirMestre / badgePendentes não existem mais: o Painel do
+    // Mestre deixou de ser um painel que se abre por botão e passou a
+    // morar embutido direto na gaveta de Ações Pendentes (ver
+    // drawer-pendentes-secao-mestre em ficha.html).
     btnPendentesLateral: document.getElementById("btn-pendentes-lateral"),
     badgePendentesLateral: document.getElementById("badge-pendentes-lateral"),
     drawerPendentes: document.getElementById("drawer-pendentes"),
@@ -503,9 +505,10 @@ const el = {
     modalLevelup: document.getElementById("modal-levelup"),
     levelupCorpo: document.getElementById("levelup-corpo"),
     levelupBotoes: document.getElementById("levelup-botoes"),
-    modalMestre: document.getElementById("modal-mestre"),
+    // modalMestre / mestreFechar não existem mais — mestreCorpo agora
+    // mora dentro da gaveta de Ações Pendentes (#drawer-pendentes), que
+    // já tem seu próprio botão de fechar (drawerPendentesFechar).
     mestreCorpo: document.getElementById("mestre-corpo"),
-    mestreFechar: document.getElementById("mestre-fechar"),
     chkGodmode: document.getElementById("chk-godmode"),
     chkGodmodeIgnorarSaude: document.getElementById("chk-godmode-ignorar-saude"),
     modalCustoVida: document.getElementById("modal-custo-vida"),
@@ -606,7 +609,6 @@ async function init() {
 
     if (isMestre) {
         el.painelMestreSeletor.style.display = "flex";
-        el.btnAbrirMestre.style.display = "inline-block";
         el.btnPendentesLateral.style.display = "flex";
         el.btnAbrirCombate.style.display = "inline-block";
         if (el.btnAbrirCenario) el.btnAbrirCenario.style.display = "inline-block";
@@ -11158,8 +11160,6 @@ function configurarAcoesPendentes() {
         pendentesCache = lista;
 
         if (isMestre) {
-            el.badgePendentes.style.display = lista.length ? "inline-flex" : "none";
-            el.badgePendentes.innerText = String(lista.length);
             el.badgePendentesLateral.style.display = lista.length ? "flex" : "none";
             el.badgePendentesLateral.innerText = String(lista.length);
         }
@@ -11391,14 +11391,12 @@ function configurarPopupTreinamento() {
 // =====================================================================
 
 function configurarPainelMestre() {
-    // Painel encostado na direita (mesmo tratamento do Gerenciador de
-    // Combate): dá pra ver e usar a ficha atrás enquanto ele está aberto.
-    // Fecha só pelo botão "Fechar".
-    el.btnAbrirMestre.addEventListener("click", () => {
-        el.modalMestre.classList.add("active");
-        el.mestreCorpo.innerHTML = "";
-    });
-    el.mestreFechar.addEventListener("click", () => el.modalMestre.classList.remove("active"));
+    // O Painel do Mestre não é mais um painel à parte que se abre por
+    // botão: ele mora embutido direto na gaveta de Ações Pendentes (ver
+    // drawer-pendentes-secao-mestre em ficha.html) e já aparece pronto
+    // assim que a gaveta abre, sem precisar de clique extra. Só zera o
+    // corpo aqui no setup inicial (nenhuma ação aberta por padrão).
+    el.mestreCorpo.innerHTML = "";
 
     document.querySelectorAll(".mestre-acao").forEach(btn => {
         btn.addEventListener("click", () => abrirAcaoMestre(btn.dataset.acao));
@@ -11713,9 +11711,9 @@ function montarPainelNpcs(corpo) {
 }
 
 // Abre a Mini-Ficha Detalhada já preenchida com os dados de um NPC
-// existente, dentro do próprio Painel do Mestre (reaproveita o modal
-// genérico "modal-mestre" que já está aberto — só troca o conteúdo do
-// corpo pelo formulário de edição).
+// existente, dentro do próprio Painel do Mestre (reaproveita o
+// mestre-corpo, que já está visível dentro da gaveta de Ações Pendentes —
+// só troca o conteúdo pelo formulário de edição).
 function abrirEdicaoNpcDetalhado(npc) {
     const corpo = el.mestreCorpo;
     corpo.innerHTML = "";
@@ -12135,7 +12133,7 @@ function montarPainelBibliotecaItens(corpo) {
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
         montarListaComScrollInfinito({
             container: lista,
-            scrollRoot: el.modalMestre,
+            scrollRoot: el.drawerPendentes,
             itens,
             renderItem: renderCardItem,
             mensagemVazia: "Nenhum item no Banco Global ainda.",
@@ -12207,7 +12205,7 @@ function montarPainelBibliotecaReceitas(corpo) {
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
         montarListaComScrollInfinito({
             container: lista,
-            scrollRoot: el.modalMestre,
+            scrollRoot: el.drawerPendentes,
             itens: receitas,
             renderItem: renderCardReceita,
             mensagemVazia: "Nenhuma receita no Banco Global ainda.",
@@ -12240,7 +12238,12 @@ function montarDashboardFichas(corpo) {
             el.selectFicha.value = id;
             fichaAtualId = id;
             ativarSincronizacao();
-            el.modalMestre.classList.remove("active");
+            // O Painel do Mestre agora mora dentro da gaveta de Ações
+            // Pendentes: ao escolher uma ficha aqui, fecha a gaveta
+            // inteira (mesmo comportamento de "fechar" usado em
+            // configurarDrawerPendentes).
+            if (el.drawerPendentes) el.drawerPendentes.classList.remove("aberto");
+            if (el.btnPendentesLateral) el.btnPendentesLateral.classList.remove("aberto");
         });
         corpo.appendChild(div);
     });

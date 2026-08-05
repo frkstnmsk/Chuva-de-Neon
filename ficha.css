@@ -1090,9 +1090,12 @@ select.select-guardar-dentro {
 }
 .drawer-pendentes.aberto { transform: translateX(0); box-shadow: 0 0 40px rgba(239, 68, 68, 0.25); }
 
-/* Metade de cima da gaveta: Painel do Mestre. Não tem altura fixa —
-   o bloco só ocupa o espaço que o botão precisa (flex-shrink: 0), pra
-   não sobrar vão vazio acima das Ações Pendentes. */
+/* Metade de cima da gaveta: o próprio Painel do Mestre embutido (grade
+   de ações + corpo de conteúdo), não mais um botão que abre um painel à
+   parte. Não tem altura fixa — o bloco só ocupa o espaço que o conteúdo
+   precisa (flex-shrink: 0); #mestre-corpo tem seu próprio scroll interno
+   (max-height: 60vh, ver ficha.css mais abaixo), então não engole a
+   gaveta inteira mesmo com muito conteúdo. */
 .drawer-pendentes-secao-mestre {
     display: flex;
     flex-direction: column;
@@ -1107,7 +1110,6 @@ select.select-guardar-dentro {
     letter-spacing: 1px;
     font-size: 0.95rem;
 }
-.drawer-pendentes-secao-mestre .btn-red { width: 100%; }
 
 /* Metade de baixo: Ações Pendentes. Sobe pra ocupar o resto da gaveta
    assim que a seção do Mestre termina (flex: 1), em vez de ficar
@@ -1178,41 +1180,11 @@ select.select-guardar-dentro {
     overflow-y: visible;
 }
 
-/* ---------- Painel do Mestre: painel encostado na direita ----------
-   Mesmo padrão do Gerenciador de Combate — ver comentário lá em cima. */
-.drawer-mestre {
-    position: fixed;
-    top: 0;
-    right: 0;
-    width: 640px;
-    max-width: 94vw;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 18px;
-    background: var(--panel-bg);
-    border-left: 1px solid var(--neon-red);
-    box-shadow: 0 0 40px rgba(239, 68, 68, 0.25);
-    z-index: 5000;
-    transform: translateX(100%);
-    transition: transform 0.25s ease;
-    overflow-y: auto;
-}
-.drawer-mestre.active { transform: translateX(0); }
-.drawer-mestre-topo {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-bottom: 10px;
-    border-bottom: var(--border-style);
-}
-.drawer-mestre-topo h4 {
-    color: var(--neon-red);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 0.95rem;
-}
+/* ---------- Painel do Mestre ----------
+   Não é mais um painel à parte encostado na direita: agora mora embutido
+   dentro da própria gaveta de Ações Pendentes (.drawer-pendentes-secao-
+   mestre), então herda o scroll/posicionamento dela. .drawer-mestre-corpo
+   continua existindo só como classe de estilo pro miolo (#mestre-corpo). */
 .drawer-mestre-corpo {
     display: flex;
     flex-direction: column;
