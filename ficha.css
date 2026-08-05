@@ -1089,6 +1089,29 @@ select.select-guardar-dentro {
     overflow-y: auto;
 }
 .drawer-pendentes.aberto { transform: translateX(0); box-shadow: 0 0 40px rgba(239, 68, 68, 0.25); }
+
+/* Metade de cima da gaveta: Painel do Mestre. Não tem altura fixa —
+   o bloco só ocupa o espaço que o botão precisa (flex-shrink: 0), pra
+   não sobrar vão vazio acima das Ações Pendentes. */
+.drawer-pendentes-secao-mestre {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+    padding-bottom: 14px;
+    border-bottom: var(--border-style);
+}
+.drawer-pendentes-secao-mestre h4 {
+    color: var(--neon-red);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.95rem;
+}
+.drawer-pendentes-secao-mestre .btn-red { width: 100%; }
+
+/* Metade de baixo: Ações Pendentes. Sobe pra ocupar o resto da gaveta
+   assim que a seção do Mestre termina (flex: 1), em vez de ficar
+   centralizada no meio da caixa deslizante. */
 .drawer-pendentes-topo {
     display: flex;
     align-items: center;
@@ -1105,6 +1128,7 @@ select.select-guardar-dentro {
 .drawer-pendentes-corpo {
     display: flex;
     flex-direction: column;
+    flex: 1;
     overflow-y: auto;
 }
 @media (max-width: 520px) {

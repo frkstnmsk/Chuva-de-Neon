@@ -25,6 +25,14 @@
 </button>
 
 <aside id="drawer-pendentes" class="drawer-pendentes">
+    <!-- Metade de cima: botão de Painel do Mestre, trazido pra cá pra
+         ficar junto com a caixa de Ações Pendentes (mesmo canto/gaveta).
+         Não força 50/50 — o bloco só ocupa o que o botão precisa, e a
+         metade de baixo (Ações Pendentes) sobe pra ocupar o resto. -->
+    <div class="drawer-pendentes-secao-mestre">
+        <h4>Painel do Mestre</h4>
+        <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
+    </div>
     <div class="drawer-pendentes-topo">
         <h4>Ações Pendentes</h4>
         <button id="drawer-pendentes-fechar" class="btn-ghost" type="button"><i data-lucide="x"></i></button>
@@ -96,9 +104,11 @@
     <!-- ===================== PAINEL DE INFO DO TOPO (janela deslizante) =====================
          Guarda tudo que não precisa ficar sempre visível: cargo/mesa/godmode,
          o seletor de ficha do Mestre e o botão de atuar como NPC, o indicador
-         de sincronização e os botões de Painel do Mestre / Gerenciador de
-         Combate. A topbar em si (nome + barras de vida/energia + itens
-         equipados + Mapa/Sair) fica fixa no topo o tempo todo. -->
+         de sincronização e os botões de Gerenciador de Combate / Gerenciador
+         de Cenário. O botão de Painel do Mestre mudou pra gaveta de Ações
+         Pendentes (ver #drawer-pendentes). A topbar em si (nome + barras de
+         vida/energia + itens equipados + Mapa/Sair) fica fixa no topo o
+         tempo todo. -->
     <div id="painel-info-topo" class="painel-info-topo panel">
         <div class="painel-info-topo-linha">
             <span class="badge" id="user-role">—</span>
@@ -117,7 +127,6 @@
         </div>
 
         <div class="painel-info-topo-botoes">
-            <button id="btn-abrir-mestre" class="btn-red" type="button" style="display:none;">Painel do Mestre <span id="badge-pendentes" style="display:none;"></span></button>
             <button id="btn-abrir-combate" class="btn-red" type="button" style="display:none;">Gerenciador de Combate</button>
             <button id="btn-abrir-cenario" class="btn-red" type="button" style="display:none;">Gerenciador de Cenário</button>
         </div>
