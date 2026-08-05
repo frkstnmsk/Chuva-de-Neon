@@ -383,6 +383,43 @@ export function tagExigeCapacidadeCarregador(tagKey) {
     return ehCarregador(tagKey);
 }
 
+// ---------------------------------------------------------------------
+// Sistema de Slots de Porte (Fase 8 — ver projeto-slots-porte.txt).
+// Só existem 2 slots totalmente livres: as MÃOS. Roupa/cinto/mochila
+// são a exceção porque são recipientes (ehContainer) — não ocupam mão,
+// mas precisam estar "equipadas" (vestidas/carregadas) pra contarem
+// como levadas soltas em "levando consigo". Cada subtipo define:
+//   - ocupaMao: se estar "equipada" desse subtipo consome mão (só
+//     bolsa_mao consome; roupa/cinto/mochila não)
+//   - exclusivo: se só pode existir 1 desse subtipo equipada por vez
+//     (não dá pra vestir 2 calças ao mesmo tempo)
+// ---------------------------------------------------------------------
+export const SUBTIPOS_PORTE = [
+    { key: "mochila",   label: "Mochila (vai nas costas)",        ocupaMao: false, exclusivo: false },
+    { key: "roupa",     label: "Peça de roupa (veste no corpo)",  ocupaMao: false, exclusivo: true  },
+    { key: "cinto",     label: "Cinto (veste na cintura)",        ocupaMao: false, exclusivo: true  },
+    { key: "bolsa_mao", label: "Bolsa/maleta de mão",             ocupaMao: true,  exclusivo: false }
+];
+// exclusivo = true: só pode ter 1 desse subtipo "equipada" (ativa) ao
+// mesmo tempo (não dá pra vestir 2 calças). "mochila" e "bolsa_mao"
+// não são exclusivos: dá pra ter mochila nas costas E bolsa
+// transversal, por ex, desde que sobrem mãos pra bolsa_mao.
+
+export function rotuloSubtipoPorte(subtipoKey) {
+    const s = SUBTIPOS_PORTE.find(s => s.key === subtipoKey);
+    return s ? s.label : subtipoKey;
+}
+
+export function subtipoPorteOcupaMao(subtipoKey) {
+    const s = SUBTIPOS_PORTE.find(s => s.key === subtipoKey);
+    return s ? s.ocupaMao : false;
+}
+
+export function subtipoPorteExclusivo(subtipoKey) {
+    const s = SUBTIPOS_PORTE.find(s => s.key === subtipoKey);
+    return s ? s.exclusivo : false;
+}
+
 // Projétil é um item "de estoque": guarda quantos projéteis daquele
 // calibre esse item representa (o que entra no carregador ao carregar).
 export function tagExigeQuantidadeProjetil(tagKey) {

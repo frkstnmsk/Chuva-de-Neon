@@ -9,7 +9,7 @@
 // "livre legada" — não aparecem mais pra criação de novas, mas o
 // registro existente continua editável/visível.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, TIPOS_VEICULO } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, TIPOS_VEICULO, ehContainer } from "./dados-manual.js";
 import { deltaModificadoresOverrideNpc } from "./npc-detalhado.js";
 
 // Saldos fixos padrão de toda ficha nova. `fixo: true` marca os que não
@@ -93,6 +93,10 @@ export function normalizarFicha(raw) {
         veiculos: normalizarVeiculos(raw.veiculos),
         notas: raw.notas || ""
     };
+    // Sistema de Slots de Porte (Fase 8): migra containers antigos pro
+    // modelo de compartimentos — precisa rodar depois do inventário já
+    // montado acima. Ver normalizarCompartimentos.
+    normalizarCompartimentos(ficha);
     return ficha;
 }
 
@@ -302,6 +306,24 @@ export function normalizarInventario(lista) {
             // sem essa linha, todo item guardado numa mochila "soltava"
             // sozinho assim que a ficha recarregasse.
             dentroDe: it.dentroDe || null,
+            // Sistema de Slots de Porte (Fase 8 — ver projeto-slots-porte.txt).
+            // subtipoPorte/compartimentos só têm sentido em item com
+            // ehContainer(tag) === true, mas ficam gravados soltos aqui
+            // igual todo o resto do item (mesma classe de bug que
+            // materialTipo/veiculoId já tiveram: se não estiver listado
+            // aqui, é apagado a cada recarga da ficha). Container antigo
+            // sem compartimentos ainda é migrado por normalizarCompartimentos,
+            // logo abaixo, então aqui só preserva o que já existir.
+            subtipoPorte: it.subtipoPorte || null,
+            compartimentos: Array.isArray(it.compartimentos) ? it.compartimentos : null,
+            // Mãos necessárias pra segurar/equipar o item solto (default
+            // 1 — arma de duas mãos usa 2). Vale pra qualquer item, não
+            // só container.
+            maosNecessarias: it.maosNecessarias ?? 1,
+            // Qual compartimento específico do container-pai este item
+            // ocupa (ex: "c2"). Só importa quando dentroDe também está
+            // preenchido.
+            compartimentoId: it.compartimentoId || null,
             // Armas precisam estar equipadas (empunhadas) pra serem
             // usadas em combate — ver itemPodeUsar em inventario.js.
             // Itens que já existiam antes dessa trava nascem desequipados
@@ -342,6 +364,53 @@ export function normalizarInventario(lista) {
         };
     }
     return out;
+}
+
+// Sistema de Slots de Porte (Fase 8 — ver projeto-slots-porte.txt, seção
+// 6). Containers já existentes (criados antes dessa mudança, com
+// capacidadeVolume/tamanhoMaximoAceito soltos no item, sem
+// subtipoPorte/compartimentos) precisam ser convertidos automaticamente
+// ao carregar a ficha — sem exigir nenhuma ação manual do jogador/Mestre.
+// Chamada depois de normalizarInventario já ter rodado (precisa dos
+// campos novos já presentes no objeto, mesmo que null/vazios).
+export function normalizarCompartimentos(fichaAtual) {
+    const inventario = (fichaAtual && fichaAtual.inventario) || {};
+
+    for (const item of Object.values(inventario)) {
+        if (!item || !ehContainer(item.tag)) continue;
+
+        if (!item.compartimentos || item.compartimentos.length === 0) {
+            item.compartimentos = [{
+                id: "principal",
+                nome: "Principal",
+                capacidadeVolume: item.capacidadeVolume ?? 0,
+                tamanhoMaximoAceito: item.tamanhoMaximoAceito ?? null
+            }];
+            // Os campos soltos antigos somem — o dado real agora mora
+            // dentro do compartimento "principal" criado acima.
+            delete item.capacidadeVolume;
+            delete item.tamanhoMaximoAceito;
+        }
+
+        // Default seguro pra não quebrar mochilas já vestidas: um
+        // container antigo não tem como saber se era roupa/cinto/bolsa
+        // de mão, então cai em "mochila" (não exclusivo, não ocupa mão)
+        // — o jogador/Mestre corrige depois no modal do item se for
+        // outro subtipo.
+        item.subtipoPorte = item.subtipoPorte || "mochila";
+    }
+
+    // Item filho (dentroDe já existia) sem compartimentoId ainda cai no
+    // compartimento "principal" recém-criado (ou já existente) do
+    // container-pai — feito num segundo laço pra não depender da ordem
+    // de iteração de Object.values entre pai e filho.
+    for (const item of Object.values(inventario)) {
+        if (item && item.dentroDe && !item.compartimentoId) {
+            item.compartimentoId = "principal";
+        }
+    }
+
+    return fichaAtual;
 }
 
 export function fichaVaziaPadrao(nomeExibicao) {
@@ -436,7 +505,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
     // cheguem no mesmo valor que o editor de NPC já mostrava.
     const deltas = deltaModificadoresOverrideNpc(ap, npc.secundariosOverride);
 
-    return {
+    const fichaNpc = {
         npcId,
         ehNpc: true,
         config: { nomeExibicao: npc.nome || "NPC sem nome" },
@@ -490,4 +559,8 @@ export function normalizarNpcComoFicha(npcId, raw) {
         veiculos: {},
         notas: npc.funcaoNarrativa || ""
     };
+    // Mesmo inventário/containers da Ficha normal — precisa da mesma
+    // migração (ver normalizarCompartimentos acima).
+    normalizarCompartimentos(fichaNpc);
+    return fichaNpc;
 }
