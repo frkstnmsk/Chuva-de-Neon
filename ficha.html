@@ -690,10 +690,15 @@
             <label for="modal-carregador-capacidade">Capacidade do carregador (nº de projéteis)</label>
             <input type="number" id="modal-carregador-capacidade" min="1" step="1" value="10">
         </div>
+        <!-- PREPARADO PRA FUTURO — Slots de Equipamento: quando a lista
+             fechada de "lugares no corpo" existir (ver nota grande em
+             SUBTIPOS_PORTE, dados-manual.js), um novo campo "Slot"
+             (mesmo padrão: <select id="modal-slot-porte">) entra logo
+             abaixo deste, dentro de um novo .modal-field próprio. -->
         <div class="modal-field" id="modal-campo-subtipo-porte" style="display:none;">
             <label for="modal-subtipo-porte">Tipo de porte (obrigatório)</label>
             <select id="modal-subtipo-porte"></select>
-            <p class="hint">Como esse recipiente é carregado no corpo — define se ocupa mão e se só dá pra ter 1 equipado por vez.</p>
+            <p class="hint">Como esse recipiente é carregado no corpo — define se ocupa mão. Hoje não há limite de "só 1 equipado por vez": o Mestre acompanha o inventário item a item.</p>
         </div>
         <div class="modal-field" id="modal-campo-compartimentos" style="display:none;">
             <label>Compartimentos (obrigatório pelo menos 1)</label>

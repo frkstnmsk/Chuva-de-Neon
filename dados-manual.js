@@ -279,6 +279,7 @@ export const TAGS_ITEM = [
     { key: "explosivo", label: "Explosivo", temNivel: false },
     { key: "material", label: "Material de criação", temNivel: false },
     { key: "recipiente", label: "Recipiente (guarda outros itens)", temNivel: false },
+    { key: "vestimenta", label: "Vestimenta (roupa que também guarda outros itens)", temNivel: false },
     { key: "chave", label: "Chave de veículo", temNivel: false },
     { key: "geral", label: "Geral / diverso", temNivel: false }
 ];
@@ -316,11 +317,19 @@ export function ehProjetil(tagKey) {
     return tagKey === "projetil";
 }
 
-// Item "recipiente" (ex.: mochila, bolsa, malote) — outros itens do
-// inventário podem ser guardados dentro dele (ver item.dentroDe e as
-// funções de container em inventario.js).
+// Item container (ex.: mochila, bolsa, malote — tag "recipiente"; ou
+// uma peça de roupa que também guarda itens — tag "vestimenta", ex.:
+// jaqueta com bolsos internos) — outros itens do inventário podem ser
+// guardados dentro dele (ver item.dentroDe e as funções de container
+// em inventario.js). As duas tags funcionam de forma IDÊNTICA daqui
+// pra frente (volume, tamanho, compartimentos, subtipoPorte etc.) —
+// a diferença é só de categorização/exibição pro jogador escolher a
+// tag que melhor descreve o item (uma calça é "vestimenta", uma
+// mochila é "recipiente"). subtipoPorte (roupa/cinto/mochila/
+// bolsa_mao — ver SUBTIPOS_PORTE) continua sendo quem decide o
+// comportamento de fato (ocupa mão, exclusividade), não a tag.
 export function ehContainer(tagKey) {
-    return tagKey === "recipiente";
+    return tagKey === "recipiente" || tagKey === "vestimenta";
 }
 
 // ---------------------------------------------------------------------
@@ -396,14 +405,46 @@ export function tagExigeCapacidadeCarregador(tagKey) {
 // ---------------------------------------------------------------------
 export const SUBTIPOS_PORTE = [
     { key: "mochila",   label: "Mochila (vai nas costas)",        ocupaMao: false, exclusivo: false },
-    { key: "roupa",     label: "Peça de roupa (veste no corpo)",  ocupaMao: false, exclusivo: true  },
-    { key: "cinto",     label: "Cinto (veste na cintura)",        ocupaMao: false, exclusivo: true  },
+    { key: "roupa",     label: "Peça de roupa (veste no corpo)",  ocupaMao: false, exclusivo: false },
+    { key: "cinto",     label: "Cinto (veste na cintura)",        ocupaMao: false, exclusivo: false },
     { key: "bolsa_mao", label: "Bolsa/maleta de mão",             ocupaMao: true,  exclusivo: false }
 ];
 // exclusivo = true: só pode ter 1 desse subtipo "equipada" (ativa) ao
-// mesmo tempo (não dá pra vestir 2 calças). "mochila" e "bolsa_mao"
-// não são exclusivos: dá pra ter mochila nas costas E bolsa
-// transversal, por ex, desde que sobrem mãos pra bolsa_mao.
+// mesmo tempo (impediria vestir 2 calças, por ex). Por enquanto NENHUM
+// subtipo é exclusivo — o jogo é monitorado pelo Mestre item a item,
+// então dá pra vestir cinto + jaqueta + mochila + colete (etc.) tudo
+// ao mesmo tempo sem trava nenhuma de "só 1 roupa" ou "só 1 cinto". Se
+// no futuro a mesa quiser reintroduzir esse limite (ex.: só 1 peça de
+// roupa "de baixo" por vez), basta virar `exclusivo: true` de volta no
+// subtipo desejado aqui — o resto do sistema (itemPodeEquiparContainer,
+// o botão "equipada" na lista) já reage a essa flag automaticamente,
+// sem precisar mexer em mais nada.
+//
+// PREPARADO PRA FUTURO — Slots de Equipamento (ainda sem spec, ver
+// pedido do jogador): a ideia é ter uma lista fechada de "lugares no
+// corpo" (ex.: cabeça, torso, pernas, cintura, costas, mão) e cada
+// item equipável apontar pra um `slot` específico, em vez de só um
+// `subtipoPorte` genérico. Hoje NÃO existe essa lista — de propósito,
+// pra não inventar um molde que não bata com o que a mesa definir
+// depois. Quando a lista vier, os pontos de entrada são:
+//   1. Uma nova constante aqui do lado de SUBTIPOS_PORTE, tipo
+//      `export const SLOTS_EQUIPAMENTO = [{ key, label }, ...]`
+//      (mesmo formato de TAMANHOS_ITEM/SUBTIPOS_PORTE).
+//   2. Campo novo no item — `item.slot` (key de SLOTS_EQUIPAMENTO) —
+//      normalizado em normalizarInventario (normalizacao.js), do lado
+//      de subtipoPorte/compartimentos, com default null/não migrado
+//      pra não quebrar item antigo.
+//   3. itemPodeEquiparContainer (inventario.js) troca a exclusividade
+//      de "por subtipoPorte" pra "por slot": só 1 item com
+//      `equipada=true` por `item.slot` ao mesmo tempo — a função já
+//      tem esse formato de checagem pronto, só troca o campo comparado
+//      (`it.subtipoPorte === item.subtipoPorte` vira
+//      `it.slot === item.slot`).
+//   4. Campo "Slot" no modal (ficha.html/ficha.js), do lado do campo
+//      "Tipo de porte" (`#modal-campo-subtipo-porte`) — mesmo padrão
+//      de <select> populado a partir da constante nova.
+// Enquanto isso não existir, o sistema continua funcionando do jeito
+// atual (subtipoPorte + exclusivo, sem exclusividade nenhuma ligada).
 
 export function rotuloSubtipoPorte(subtipoKey) {
     const s = SUBTIPOS_PORTE.find(s => s.key === subtipoKey);

@@ -306,12 +306,21 @@ export function maosDisponiveis(fichaAtual) {
 }
 
 // Checa exclusividade antes de marcar um container como equipada=true:
-// subtipos exclusivos (roupa, cinto — ver SUBTIPOS_PORTE) só podem ter
-// 1 item equipado por vez daquele subtipo. "mochila" e "bolsa_mao" não
-// têm esse limite (mas bolsa_mao ainda é travada por mão — ver
-// maosDisponiveis acima). idItemAtual exclui o próprio item da busca
-// (pra não bloquear o item verificando contra si mesmo quando ele já
-// está equipado e a checagem é só re-validação).
+// subtipos marcados exclusivo=true em SUBTIPOS_PORTE (dados-manual.js)
+// só podem ter 1 item equipado por vez daquele subtipo. Hoje NENHUM
+// subtipo é exclusivo (dá pra vestir cinto + jaqueta + mochila + colete
+// à vontade, sem trava — ver comentário em SUBTIPOS_PORTE), então esta
+// função sempre retorna true na prática; ela fica pronta caso a mesa
+// queira religar o limite pra algum subtipo específico no futuro.
+// idItemAtual exclui o próprio item da busca (pra não bloquear o item
+// verificando contra si mesmo quando ele já está equipado e a checagem
+// é só re-validação).
+//
+// PREPARADO PRA FUTURO — quando o sistema de Slots de Equipamento
+// existir (ver nota grande em SUBTIPOS_PORTE, dados-manual.js), é AQUI
+// que a exclusividade passa a ser "por slot" em vez de "por
+// subtipoPorte": troca a comparação `it.subtipoPorte === item.subtipoPorte`
+// abaixo por `it.slot === item.slot` (mantendo o resto igual).
 export function itemPodeEquiparContainer(fichaAtual, item, idItemAtual) {
     if (!ehContainer(item.tag)) return true;
     if (!subtipoPorteExclusivo(item.subtipoPorte)) return true;

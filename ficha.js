@@ -5586,9 +5586,12 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     //   a) Mão livre: item comum equipável (arma etc.) sempre ocupa mão;
     //      container só ocupa se subtipoPorteOcupaMao(subtipoPorte) — hoje
     //      só bolsa_mao. Ver maosDisponiveis em inventario.js (base 2).
-    //   b) Exclusividade: roupa/cinto (subtipoPorteExclusivo) não deixa
+    //   b) Exclusividade: subtipos com exclusivo=true (nenhum, por
+    //      enquanto — ver SUBTIPOS_PORTE em dados-manual.js) não deixam
     //      equipar um segundo enquanto já existe outro do mesmo subtipo
-    //      equipado — ver itemPodeEquiparContainer.
+    //      equipado — ver itemPodeEquiparContainer. Hoje dá pra vestir
+    //      cinto + jaqueta + mochila + colete etc. tudo junto sem trava,
+    //      já que a mesa é monitorada pelo Mestre item a item.
     const podeEquiparCategoria = ehEquipavelItem ? podeEquipar : podeEquiparContainerItem;
     const ocupaMaoEsteItem = ehContainerItem ? subtipoPorteOcupaMao(it.subtipoPorte) : ehEquipavelItem;
     const maosNecessariasItem = Number(it.maosNecessarias) || 1;

@@ -316,6 +316,14 @@ export function normalizarInventario(lista) {
             // logo abaixo, então aqui só preserva o que já existir.
             subtipoPorte: it.subtipoPorte || null,
             compartimentos: Array.isArray(it.compartimentos) ? it.compartimentos : null,
+            // PREPARADO PRA FUTURO — quando o sistema de Slots de
+            // Equipamento existir (lista de "lugares no corpo" tipo
+            // cabeça/torso/pernas/cintura/costas/mão — ver nota grande
+            // em SUBTIPOS_PORTE, dados-manual.js), o campo novo
+            // `item.slot` entra bem aqui do lado, seguindo o mesmo
+            // padrão: `slot: it.slot || null`. Não existe ainda de
+            // propósito — sem a lista fechada de slots definida, não
+            // tem o que normalizar.
             // Mãos necessárias pra segurar/equipar o item solto (default
             // 1 — arma de duas mãos usa 2). Vale pra qualquer item, não
             // só container.
