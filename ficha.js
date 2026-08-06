@@ -26,7 +26,7 @@ import {
     ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
-    ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, todosOsSaldos,
+    ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, todosOsSaldos,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
     CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
@@ -203,11 +203,6 @@ let ultimoAvisoCustoVida = {}; // fila de pendentes de `avisoCustoVida/pendentes
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
 let combateNpcFormVisivel = false; // controla se o formulário de "Criar novo NPC" está aberto dentro do Gerenciador de Combate
 let painelIniciativaJogadorAberto = false; // controla se o modal "Gerenciador de Combate do Jogador" está na tela
-// Ações Rápidas (item 16): guarda as últimas ações de combate DIFERENTES
-// que o jogador usou (ex.: "Faca" e "Esquivar"), pra montar os botões
-// grandes/redondos flutuantes que repetem a ação com 1 clique — ver
-// registrarAcaoRapida/renderizarAcoesRapidas mais abaixo.
-let historicoAcoesRapidas = [];
 let pendentesCache = []; // fila de Ações Pendentes (compartilhada)
 let contadorPendentesAnterior = 0; // pra detectar chegada de pedido novo e disparar alerta
 let cenariosCache = []; // lista de Cenários (compartilhada — ver ouvirCenarios em mestre.js)
@@ -311,8 +306,6 @@ const el = {
     vitalStatusIcone: document.getElementById("vital-status-icone"),
     vitalStatusTexto: document.getElementById("vital-status-texto"),
     efeitoDanoOverlay: document.getElementById("efeito-dano-overlay"),
-    acoesRapidasFlutuante: document.getElementById("acoes-rapidas-flutuante"),
-    acoesRapidasLista: document.getElementById("acoes-rapidas-lista"),
     overlayMorte: document.getElementById("overlay-morte"),
     overlayMorteTitulo: document.getElementById("overlay-morte-titulo"),
     overlayMorteTexto: document.getElementById("overlay-morte-texto"),
@@ -403,6 +396,9 @@ const el = {
     modalItemEhSaldo: document.getElementById("modal-item-eh-saldo"),
     modalItemSaldoValorBloco: document.getElementById("modal-item-saldo-valor-bloco"),
     modalItemSaldoValor: document.getElementById("modal-item-saldo-valor"),
+    modalItemSaldoEletronicoBloco: document.getElementById("modal-item-saldo-eletronico-bloco"),
+    modalItemSaldoNotas: document.getElementById("modal-item-saldo-notas"),
+    modalItemSaldoMoedas: document.getElementById("modal-item-saldo-moedas"),
     modalCampoClasseProtecao: document.getElementById("modal-campo-classe-protecao"),
     modalLabelClasseProtecao: document.getElementById("modal-label-classe-protecao"),
     modalClasseProtecao: document.getElementById("modal-classe-protecao"),
@@ -1518,7 +1514,6 @@ function renderizarTudo() {
     if (!isMestre) {
         renderizarAlertaIniciativaCombate();
         travarAcoesForaDoTurno();
-        renderizarAcoesRapidas();
     }
 }
 
@@ -1645,9 +1640,10 @@ function configurarFinancas() {
         const valor = Number(e.target.value) || 0;
         if (ehIdSaldoDeItem(saldoId)) {
             const itemId = idItemDoSaldo(saldoId);
+            const campo = campoSaldoDoItem(saldoId);
             if (!fichaAtual.inventario || !fichaAtual.inventario[itemId]) return;
-            fichaAtual.inventario[itemId].saldoValor = valor;
-            agendarSalvamento(`inventario/${itemId}/saldoValor`, valor);
+            fichaAtual.inventario[itemId][campo] = valor;
+            agendarSalvamento(`inventario/${itemId}/${campo}`, valor);
             return;
         }
         if (!fichaAtual.saldos || !fichaAtual.saldos[saldoId]) return;
@@ -2655,7 +2651,7 @@ async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
     // fora do fluxo de ataque completo, e nenhuma dessas gasta ação
     // automaticamente (só golpe corpo a corpo/arma branca em
     // resolverAtaque faz isso — ver checarConsumoDeAcao).
-    const consumo = checarConsumoDeAcao(ehCQC);
+    const consumo = checarConsumoDeAcao(ehCQC, false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -5526,7 +5522,11 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         ? ` · Usa: ${escapeHtml(periciasUsoItem.join(", "))}`
         : (kitGeral ? ` · Usa: ${PERICIAS_FERRAMENTA_CRIACAO.join(", ")} (escolhe ao usar)` : "");
     const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
-    const saldoLabel = it.ehSaldo ? ` · Saldo: CN$ ${Number(it.saldoValor) || 0}` : "";
+    const saldoLabel = it.ehSaldo
+        ? (it.tag === "eletronico"
+            ? ` · Saldo: CN$ ${Number(it.saldoNotas) || 0} em notas + CN$ ${Number(it.saldoMoedas) || 0} em moedas`
+            : ` · Saldo: CN$ ${Number(it.saldoValor) || 0}`)
+        : "";
     const quantidadeLabel = (it.quantidade && it.quantidade > 1) ? ` (x${it.quantidade})` : "";
     const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
     const reducaoLabel = (it.reducoesDano && it.reducoesDano.length)
@@ -6072,7 +6072,6 @@ function renderizarCombate() {
             li.querySelector(".btn-usar-item").addEventListener("click", async (e) => {
                 e.stopPropagation();
                 if (!podeUsar) return;
-                registrarAcaoRapida(`arma:${arma.id}`, arma.nome, "swords");
                 await iniciarUsoItem(arma, modificadoresPlanos);
             });
             const btnRecarregarCombate = li.querySelector(".btn-recarregar-item");
@@ -6158,10 +6157,6 @@ function renderizarManobrasCombate() {
         // "Quebrar ossos" — exclusiva de Jiu Jitsu nível 4+, sem
         // rolagem (automática contra quem já está Imobilizado por você).
         const ehQuebrarOssosJJ = m.nome === "Quebrar ossos";
-        // data-quick-key: chave estável ("manobra:<nome da manobra>:<pericia>")
-        // usada pelas Ações Rápidas flutuantes (item 16) pra reencontrar
-        // este mesmo botão depois e repetir o clique — ver
-        // registrarAcaoRapida/renderizarAcoesRapidas.
         const periciasHtml = ehEsquivar
             ? `<button type="button" class="btn-pericia-golpe" data-pericia-golpe="Agilidade" data-quick-key="manobra:${escapeHtml(m.nome)}:Agilidade" title="Rolar d20 + Agilidade">Agilidade 🎲</button>`
             : (ehArremessar || ehImobilizar)
@@ -6213,19 +6208,6 @@ function renderizarManobrasCombate() {
         li.querySelectorAll("[data-pericia-golpe]").forEach(btn => {
             btn.addEventListener("click", async (e) => {
                 e.stopPropagation();
-
-                // Ações Rápidas (item 16): registra ESTA manobra+perícia
-                // como a mais recente usada, pra atualizar os botões
-                // flutuantes. Feito aqui em cima, antes de qualquer
-                // validação abaixo, porque body.combate-bloqueio-ativo já
-                // impede o clique de sequer chegar aqui fora do turno.
-                if (btn.dataset.quickKey) {
-                    const periciaClicada = btn.dataset.periciaGolpe;
-                    const rotulo = periciaClicada && periciaClicada !== "Sem Perícia"
-                        ? `${m.nome} · ${periciaClicada}`
-                        : m.nome;
-                    registrarAcaoRapida(btn.dataset.quickKey, rotulo, ehEsquivar ? "shield" : "swords");
-                }
 
                 if (ehEsquivar) {
                     await executarManobraEsquivar(modificadoresPlanos);
@@ -7393,7 +7375,7 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
 //     gasta o material integralmente (comportamento antigo), deixando
 //     a resolução a critério do Mestre.
 async function resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorFinal) {
-    const consumo = checarConsumoDeAcao(false);
+    const consumo = checarConsumoDeAcao(false, false);
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
@@ -8929,7 +8911,7 @@ function prepararModalItem(existente, ehBanco) {
             el.modalCategoriaItem.value = existente.categoria || "levando";
             popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe ? `${existente.dentroDe}::${existente.compartimentoId || "principal"}` : "");
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas);
         el.modalEquipavel.checked = !!existente.equipavel;
         // Reavalia com o checkbox "equipável" já no valor certo (a
         // chamada acima roda antes dessa linha, então via com o valor
@@ -9002,7 +8984,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas);
                 el.modalEquipavel.checked = !!it.equipavel;
                 atualizarCampoJaEquipar();
                 el.modalItemBancoOpcoes.style.display = "none";
@@ -9219,7 +9201,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma": arma
     // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
@@ -9366,16 +9348,23 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     }
 
     // Carteira digital — só faz sentido em Eletrônico (um pendrive com
-    // cripto, um celular com app de banco...). Independente da perícia
-    // vinculada acima: um item pode guardar dinheiro sem servir pra
-    // Hackear/Programar, e vice-versa. Ver ehTagQuePodeSerSaldo e
-    // todosOsSaldos em dados-manual.js.
+    // cripto, um celular com app de banco...) ou Dinheiro físico (maço
+    // de cash). Independente da perícia vinculada acima: um item pode
+    // guardar dinheiro sem servir pra Hackear/Programar, e vice-versa.
+    // Ver ehTagQuePodeSerSaldo e todosOsSaldos em dados-manual.js.
+    // Eletrônico guarda DOIS saldos separados do mesmo item (notas e
+    // moedas digitais — cada um gasto/movido à parte na aba Finanças);
+    // Dinheiro físico continua com um valor só.
     const podeSerSaldo = ehTagQuePodeSerSaldo(tagKey);
+    const saldoEhEletronico = tagKey === "eletronico";
     el.modalCampoItemSaldo.style.display = podeSerSaldo ? "flex" : "none";
     if (podeSerSaldo) {
         el.modalItemEhSaldo.checked = !!ehSaldoAtual;
         el.modalItemSaldoValor.value = saldoValorAtual ?? 0;
-        el.modalItemSaldoValorBloco.style.display = ehSaldoAtual ? "block" : "none";
+        el.modalItemSaldoNotas.value = saldoNotasAtual ?? 0;
+        el.modalItemSaldoMoedas.value = saldoMoedasAtual ?? 0;
+        el.modalItemSaldoValorBloco.style.display = (ehSaldoAtual && !saldoEhEletronico) ? "block" : "none";
+        el.modalItemSaldoEletronicoBloco.style.display = (ehSaldoAtual && saldoEhEletronico) ? "block" : "none";
     }
 
     // Quantidade genérica ("tenho N desse item") — mesmo esquema que
@@ -9469,7 +9458,9 @@ document.getElementById("modal-equipavel")?.addEventListener("change", atualizar
 document.getElementById("modal-subtipo-porte")?.addEventListener("change", atualizarCampoJaEquipar);
 
 document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
-    document.getElementById("modal-item-saldo-valor-bloco").style.display = e.target.checked ? "block" : "none";
+    const saldoEhEletronico = el.modalTag.value === "eletronico";
+    document.getElementById("modal-item-saldo-valor-bloco").style.display = (e.target.checked && !saldoEhEletronico) ? "block" : "none";
+    document.getElementById("modal-item-saldo-eletronico-bloco").style.display = (e.target.checked && saldoEhEletronico) ? "block" : "none";
 });
 
 // Recalcula e mostra o "Peso total" (Peso unitário × Quantidade) ao
@@ -9914,16 +9905,26 @@ function lerPericiaUsoDoModal(tag) {
     return el.modalPericiaUso.value || null;
 }
 
-// Lê se o item foi marcado como carteira digital e, se sim, o saldo
-// atual — só se aplica a tags que podem ser saldo (eletrônico, ver
-// ehTagQuePodeSerSaldo em dados-manual.js). Retorna { ehSaldo, saldoValor }
-// já prontos pra gravar no item (ehSaldo false/undefined não devem
-// deixar saldoValor lixo sobrando de uma marcação anterior).
+// Lê se o item foi marcado como carteira digital e, se sim, o(s)
+// saldo(s) atuais — só se aplica a tags que podem ser saldo (eletrônico
+// e dinheiro, ver ehTagQuePodeSerSaldo em dados-manual.js). Eletrônico
+// grava DOIS campos (saldoNotas/saldoMoedas — saldos separados do mesmo
+// item, ver todosOsSaldos); dinheiro físico continua com um só
+// (saldoValor). Retorna tudo já pronto pra gravar no item (ehSaldo
+// false/undefined não deve deixar nenhum dos campos com lixo de uma
+// marcação anterior).
 function lerSaldoDoItemDoModal(tag) {
     if (!ehTagQuePodeSerSaldo(tag) || !el.modalItemEhSaldo.checked) {
-        return { ehSaldo: false, saldoValor: null };
+        return { ehSaldo: false, saldoValor: null, saldoNotas: null, saldoMoedas: null };
     }
-    return { ehSaldo: true, saldoValor: Number(el.modalItemSaldoValor.value) || 0 };
+    if (tag === "eletronico") {
+        return {
+            ehSaldo: true, saldoValor: null,
+            saldoNotas: Number(el.modalItemSaldoNotas.value) || 0,
+            saldoMoedas: Number(el.modalItemSaldoMoedas.value) || 0
+        };
+    }
+    return { ehSaldo: true, saldoValor: Number(el.modalItemSaldoValor.value) || 0, saldoNotas: null, saldoMoedas: null };
 }
 
 // Lê peso, volume e quantidade do modal e devolve tudo pronto pra
@@ -9977,7 +9978,7 @@ async function salvarItemDoModal(id) {
 
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
-    const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
+    const { ehSaldo, saldoValor, saldoNotas, saldoMoedas } = lerSaldoDoItemDoModal(tag);
     const { peso, pesoUnitario, volume, volumeUnitario, quantidade } = lerPesoVolumeEQuantidadeDoModal(tag);
     if (exigePericia && !periciaUso) { toast("Escolha a perícia vinculada a este item.", "erro"); return; }
 
@@ -10156,6 +10157,8 @@ async function salvarItemDoModal(id) {
         periciaUso,
         ehSaldo,
         saldoValor,
+        saldoNotas,
+        saldoMoedas,
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
@@ -10240,7 +10243,7 @@ async function salvarItemBancoDoModal(id) {
 
     const exigePericia = tagExigePericiaUso(tag);
     const periciaUso = lerPericiaUsoDoModal(tag);
-    const { ehSaldo, saldoValor } = lerSaldoDoItemDoModal(tag);
+    const { ehSaldo, saldoValor, saldoNotas, saldoMoedas } = lerSaldoDoItemDoModal(tag);
     const { peso, pesoUnitario, volume, volumeUnitario, quantidade } = lerPesoVolumeEQuantidadeDoModal(tag);
     const tamanho = el.modalTamanho.value || null;
     const maosNecessarias = (el.modalCampoMaosNecessarias.style.display !== "none")
@@ -10303,6 +10306,8 @@ async function salvarItemBancoDoModal(id) {
         periciaUso,
         ehSaldo,
         saldoValor,
+        saldoNotas,
+        saldoMoedas,
         classeProtecao,
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
@@ -10812,7 +10817,6 @@ function configurarCombateAtivo() {
         if (!isMestre) {
             renderizarAlertaIniciativaCombate();
             travarAcoesForaDoTurno();
-            renderizarAcoesRapidas();
             if (painelIniciativaJogadorAberto) montarPainelIniciativaJogador();
         }
         avaliarReacaoPendente();
@@ -11221,12 +11225,33 @@ function verificarAlcanceLimitado(statusAlcance, alcanceGolpe) {
 // resolverAtaque/resolverAgarrar/resolverDesarmar/resolverDerrubar/
 // resolverImobilizar/resolverArremessar/resolverDelimitarAlcance/
 // resolverRetomarAlcance/rolarERegistrar) passa isso adiante.
-function checarConsumoDeAcao(ehCQC = false) {
+// direcionado (default true): se esta ação/rolagem tem um alvo dentro
+// do combate (ataque, manobra, uso de arma). Rolagens "soltas" —
+// perícia/atributo avulsos, uso de item sem alvo, criação de receita —
+// chamam com direcionado=false, pra deixar quem está FORA do combate
+// rolar normalmente (não estão fazendo nada contra quem está lutando,
+// só não entram na fila de turno/ação daquele combate).
+function checarConsumoDeAcao(ehCQC = false, direcionado = true) {
     if (!combateComIniciativaAtivo()) return { participanteId: null, extraCQC: false };
 
     if (!isMestre) {
         const meuId = meuParticipanteIdCombate();
-        if (!meuId) return { participanteId: null, extraCQC: false };
+        if (!meuId) {
+            if (!direcionado) {
+                // Fora do combate, mas é uma rolagem solta (não mira
+                // ninguém em combate): deixa passar, sem gastar ação de
+                // ninguém — quem está de fora não participa da ordem de
+                // turnos daquele combate.
+                return { participanteId: null, extraCQC: false };
+            }
+            // Combate com iniciativa ativo, mas esta ficha não é uma das
+            // participantes: ela está fora do combate e não pode fazer
+            // nada DIRECIONADO a quem está nele (ataque, manobra, usar
+            // arma) — evita personagens de fora "agindo contra" um
+            // combate do qual não fazem parte.
+            toast("Você não está participando deste combate — só dá pra rolar coisas que não mirem em quem está lutando.", "erro");
+            return null;
+        }
         const p = combateAtivoCache.participantes[meuId];
         const guardadas = p ? (Number(p.acoesGuardadas) || 0) : 0;
 
@@ -11318,11 +11343,21 @@ function renderizarAlertaIniciativaCombate() {
 // Bloqueia rolagens/ações da ficha (perícias, atributos, armas, manobras)
 // sempre que houver combate com iniciativa ativo e não for o turno do
 // jogador. O Mestre nunca é travado.
+//
+// Quem está DENTRO do combate mas fora do seu turno (e sem ação
+// guardada) fica com tudo travado — perícias, atributos, manobras e
+// itens/armas (classe .combate-bloqueio-ativo).
+//
+// Quem está FORA do combate (meuId null) pode continuar rolando
+// perícias/atributos normalmente (não é uma ação "contra" ninguém), mas
+// não pode fazer nada direcionado a quem está em combate — manobras de
+// combate e uso de armas/itens continuam travados (classe
+// .combate-bloqueio-alvo, que trava só .btn-pericia-golpe/.btn-usar-item).
 function travarAcoesForaDoTurno() {
     if (isMestre) return;
     const meuId = meuParticipanteIdCombate();
     const emCombate = combateComIniciativaAtivo();
-    const meuTurno = emCombate && combateAtivoCache.turnoAtual === meuId;
+    const meuTurno = emCombate && !!meuId && combateAtivoCache.turnoAtual === meuId;
     // Ação guardada (ver checarConsumoDeAcao/guardar_acao_combate): se o
     // Mestre já aprovou guardar uma ação, o personagem pode usá-la fora
     // do próprio turno — então a trava geral de botões não se aplica
@@ -11330,73 +11365,12 @@ function travarAcoesForaDoTurno() {
     // isso aqui só libera os botões pra chegar até lá).
     const p = meuId ? combateAtivoCache.participantes[meuId] : null;
     const temAcaoGuardada = p && Number(p.acoesGuardadas) > 0;
-    const bloquear = emCombate && !!meuId && !meuTurno && !temAcaoGuardada;
-    document.body.classList.toggle("combate-bloqueio-ativo", bloquear);
-}
-
-// ---------------------------------------------------------------------
-// Ações Rápidas (item 16): botões grandes/redondos flutuantes com as
-// últimas 2 ações de combate DIFERENTES que o jogador usou (ex.: "Faca"
-// e "Esquivar"), pra não precisar procurar o botão de novo na lista de
-// armas/manobras a cada turno.
-//
-// Cada botão aqui NÃO reimplementa a ação — ele só acha o botão
-// original (o mesmo `<button>` da aba Combate, marcado com
-// data-quick-key na hora de renderizar) e clica nele de novo. Isso
-// significa que ele herda de graça exatamente o mesmo comportamento do
-// botão original, incluindo:
-//   - a trava "só funciona no seu turno" (classe CSS
-//     body.combate-bloqueio-ativo, ver combate.css, + a validação real
-//     dentro de checarConsumoDeAcao, que sempre roda de novo e barra
-//     com um toast se o clique acontecer fora do turno por qualquer
-//     motivo);
-//   - o gasto da ação NÃO é automático pro jogador — assim como o
-//     botão original, ele só CRIA um pedido de "gastar 1 ação do
-//     turno" na fila de Ações Pendentes do Mestre (ver criarAcaoPendente
-//     em resolverAtaque/executarManobraEsquivar/etc.), que o Mestre
-//     ainda precisa aprovar pra ação ser realmente consumida. Só quando
-//     é o próprio Mestre controlando um NPC é que algumas ações (ataque
-//     corpo a corpo/arma branca) descontam a ação na hora — mas nesse
-//     caso o botão flutuante nem aparece, já que ele só é exibido pro
-//     jogador (ver !isMestre logo abaixo em renderizarAcoesRapidas).
-// ---------------------------------------------------------------------
-function registrarAcaoRapida(key, label, icone) {
-    if (!key) return;
-    historicoAcoesRapidas = historicoAcoesRapidas.filter(a => a.key !== key);
-    historicoAcoesRapidas.unshift({ key, label, icone: icone || "zap" });
-    historicoAcoesRapidas = historicoAcoesRapidas.slice(0, 2);
-    renderizarAcoesRapidas();
-}
-
-function renderizarAcoesRapidas() {
-    if (!el.acoesRapidasFlutuante || !el.acoesRapidasLista) return;
-
-    if (isMestre || !combateComIniciativaAtivo() || historicoAcoesRapidas.length === 0) {
-        el.acoesRapidasFlutuante.style.display = "none";
-        return;
-    }
-
-    el.acoesRapidasFlutuante.style.display = "flex";
-    el.acoesRapidasLista.innerHTML = historicoAcoesRapidas.map(a => `
-        <button type="button" class="acao-rapida-btn" data-repetir-acao="${escapeHtml(a.key)}" title="Repetir: ${escapeHtml(a.label)}">
-            <i data-lucide="${a.icone}"></i>
-            <span class="acao-rapida-label">${escapeHtml(a.label)}</span>
-        </button>
-    `).join("");
-
-    el.acoesRapidasLista.querySelectorAll("[data-repetir-acao]").forEach(btn => {
-        btn.addEventListener("click", () => {
-            const chave = btn.dataset.repetirAcao;
-            const alvo = document.querySelector(`[data-quick-key="${CSS.escape(chave)}"]`);
-            if (!alvo) {
-                toast("Essa ação não está mais disponível na ficha (item ou manobra sumiu).", "erro");
-                return;
-            }
-            alvo.click();
-        });
-    });
-
-    atualizarIcones();
+    const bloquearTudo = emCombate && !!meuId && !meuTurno && !temAcaoGuardada;
+    // Fora do combate: só trava o que mira alguém (manobra/arma), não
+    // as rolagens simples de perícia/atributo.
+    const bloquearAlvo = emCombate && !meuId;
+    document.body.classList.toggle("combate-bloqueio-ativo", bloquearTudo);
+    document.body.classList.toggle("combate-bloqueio-alvo", bloquearAlvo);
 }
 
 // ---------------------------------------------------------------------

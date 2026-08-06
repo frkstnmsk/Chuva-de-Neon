@@ -343,12 +343,21 @@ export function normalizarInventario(lista) {
             equipavel: it.equipavel ?? false,
             arma: it.arma || null,
             periciaUso: it.periciaUso || null,
-            // Carteira digital (só em Eletrônico — ver ehTagQuePodeSerSaldo
-            // em dados-manual.js): saldoValor só importa quando ehSaldo é
-            // true, mas preserva o valor mesmo assim (evita perder o
-            // histórico se o jogador desmarcar e marcar de novo).
+            // Carteira digital (Eletrônico ou Dinheiro físico — ver
+            // ehTagQuePodeSerSaldo em dados-manual.js): saldoValor só
+            // importa quando ehSaldo é true, mas preserva o valor mesmo
+            // assim (evita perder o histórico se o jogador desmarcar e
+            // marcar de novo). Eletrônico guarda DOIS saldos separados
+            // (notas/moedas — pedido do grupo: mesmo item, saldos
+            // independentes, cada um gasto/movido à parte na aba
+            // Finanças). Item eletrônico ANTIGO que só tinha saldoValor
+            // (de antes dessa separação existir) migra automaticamente
+            // pra saldoNotas na primeira carga — sem isso o saldo dele
+            // sumiria da tela sem aviso, mesmo continuando gravado.
             ehSaldo: it.ehSaldo ?? false,
             saldoValor: it.saldoValor ?? 0,
+            saldoNotas: it.saldoNotas ?? (it.tag === "eletronico" ? (it.saldoValor ?? 0) : 0),
+            saldoMoedas: it.saldoMoedas ?? 0,
             classeProtecao: it.classeProtecao || null,
             calibre: it.calibre || null,
             reducoesDano: Array.isArray(it.reducoesDano) ? it.reducoesDano : [],

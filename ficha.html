@@ -62,17 +62,6 @@
 <div id="efeito-dano-overlay" class="efeito-dano-overlay"></div>
 
 <!-- ===================== AÇÕES RÁPIDAS (últimas 2 ações de combate, botões redondos flutuantes) ===================== -->
-<!-- Só aparece em combate com iniciativa ativo, pro jogador (não pro
-     Mestre). Fica no canto INFERIOR ESQUERDO de propósito — o inferior
-     direito já é do Log de Dados + Toast (ver combate.css). Cada botão
-     só repete o clique no botão original correspondente (arma/manobra),
-     então herda de graça a trava de turno/ação que esses botões já
-     têm. -->
-<div id="acoes-rapidas-flutuante" class="acoes-rapidas-flutuante" style="display:none;">
-    <span class="acoes-rapidas-titulo">Últimas ações</span>
-    <div id="acoes-rapidas-lista" class="acoes-rapidas-lista"></div>
-</div>
-
 <div id="app" class="app-shell" style="display:none;">
 
     <!-- ===================== TOPO ===================== -->
@@ -675,6 +664,13 @@
             <div id="modal-item-saldo-valor-bloco" style="display:none;">
                 <label for="modal-item-saldo-valor">Saldo atual (CN$)</label>
                 <input type="number" id="modal-item-saldo-valor" min="0" step="1" value="0">
+            </div>
+            <div id="modal-item-saldo-eletronico-bloco" style="display:none;">
+                <p class="hint">Notas e moedas digitais ficam como dois saldos separados deste mesmo item — cada um pode ser gasto/movido à parte na aba Finanças.</p>
+                <label for="modal-item-saldo-notas">Notas (CN$)</label>
+                <input type="number" id="modal-item-saldo-notas" min="0" step="1" value="0">
+                <label for="modal-item-saldo-moedas">Moedas (CN$)</label>
+                <input type="number" id="modal-item-saldo-moedas" min="0" step="1" value="0">
             </div>
         </div>
         <div class="modal-field" id="modal-campo-classe-protecao" style="display:none;">

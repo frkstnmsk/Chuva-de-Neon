@@ -1014,8 +1014,18 @@ export function ehTagQuePodeSerSaldo(tagKey) {
 
 export const PREFIXO_SALDO_ITEM = "item:";
 
-export function idSaldoDeItem(itemId) {
-    return `${PREFIXO_SALDO_ITEM}${itemId}`;
+// Eletrônicos marcados como carteira digital guardam DOIS saldos
+// separados (notas e moedas — pedido do grupo: "mesmo dinheiro
+// virtual", mas contados à parte, cada um gastável/movível sozinho).
+// "Dinheiro" físico continua com um valor só (saldoValor) — não faz
+// sentido separar notas/moedas num maço de cash já representado como
+// um único item. Esse subtipo ("notas"/"moedas"/null) fica gravado no
+// PRÓPRIO id do saldo (sufixo ":notas" ou ":moedas" — ver
+// idSaldoDeItem), pra dar pra distinguir os dois saldos do mesmo item
+// em qualquer lugar que só tenha o id à mão (fila de aprovação,
+// dropdowns etc.) sem precisar ir consultar o item de novo.
+export function idSaldoDeItem(itemId, subtipo = null) {
+    return subtipo ? `${PREFIXO_SALDO_ITEM}${itemId}:${subtipo}` : `${PREFIXO_SALDO_ITEM}${itemId}`;
 }
 
 export function ehIdSaldoDeItem(saldoId) {
@@ -1023,24 +1033,51 @@ export function ehIdSaldoDeItem(saldoId) {
 }
 
 export function idItemDoSaldo(saldoId) {
-    return ehIdSaldoDeItem(saldoId) ? saldoId.slice(PREFIXO_SALDO_ITEM.length) : null;
+    return ehIdSaldoDeItem(saldoId) ? saldoId.slice(PREFIXO_SALDO_ITEM.length).split(":")[0] : null;
+}
+
+// "notas", "moedas", ou null (saldo de item sem subtipo — dinheiro
+// físico, ou carteira digital antiga migrada sem quebra ainda).
+export function subtipoSaldoDoId(saldoId) {
+    if (!ehIdSaldoDeItem(saldoId)) return null;
+    const partes = saldoId.slice(PREFIXO_SALDO_ITEM.length).split(":");
+    return partes.length > 1 ? partes[1] : null;
+}
+
+// Nome do campo em fichas/{id}/inventario/{itemId}/<campo> onde o
+// VALOR desse saldo específico está gravado — saldoNotas/saldoMoedas
+// pra carteira digital (eletrônico), saldoValor pra tudo o mais
+// (dinheiro físico). Centraliza essa escolha pra quem só tem o
+// saldoId em mãos (gastar/mover/pegar dinheiro, custo semanal etc.)
+// não precisar reimplementar a lógica de qual campo mexer.
+export function campoSaldoDoItem(saldoId) {
+    const subtipo = subtipoSaldoDoId(saldoId);
+    if (subtipo === "notas") return "saldoNotas";
+    if (subtipo === "moedas") return "saldoMoedas";
+    return "saldoValor";
 }
 
 // Lista unificada de saldos pra exibir/escolher em qualquer lugar da
 // ficha (grid de Finanças, dropdown de "de onde sai" o gasto, origem do
 // pagamento semanal): junta os saldos normais (fichaAtual.saldos) com
 // os saldos guardados em itens marcados como carteira digital ou
-// dinheiro físico.
+// dinheiro físico. Eletrônico marcado como carteira digital entra como
+// DOIS saldos separados (notas e moedas do mesmo item — ver
+// idSaldoDeItem/campoSaldoDoItem); dinheiro físico continua como um só.
 export function todosOsSaldos(fichaAtual) {
     const saldosFicha = Object.entries(fichaAtual.saldos || {}).map(([id, s]) => ({
         id, nome: s.nome, valor: Number(s.valor) || 0, fixo: !!s.fixo, deItem: false
     }));
-    const saldosItem = Object.entries(fichaAtual.inventario || {})
-        .filter(([, it]) => it.ehSaldo)
-        .map(([itemId, it]) => ({
-            id: idSaldoDeItem(itemId), nome: `${it.nome} (${it.tag === "dinheiro" ? "dinheiro físico" : "carteira digital"})`,
-            valor: Number(it.saldoValor) || 0, fixo: false, deItem: true, itemId
-        }));
+    const saldosItem = [];
+    Object.entries(fichaAtual.inventario || {}).forEach(([itemId, it]) => {
+        if (!it.ehSaldo) return;
+        if (it.tag === "eletronico") {
+            saldosItem.push({ id: idSaldoDeItem(itemId, "notas"), nome: `${it.nome} (notas)`, valor: Number(it.saldoNotas) || 0, fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId, "moedas"), nome: `${it.nome} (moedas)`, valor: Number(it.saldoMoedas) || 0, fixo: false, deItem: true, itemId });
+        } else {
+            saldosItem.push({ id: idSaldoDeItem(itemId), nome: `${it.nome} (dinheiro físico)`, valor: Number(it.saldoValor) || 0, fixo: false, deItem: true, itemId });
+        }
+    });
     return [...saldosFicha, ...saldosItem];
 }
 

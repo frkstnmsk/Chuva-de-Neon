@@ -19,7 +19,7 @@ import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } f
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, ehContainer } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer } from "./dados-manual.js";
 import { itemCabeNoContainer } from "./inventario.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
@@ -1963,9 +1963,10 @@ export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId, pendenteId
     if (pendenteId) atualizacoesDados[`custoVidaPagos/${pendenteId}`] = true;
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
-        const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || { saldoValor: 0 };
-        const atual = Number(item.saldoValor) || 0;
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - total });
+        const campo = campoSaldoDoItem(saldoId);
+        const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || {};
+        const atual = Number(item[campo]) || 0;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - total });
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
         return total;
     }
@@ -2011,9 +2012,10 @@ export async function rejeitarAcaoPendente(acaoId) {
 async function debitarSaldoFicha(fichaId, saldoId, valor) {
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
-        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+        const campo = campoSaldoDoItem(saldoId);
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
         const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - valor });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - valor });
     } else {
         const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
         const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2024,9 +2026,10 @@ async function debitarSaldoFicha(fichaId, saldoId, valor) {
 async function creditarSaldoFicha(fichaId, saldoId, valor) {
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
-        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+        const campo = campoSaldoDoItem(saldoId);
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
         const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual + valor });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual + valor });
     } else {
         const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
         const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2119,9 +2122,10 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         const saldoId = payload.saldoId;
         if (ehIdSaldoDeItem(saldoId)) {
             const itemId = idItemDoSaldo(saldoId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const campo = campoSaldoDoItem(saldoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - Number(payload.valor || 0) });
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - Number(payload.valor || 0) });
         } else {
             const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2134,17 +2138,19 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         // dinheiro da carteira digital e guardar no cofre do
         // esconderijo). Mesma infra de leitura/escrita do gastar_dinheiro
         // acima, aplicada duas vezes (subtrai na origem, soma no destino);
-        // cada lado pode ser um saldo normal (fichaAtual.saldos) ou a
-        // carteira digital de um item (ver ehIdSaldoDeItem/idItemDoSaldo).
+        // cada lado pode ser um saldo normal (fichaAtual.saldos) ou um dos
+        // saldos de item (notas/moedas de eletrônico, ou dinheiro físico —
+        // ver ehIdSaldoDeItem/idItemDoSaldo/campoSaldoDoItem).
         const valor = Number(payload.valor || 0);
         const origemId = payload.saldoOrigemId;
         const destinoId = payload.saldoDestinoId;
 
         if (ehIdSaldoDeItem(origemId)) {
             const itemId = idItemDoSaldo(origemId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const campo = campoSaldoDoItem(origemId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual - valor });
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - valor });
         } else {
             const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${origemId}/valor`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2153,9 +2159,10 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
 
         if (ehIdSaldoDeItem(destinoId)) {
             const itemId = idItemDoSaldo(destinoId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const campo = campoSaldoDoItem(destinoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { saldoValor: atual + valor });
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual + valor });
         } else {
             const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${destinoId}/valor`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2223,9 +2230,10 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         await update(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/dinheiro/${payload.dinheiroId}`)), { valor: valorAtualCenario - valorPedido });
         if (ehIdSaldoDeItem(saldoDestinoId)) {
             const itemId = idItemDoSaldo(saldoDestinoId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}/saldoValor`)));
+            const campo = campoSaldoDoItem(saldoDestinoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}/${campo}`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-            await update(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}`)), { saldoValor: atual + valorPedido });
+            await update(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario/${itemId}`)), { [campo]: atual + valorPedido });
         } else {
             const snap = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/saldos/${saldoDestinoId}/valor`)));
             const atual = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
@@ -2247,7 +2255,8 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         let saldoAtualOrigem;
         if (ehIdSaldoDeItem(saldoId)) {
             const itemId = idItemDoSaldo(saldoId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/saldoValor`)));
+            const campo = campoSaldoDoItem(saldoId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
             saldoAtualOrigem = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
         } else {
             const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}/valor`)));
