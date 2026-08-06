@@ -439,6 +439,8 @@ const el = {
     modalQuantidadeVolumeTotal: document.getElementById("modal-quantidade-volume-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
+    modalCampoJaEquipar: document.getElementById("modal-campo-ja-equipar"),
+    modalJaEquipar: document.getElementById("modal-ja-equipar"),
     modalCampoGuardarDentro: document.getElementById("modal-campo-guardar-dentro"),
     modalGuardarDentro: document.getElementById("modal-guardar-dentro"),
     modalConfigArma: document.getElementById("modal-config-arma"),
@@ -8929,6 +8931,11 @@ function prepararModalItem(existente, ehBanco) {
         }
         atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias);
         el.modalEquipavel.checked = !!existente.equipavel;
+        // Reavalia com o checkbox "equipável" já no valor certo (a
+        // chamada acima roda antes dessa linha, então via com o valor
+        // antigo/resetado) e reflete se o item já estava equipado.
+        atualizarCampoJaEquipar();
+        el.modalJaEquipar.checked = el.modalCampoJaEquipar.style.display !== "none" && !existente.dentroDe && !!existente.equipada;
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
@@ -8941,6 +8948,7 @@ function prepararModalItem(existente, ehBanco) {
         }
         atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
         el.modalEquipavel.checked = false;
+        el.modalJaEquipar.checked = false;
     }
 
     // Autocompletar pelo Banco Global — só ao CRIAR um item novo dentro
@@ -8996,6 +9004,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 montarListaModificadores(it.modificadores || []);
                 atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias);
                 el.modalEquipavel.checked = !!it.equipavel;
+                atualizarCampoJaEquipar();
                 el.modalItemBancoOpcoes.style.display = "none";
                 toast(`Preenchido a partir do Banco Global: "${it.nome}".`);
             });
@@ -9428,11 +9437,36 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // Características de Arma de Fogo — dependem da perícia vinculada
     // selecionada acima, então são avaliadas depois dela estar montada.
     atualizarVisibilidadeArmaFogo(armaConfig);
+
+    // "Já equipado" (atalho de criação) — some/aparece junto com tudo
+    // acima porque depende do mesmo estado (tag, checkbox "equipável",
+    // subtipo de porte do recipiente). Ver atualizarCampoJaEquipar.
+    atualizarCampoJaEquipar();
+}
+
+// Mostra o campo "Já entra equipado" só quando o item sendo montado no
+// modal é de fato algo que se equipa/segura: arma (sempre equipável),
+// item comum marcado "equipável" (checkbox acima), ou recipiente cujo
+// subtipo de porte é vestido/carregado (roupa, cinto, mochila, bolsa de
+// mão — mesma lista aceita por itemPodeSerLevadoSolto em inventario.js).
+// Desmarca o checkbox sempre que o campo some, pra não guardar uma
+// escolha "fantasma" de quando ele ainda estava visível.
+function atualizarCampoJaEquipar() {
+    const tagKey = el.modalTag.value;
+    const elegivel = !tagKey ? false
+        : tagKey === "arma" ? true
+        : ehContainer(tagKey) ? ["roupa", "cinto", "mochila", "bolsa_mao"].includes(el.modalSubtipoPorte.value)
+        : !!el.modalEquipavel.checked;
+    el.modalCampoJaEquipar.style.display = elegivel ? "flex" : "none";
+    if (!elegivel) el.modalJaEquipar.checked = false;
 }
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
     atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
 });
+
+document.getElementById("modal-equipavel")?.addEventListener("change", atualizarCampoJaEquipar);
+document.getElementById("modal-subtipo-porte")?.addEventListener("change", atualizarCampoJaEquipar);
 
 document.getElementById("modal-item-eh-saldo")?.addEventListener("change", (e) => {
     document.getElementById("modal-item-saldo-valor-bloco").style.display = e.target.checked ? "block" : "none";
@@ -10030,6 +10064,41 @@ async function salvarItemDoModal(id) {
         }
     }
 
+    // Preserva o estado do item existente ANTES de mexer em
+    // categoria/equipada — usado tanto pelo atalho "Já equipado" logo
+    // abaixo (pra saber se o item já contava mão antes) quanto pelo
+    // resto da função mais adiante (registro, ativo/desativado etc.).
+    const existenteItem = (id && fichaAtual.inventario && fichaAtual.inventario[id]) || {};
+
+    // "Já equipado" (atalho de criação — item nasce direto em "Levando
+    // consigo" e equipado, sem precisar do fluxo casa → mover pra
+    // "levando" → equipar em passos separados). Só entra em jogo se o
+    // campo estava visível (item elegível — ver atualizarCampoJaEquipar)
+    // e o item não está sendo guardado dentro de outra coisa (dentroDe):
+    // guardado e equipado ao mesmo tempo não faz sentido.
+    let equipadaFinal = existenteItem.equipada ?? false;
+    if (!dentroDe && el.modalCampoJaEquipar.style.display !== "none" && el.modalJaEquipar.checked) {
+        if (ehContainer(tag) && subtipoPorteExclusivo(subtipoPorte) && !itemPodeEquiparContainer(fichaAtual, { tag, subtipoPorte }, id || null)) {
+            toast(`Já tem outra peça de "${rotuloSubtipoPorte(subtipoPorte)}" equipada — desequipe-a primeiro.`, "erro");
+            return;
+        }
+        const ocupaMaoEsteItem = ehContainer(tag) ? subtipoPorteOcupaMao(subtipoPorte) : true;
+        if (ocupaMaoEsteItem) {
+            // Se o item já estava equipado (edição) e já contava como mão
+            // ocupada, devolve essa mão antes de checar — senão ele
+            // "brigaria" contra a própria mão que já era dele.
+            const jaOcupavaMao = existenteItem.equipada && existenteItem.categoria === "levando" && !existenteItem.dentroDe
+                && (ehContainer(tag) ? ocupaMaoEsteItem : true);
+            const maosLivres = maosDisponiveis(fichaAtual) + (jaOcupavaMao ? (Number(existenteItem.maosNecessarias) || 1) : 0);
+            if (maosLivres < maosNecessarias) {
+                toast(`Sem mãos livres pra equipar (${maosLivres} livre${maosLivres === 1 ? "" : "s"} — precisa de ${maosNecessarias}).`, "erro");
+                return;
+            }
+        }
+        categoriaFinal = "levando";
+        equipadaFinal = true;
+    }
+
     // Carregador — preserva a munição já carregada (se estiver editando um
     // carregador existente); só a capacidade máxima é editável aqui.
     let carregador = null;
@@ -10058,7 +10127,6 @@ async function salvarItemDoModal(id) {
     // Preserva o estado do botão ativo/desativado ao editar um item já
     // existente (senão editar peso/descrição, por exemplo, reativaria
     // sem querer um item que o jogador tinha desligado).
-    const existenteItem = (id && fichaAtual.inventario && fichaAtual.inventario[id]) || {};
     const modificadoresItem = lerModificadoresDoModal();
     // Item NOVO com modificador estruturado nasce DESLIGADO (precisa do
     // botão "Ativar" — ver criarLiItem) — exceto droga, que não usa esse
@@ -10099,9 +10167,12 @@ async function salvarItemDoModal(id) {
         // arma já é sempre equipável por natureza, então o checkbox some e
         // fica implicitamente false aqui (itemEhEquipavel ainda cobre arma
         // via ehArma, ver inventario.js). "equipada" preserva o estado atual
-        // (senão editar qualquer outro campo do item desequiparia sem querer).
+        // — ou vira true de cara se o atalho "Já equipado" foi marcado
+        // acima (ver equipadaFinal, logo depois do bloco "Guardar dentro
+        // de") — senão editar qualquer outro campo do item desequiparia
+        // sem querer.
         equipavel: tag !== "arma" ? !!el.modalEquipavel.checked : false,
-        equipada: existenteItem.equipada ?? false,
+        equipada: equipadaFinal,
         // Material de criação: tipo/qualidade/quantidade em estoque —
         // ver atualizarCamposPorTag. Itens antigos que só tinham a
         // marcação implícita (feita de leve em abrirModalEscolherMateriais,
