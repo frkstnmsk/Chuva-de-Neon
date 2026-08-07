@@ -350,7 +350,7 @@
                     <button id="btn-add-gasto" class="btn-lime" type="button">+ Adicionar gasto</button>
 
                     <div class="section-header">Ganho fixo semanal <span class="hint-inline">creditado automaticamente todo Domingo</span></div>
-                    <p class="hint">Declare aqui uma renda fixa (salário, aluguel recebido, etc). Ela é somada em "Dinheiro limpo na conta" toda vez que o Mestre avança o calendário pra um Domingo — sem precisar de aprovação.</p>
+                    <p class="hint">Renda fixa (salário, aluguel recebido, etc) definida pelo Mestre. Ela é somada em "Dinheiro limpo na conta" toda vez que o Mestre avança o calendário pra um Domingo — sem precisar de aprovação.</p>
                     <div class="grid-form grid-4">
                         <div class="campo">
                             <label for="financas-ganho-fixo">Valor do ganho fixo</label>
@@ -774,6 +774,34 @@
             <div class="modal-field" id="modal-campo-escala" style="display:none;">
                 <label for="modal-arma-escala">Escala (corpo a corpo)</label>
                 <select id="modal-arma-escala"></select>
+            </div>
+
+            <!-- Só aparece pra tag Explosivo — manual pg. 81-82. "Modelo
+                 padrão" é só um atalho de preenchimento (autopreenche
+                 dano/dificuldades/nível ao escolher); dá pra editar tudo
+                 depois, inclusive deixando em "Personalizado". -->
+            <div id="modal-config-explosivo" style="display:none;">
+                <div class="section-header">Configuração do explosivo <span class="hint-inline">manual pg. 81-82</span></div>
+                <div class="modal-field">
+                    <label for="modal-explosivo-modelo">Modelo padrão (preenche os campos abaixo automaticamente)</label>
+                    <select id="modal-explosivo-modelo">
+                        <option value="">Personalizado</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="modal-explosivo-dificuldade-armar">Dificuldade de armar (Explosivos — testada toda vez que a bomba é usada/armada, separada da dificuldade de criar)</label>
+                    <input type="number" id="modal-explosivo-dificuldade-armar" min="0" step="1" value="0">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-explosivo-raio">Raio (metros — só referência pro Mestre aplicar o dano em área manualmente)</label>
+                    <input type="number" id="modal-explosivo-raio" min="0" step="1" value="0">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-explosivo-modulo">Módulo de detonação acoplado (manual pg. 81 — acoplado na criação, sem teste pra juntar; é ele que "ativa" quando o explosivo é usado/armado)</label>
+                    <select id="modal-explosivo-modulo">
+                        <option value="">Nenhum / a definir</option>
+                    </select>
+                </div>
             </div>
 
             <!-- Só aparece quando a tag é Arma E a perícia vinculada é uma

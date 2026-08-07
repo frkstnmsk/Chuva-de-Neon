@@ -4,7 +4,7 @@
 
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
+    ehArma, ehArmaOuExplosivo, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
     TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe,
     SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo
 } from "./dados-manual.js";
@@ -69,12 +69,13 @@ export function calcularCargaAtual(fichaAtual, modificadoresPlanos = []) {
     };
 }
 
-// Item "equipável": armas SEMPRE são (ehArma(tag)), e qualquer outro
-// item pode ganhar a mesma trava marcando o checkbox "Item equipável"
-// no modal (item.equipavel) — mesmo mecanismo do inventário: precisa
-// estar "Levando consigo" E equipado pra poder ser "usado".
+// Item "equipável": armas e explosivos SEMPRE são (ehArmaOuExplosivo),
+// e qualquer outro item pode ganhar a mesma trava marcando o checkbox
+// "Item equipável" no modal (item.equipavel) — mesmo mecanismo do
+// inventário: precisa estar "Levando consigo" E equipado pra poder ser
+// "usado".
 export function itemEhEquipavel(item) {
-    return ehArma(item.tag) || !!item.equipavel;
+    return ehArmaOuExplosivo(item.tag) || !!item.equipavel;
 }
 
 export function itemPodeUsar(item) {
@@ -114,7 +115,7 @@ export function carregadorEstaAnexado(fichaAtual, carregadorId) {
 
 export function listaArmasInventario(fichaAtual) {
     return Object.entries(fichaAtual.inventario || {})
-        .filter(([, it]) => ehArma(it.tag))
+        .filter(([, it]) => ehArmaOuExplosivo(it.tag))
         .map(([id, it]) => ({ id, ...it }));
 }
 

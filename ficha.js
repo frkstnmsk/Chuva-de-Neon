@@ -23,7 +23,8 @@ import {
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
+    ehArma, ehExplosivo, ehArmaOuExplosivo, ehModuloDetonacao, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
+    ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
     ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, todosOsSaldos,
@@ -178,6 +179,17 @@ let listenerAtivo = null;
 let listenerAtivoTipo = null; // "fichas" | "npcs" — pra desligar o onValue certo
 let salvandoDebounce = null;
 let modalContexto = null; // { lista: "inventario", id: "..." } | null = criando nova
+
+// Ponte entre o modal de receita e o modal de item: quando o Mestre/
+// jogador clica em "+ Criar item no Banco Global" dentro do modal de
+// receita, guardamos aqui o rascunho da receita (tudo que já tinha sido
+// preenchido) e saímos pro modal de item. fecharModal() (chamado tanto
+// ao salvar quanto ao cancelar o modal de item) reabre a receita sozinho
+// — com o vínculo (itemGlobalId) se um item novo realmente foi criado
+// no Banco, ou sem vínculo (mas com o rascunho intacto) se a pessoa
+// cancelou. Ver retomarReceitaAoFecharModal.
+let receitaAguardandoVinculo = null; // { receitaExistente, opcoesSlot, rascunho } | null
+let idBancoParaRetomarReceita = null;
 let godmodeAtivo = false;
 // Sub-opção do Godmode: só some a penalidade de Machucado/Muito
 // Machucado quando ESSA também estiver marcada (ver configurarGodmode).
@@ -446,6 +458,11 @@ const el = {
     modalArmaTipoDanoExtra: document.getElementById("modal-arma-tipo-dano-extra"),
     modalCampoEscala: document.getElementById("modal-campo-escala"),
     modalArmaEscala: document.getElementById("modal-arma-escala"),
+    modalConfigExplosivo: document.getElementById("modal-config-explosivo"),
+    modalExplosivoModelo: document.getElementById("modal-explosivo-modelo"),
+    modalExplosivoDificuldadeArmar: document.getElementById("modal-explosivo-dificuldade-armar"),
+    modalExplosivoRaio: document.getElementById("modal-explosivo-raio"),
+    modalExplosivoModulo: document.getElementById("modal-explosivo-modulo"),
     modalConfigArmaFogo: document.getElementById("modal-config-arma-fogo"),
     modalArmaCapacidade: document.getElementById("modal-arma-capacidade"),
     modalArmaDisparosTurno: document.getElementById("modal-arma-disparos-turno"),
@@ -1426,10 +1443,27 @@ function podeEditarCaracteristicaNarrativa() {
 // escolha depois (só o Mestre). Qualquer receita ALÉM dessas gratuitas
 // só entra na ficha se o Mestre adicionar (representando algo achado,
 // comprado ou ensinado durante o jogo) — ver renderizarReceitas.
-function receitaLivreDoSlot(periciaNome, nivel) {
+function receitaLivreDoSlot(periciaNome, nivel, tipoSlot = "bomba") {
     const entrada = Object.entries(fichaAtual.receitasConhecidas || {})
-        .find(([, c]) => c.periciaVinculada === periciaNome && Number(c.nivel) === nivel && c.origem === "livre");
+        .find(([, c]) => c.periciaVinculada === periciaNome && Number(c.nivel) === nivel && c.origem === "livre" && (c.tipoSlot || "bomba") === tipoSlot);
     return entrada ? { id: entrada[0], ...entrada[1] } : null;
+}
+
+// Manual pg. 81: "Para cada ponto na perícia Explosivo, escolha uma
+// receita de módulo de detonação" — slot GRÁTIS À PARTE do slot normal
+// de bomba (mesmo nível 1..nivelPericia), só que a receita escolhida
+// não é de Explosivos — é de Ofícios Utilitários ou Eletrônica (quem
+// cria módulo de detonação, ver MODULOS_DETONACAO em dados-manual.js),
+// filtrada aqui pelo item vinculado (itemGlobalId) ter a tag
+// "modulo_detonacao". Ver renderizarReceitas (bloco "Explosivos") e o
+// tipoSlot="modulo" em receitaLivreDoSlot/concederReceitaConhecida.
+function receitasModuloDetonacaoDisponiveis(nivel) {
+    return receitasGlobaisCache.filter(r => {
+        if ((Number(r.nivel) || 1) !== nivel) return false;
+        if (!r.itemGlobalId) return false;
+        const item = itensGlobaisCache.find(it => it.id === r.itemGlobalId);
+        return !!item && item.tag === "modulo_detonacao";
+    });
 }
 
 function receitasExtrasDaPericia(periciaNome) {
@@ -1444,10 +1478,10 @@ function receitasExtrasDaPericia(periciaNome) {
 // estiver vazio (ver renderizarReceitas, que só mostra o controle de
 // escolha nesse caso) — mas revalida aqui também, pra não dar pra burlar
 // clicando duas vezes rápido ou com duas abas abertas.
-async function concederReceitaConhecida(periciaNome, nivel, receitaGlobalId, origem) {
+async function concederReceitaConhecida(periciaNome, nivel, receitaGlobalId, origem, tipoSlot = "bomba") {
     if (!fichaAtual.receitasConhecidas) fichaAtual.receitasConhecidas = {};
-    if (origem === "livre" && receitaLivreDoSlot(periciaNome, nivel)) {
-        toast(`Esse personagem já tem a receita gratuita de nível ${nivel} dessa perícia.`, "erro");
+    if (origem === "livre" && receitaLivreDoSlot(periciaNome, nivel, tipoSlot)) {
+        toast(`Esse personagem já tem a receita gratuita de nível ${nivel}${tipoSlot === "modulo" ? " (módulo de detonação)" : ""} dessa perícia.`, "erro");
         return;
     }
     const nomeAutor = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
@@ -1457,6 +1491,7 @@ async function concederReceitaConhecida(periciaNome, nivel, receitaGlobalId, ori
         periciaVinculada: periciaNome,
         nivel,
         origem,
+        tipoSlot,
         adicionadoPorNome: nomeAutor,
         adicionadoEm: Date.now()
     };
@@ -1574,6 +1609,8 @@ function renderizarFinancas() {
     if (document.activeElement !== el.financasGanhoFixo) {
         el.financasGanhoFixo.value = fichaAtual.dados.ganhoFixo ?? 0;
     }
+    el.financasGanhoFixo.disabled = !isMestre;
+    el.financasGanhoFixoSalvar.style.display = isMestre ? "inline-block" : "none";
 }
 
 // Desenha um campo numérico por saldo (fixo ou customizado). Só o
@@ -1665,11 +1702,12 @@ function configurarFinancas() {
         toast(`Saldo "${nome}" criado.`);
     });
 
-    // Ganho fixo — declaração livre do jogador, não mexe em saldo agora,
-    // só fica registrado pro crédito automático de Domingo. Não passa
-    // pelo sistema de aprovação (não é uma transação, é uma "promessa").
+    // Ganho fixo — agora só o Mestre pode definir. Fica registrado pro
+    // crédito automático de Domingo. Não passa pelo sistema de aprovação
+    // (não é uma transação, é um valor fixo cadastrado pelo Mestre).
     el.financasGanhoFixoSalvar.addEventListener("click", async () => {
         if (!fichaAtual || !fichaAtualId) return;
+        if (!isMestre) { toast("Só o Mestre pode definir o ganho fixo.", "erro"); return; }
         const valor = Math.max(0, Number(el.financasGanhoFixo.value) || 0);
         fichaAtual.dados.ganhoFixo = valor;
         await update(ref(db, `${caminhoBase()}/dados`), { ganhoFixo: valor });
@@ -2302,7 +2340,7 @@ function renderizarItensEquipadosTopo() {
         return;
     }
     el.vitalEquipados.innerHTML = equipados
-        .map(it => `<span class="vital-equipado-pill">${ehArma(it.tag) ? "🗡️" : "✅"} ${escapeHtml(it.nome)}</span>`)
+        .map(it => `<span class="vital-equipado-pill">${ehArma(it.tag) ? "🗡️" : (ehExplosivo(it.tag) ? "💣" : "✅")} ${escapeHtml(it.nome)}</span>`)
         .join("");
 }
 
@@ -3214,6 +3252,15 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
         const podeDisparar = await consumirMunicaoSeArmaDeFogo(it);
         if (!podeDisparar) return;
     }
+    // Explosivo (manual pg. 81-82): "Usar" = ARMAR — teste de dificuldade
+    // FIXA gravada no próprio item (dificuldadeArmar), sem seleção de
+    // alvo nem oposição de defesa (bem diferente de arma). Não depende
+    // de combate ativo — dá pra armar/plantar uma bomba fora de combate
+    // também. Ver abrirModalArmarExplosivo.
+    if (ehExplosivo(it.tag)) {
+        abrirModalArmarExplosivo(it, modificadoresPlanos);
+        return;
+    }
     if (ehArma(it.tag) && combateTemParticipantes()) {
         // Contra-ataque imediato do Aparar (manual: "pode atacar
         // imediatamente com modificador -1") — se este personagem tem um
@@ -3234,6 +3281,57 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
     } else {
         await rolarUsoItem(it, modificadoresPlanos);
     }
+}
+
+// "Usar" um item Explosivo = ARMAR (manual pg. 81-82): diferente de
+// arma, não é um ataque contra um alvo — é um teste de dificuldade FIXA
+// (dificuldadeArmar, gravada no item desde a criação — ver
+// lerConfigArmaDoModal) contra a perícia vinculada (normalmente
+// Explosivos). Sem oposição de defesa, sem seleção de alvo. Ao confirmar,
+// rola e registra no Log de Dados (o Mestre compara com a dificuldade
+// mostrada aqui e decide o resultado) e narra a ativação do módulo de
+// detonação acoplado ao item (se algum foi escolhido na criação — ver
+// MODULOS_DETONACAO). Dano e raio ficam só como referência: o sistema
+// não simula área/alcance, então aplicar o dano a quem estiver na área
+// continua manual (ferramentas de combate normais, uma vítima de cada vez).
+function abrirModalArmarExplosivo(it, modificadoresPlanos) {
+    let modal = document.getElementById("modal-armar-explosivo");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-armar-explosivo";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const cfg = it.arma || {};
+    const modulo = MODULOS_DETONACAO.find(m => m.nome === cfg.moduloDetonacao);
+    const nomePericia = it.periciaUso || "Explosivos";
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Armar ${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">
+            ${cfg.danoBase ? `Dano: <strong>${cfg.danoBase}</strong>${cfg.raio ? ` em raio de <strong>${cfg.raio}m</strong>` : ""} — aplique manualmente a quem estiver na área quando detonar.<br>` : ""}
+            Dificuldade de armar: <strong>${cfg.dificuldadeArmar || "não definida"}</strong> (perícia ${escapeHtml(nomePericia)}).<br>
+            ${modulo
+                ? `Módulo de detonação: <strong>${escapeHtml(modulo.nome)}</strong> — ${escapeHtml(modulo.efeito)}`
+                : "Nenhum módulo de detonação cadastrado neste item — o Mestre decide como ele detona."}
+        </p>
+        <div class="modal-btns">
+            <button type="button" class="btn-lime" id="btn-confirmar-armar-explosivo">Armar (rolar ${escapeHtml(nomePericia)})</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-armar-explosivo").addEventListener("click", async () => {
+        modal.remove();
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+        const rotuloDif = cfg.dificuldadeArmar ? ` (dif. armar: ${cfg.dificuldadeArmar})` : "";
+        await rolarERegistrar(`${it.nome} — Armar${rotuloDif}`, modificadorFinal, false);
+        toast(modulo
+            ? `💣 Módulo de detonação ativado: ${modulo.nome} — ${modulo.efeito}`
+            : `💣 ${it.nome} armado.`);
+    });
+    document.body.appendChild(modal);
 }
 
 let contextoAtaque = null;
@@ -5514,6 +5612,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const temCamaraExtraItem = ehFogo && !!(it.arma && it.arma.temCamaraExtra);
     const camaraCarregadaItem = temCamaraExtraItem && !!(it.arma && it.arma.camaraCarregada);
     const ehArmaItem = ehArma(it.tag);
+    const ehExplosivoItem = ehExplosivo(it.tag);
     const ehEquipavelItem = itemEhEquipavel(it);
     const equipadaItem = !!it.equipada;
     const podeEquipar = itemPodeEquipar(it);
@@ -5606,7 +5705,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const mostrarBtnEquipar = ehEquipavelItem || ehContainerItem;
     const podeEquiparBtn = podeEquiparCategoria && !semMaosLivres && !conflitoExclusividade;
     const textoBtnEquipar = ehEquipavelItem
-        ? (equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : "✅ Equipado") : "○ Desequipado")
+        ? (equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : (ehExplosivoItem ? "💣 Equipada" : "✅ Equipado")) : "○ Desequipado")
         : (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.desligar : rotuloContainerAtual.ligar) : "");
     const tituloBtnEquipar = !podeEquiparCategoria
         ? "Precisa estar em 'Levando consigo' pra equipar"
@@ -7608,6 +7707,57 @@ function renderizarReceitas() {
                 }
             }
 
+            // Módulos de detonação (manual pg. 81): SÓ pra Explosivos — um
+            // slot grátis A MAIS por nível, em paralelo ao slot normal de
+            // bomba acima, só que a receita vem de Ofícios Utilitários ou
+            // Eletrônica (quem cria módulo de verdade — ver
+            // receitasModuloDetonacaoDisponiveis). tipoSlot="modulo"
+            // mantém os dois slots (bomba e módulo) do mesmo nível
+            // independentes um do outro.
+            const moduloSlotsHtml = [];
+            if (p.nome === "Explosivos") {
+                for (let nivel = 1; nivel <= nivelPericia; nivel++) {
+                    const livre = receitaLivreDoSlot(p.nome, nivel, "modulo");
+                    if (livre) {
+                        const r = receitasGlobaisCache.find(g => g.id === livre.receitaGlobalId);
+                        const item = r?.itemGlobalId ? itensGlobaisCache.find(it => it.id === r.itemGlobalId) : null;
+                        moduloSlotsHtml.push(`
+                            <li class="receita-slot receita-slot-preenchido" style="cursor:default;">
+                                <div class="entity-main">
+                                    <span class="entity-nome">Nível ${nivel} · ${escapeHtml(r ? (r.nome || "(receita sem nome)") : "(receita removida do Banco Global)")}</span>
+                                    ${item?.descricao ? `<span class="entity-sub">${escapeHtml(item.descricao)}</span>` : (r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : "")}
+                                </div>
+                                <div class="entity-badges">
+                                    ${r ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(r.periciaVinculada)}" data-modificador="${calcularTotalPericia(Object.values(fichaAtual.pericias || {}).find(pp => pp.nome === r.periciaVinculada) || { nome: r.periciaVinculada, nivel: 0 }, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(r.periciaVinculada)).total}" title="Rolar ${escapeHtml(r.periciaVinculada)} pra criar">🎲 Criar</button>` : ""}
+                                    ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
+                                </div>
+                                <span class="hint-inline">Módulo de detonação — gratuita — travada${isMestre ? "" : " (só o Mestre pode trocar)"}</span>
+                                ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${livre.id}">Remover</button>` : ""}
+                            </li>
+                        `);
+                    } else {
+                        const opcoes = receitasModuloDetonacaoDisponiveis(nivel);
+                        if (opcoes.length) {
+                            moduloSlotsHtml.push(`
+                                <li class="receita-slot receita-slot-vazio" data-pericia="${escapeHtml(p.nome)}" data-nivel="${nivel}" data-tipo-slot="modulo">
+                                    <label>Nível ${nivel} — escolha seu módulo de detonação gratuito</label>
+                                    <select class="receita-slot-select">
+                                        ${opcoes.map(r => `<option value="${r.id}">${escapeHtml(r.nome || "(sem nome)")} (${escapeHtml(r.periciaVinculada)})</option>`).join("")}
+                                    </select>
+                                    <button type="button" class="btn-lime receita-slot-confirmar">Adquirir</button>
+                                </li>
+                            `);
+                        } else {
+                            moduloSlotsHtml.push(`
+                                <li class="receita-slot receita-slot-vazio" data-pericia="${escapeHtml(p.nome)}" data-nivel="${nivel}" data-tipo-slot="modulo">
+                                    <p class="hint">Nenhuma receita de módulo de detonação de nível ${nivel} cadastrada ainda no Banco Global (Ofícios Utilitários/Eletrônica, item com tag "Módulo de Detonação").</p>
+                                </li>
+                            `);
+                        }
+                    }
+                }
+            }
+
             // Se o nível da perícia CAIU depois de uma receita gratuita já
             // ter sido concedida num nível mais alto (ex: penalidade,
             // ajuste do Mestre), essa receita não é apagada — só some da
@@ -7626,7 +7776,7 @@ function renderizarReceitas() {
                        return `
                         <li class="entidade-desativada" style="cursor:default;">
                             <div class="entity-main">
-                                <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}</span>
+                                <span class="entity-nome">Nível ${x.nivel} · ${escapeHtml(r ? (r.nome || "(sem nome)") : "(receita removida do Banco Global)")}${x.tipoSlot === "modulo" ? " (módulo de detonação)" : ""}</span>
                             </div>
                             ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
@@ -7673,9 +7823,14 @@ function renderizarReceitas() {
                 `
                 : "";
 
+            const moduloSlotsSecao = moduloSlotsHtml.length
+                ? `<div class="hint-inline" style="margin-top:10px;">Módulos de detonação (um grátis por ponto em Explosivos — manual pg. 81)</div><ul class="entity-list">${moduloSlotsHtml.join("")}</ul>`
+                : "";
+
             return `
                 <div class="section-header">${escapeHtml(p.nome)} <span class="hint-inline">nível ${nivelPericia}</span></div>
                 ${nivelPericia < 1 ? `<p class="hint">Perícia ainda em nível 0 — nenhuma receita gratuita disponível.</p>` : `<ul class="entity-list">${slotsHtml.join("")}${formExtraMestre}</ul>`}
+                ${moduloSlotsSecao}
                 ${extrasHtml}
                 ${guardadasHtml}
             `;
@@ -7685,15 +7840,19 @@ function renderizarReceitas() {
     document.getElementById("btn-add-receita")?.addEventListener("click", () => abrirModalCriarReceita());
 
     // Escolher a receita gratuita de um slot vazio (dentre as já
-    // cadastradas no Banco Global pra aquele nível/perícia).
+    // cadastradas no Banco Global pra aquele nível/perícia — ou, se
+    // data-tipo-slot="modulo", dentre as receitas de módulo de
+    // detonação daquele nível, que são de OUTRA perícia — ver
+    // receitasModuloDetonacaoDisponiveis).
     el.receitasLista.querySelectorAll(".receita-slot-confirmar").forEach(btn => {
         btn.addEventListener("click", async () => {
             const li = btn.closest(".receita-slot");
             const periciaNome = li.dataset.pericia;
             const nivel = Number(li.dataset.nivel);
+            const tipoSlot = li.dataset.tipoSlot === "modulo" ? "modulo" : "bomba";
             const select = li.querySelector(".receita-slot-select");
             if (!select || !select.value) return;
-            await concederReceitaConhecida(periciaNome, nivel, select.value, "livre");
+            await concederReceitaConhecida(periciaNome, nivel, select.value, "livre", tipoSlot);
         });
     });
 
@@ -7771,7 +7930,17 @@ function renderizarReceitas() {
 // pré-preencher e travar perícia/nível, e, ao salvar, conceder
 // automaticamente essa receita recém-criada ao personagem que estava
 // com o slot aberto (ver concederReceitaConhecida).
-function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
+// Perícias de criação cujo resultado PRECISA sair funcional (a receita
+// tem que estar vinculada a um item de verdade do Banco Global de
+// Itens) — senão o item nasce só decorativo (tag null, sem dano,
+// bônus, efeito, cura, trava aberta, nada), o que trava o jogador na
+// hora de tentar usar. Fora dessa lista (Mecânica Automotiva,
+// Biomecânica) o item básico sem vínculo ainda é uma opção legítima
+// hoje, então o vínculo continua opcional — mas se algum dia isso virar
+// problema também, é só adicionar aqui.
+const PERICIAS_QUE_EXIGEM_ITEM_VINCULADO = ["Armeiro", "Explosivos", "Eletrônica", "Ofícios Utilitários", "Química"];
+
+function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
     let modal = document.getElementById("modal-criar-receita");
     if (!modal) {
         modal = document.createElement("div");
@@ -7779,7 +7948,11 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
         modal.className = "panel combate-painel-jogador";
         document.body.appendChild(modal);
     }
-    const r = receitaExistente || {};
+    // valoresIniciais tem prioridade — é o rascunho recém-vindo do
+    // fluxo "+ Criar item no Banco Global" (ver retomarReceitaAoFecharModal
+    // dentro de fecharModal), com tudo que já tinha sido digitado antes
+    // de ir criar o item, mais o itemGlobalId recém-vinculado.
+    const r = { ...(receitaExistente || {}), ...(valoresIniciais || {}) };
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">${receitaExistente ? "Editar receita" : "Nova receita"} — Banco Global</span>
@@ -7789,7 +7962,8 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             <label for="receita-nome">Nome do item a ser criado</label>
             <input type="text" id="receita-nome" value="${escapeHtml(r.nome || "")}" autocomplete="off">
             <div id="receita-item-opcoes" class="searchable-options" style="display:none;"></div>
-            <span class="hint-inline" id="receita-item-vinculo-hint">${r.itemGlobalId ? "Vinculada a um item do Banco Global de Itens." : "Digite pra buscar um item já cadastrado no Banco Global de Itens (opcional)."}</span>
+            <span class="hint-inline" id="receita-item-vinculo-hint"></span>
+            <button type="button" class="btn-ghost" id="btn-receita-criar-item" style="margin-top:6px;">+ Criar item no Banco Global</button>
         </div>
         <div class="modal-field">
             <label for="receita-pericia">Perícia de criação vinculada</label>
@@ -7865,9 +8039,27 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
     const inputNome = modal.querySelector("#receita-nome");
     const opcoesDiv = modal.querySelector("#receita-item-opcoes");
     const vinculoHint = modal.querySelector("#receita-item-vinculo-hint");
+
+    // Deixa claro, ANTES de tentar salvar, quando a receita vai gerar
+    // um item sem função nenhuma (sem vínculo, numa perícia que precisa
+    // de dano/efeito real — ver PERICIAS_QUE_EXIGEM_ITEM_VINCULADO).
+    function atualizarAvisoVinculo() {
+        const exige = PERICIAS_QUE_EXIGEM_ITEM_VINCULADO.includes(selectPericia.value);
+        if (itemGlobalIdVinculado) {
+            vinculoHint.innerText = "✅ Vinculada a um item do Banco Global de Itens — o item criado sai pronto pra usar (com dano/efeito reais).";
+            vinculoHint.classList.remove("hint-alerta");
+        } else if (exige) {
+            vinculoHint.innerText = `⚠️ ${selectPericia.value} precisa de um item vinculado — sem isso, o item criado sai só decorativo (sem tag, sem bônus, sem efeito nenhum — não funciona de verdade). Digite o nome pra buscar um item já cadastrado no Banco Global; se ele ainda não existir, cadastre-o primeiro (ex.: pelo botão "+ Adicionar item" com a opção "Salvar no Banco Global" marcada) e volte aqui pra vincular.`;
+            vinculoHint.classList.add("hint-alerta");
+        } else {
+            vinculoHint.innerText = "Digite pra buscar um item já cadastrado no Banco Global de Itens (opcional).";
+            vinculoHint.classList.remove("hint-alerta");
+        }
+    }
+
     inputNome.addEventListener("input", () => {
         itemGlobalIdVinculado = null;
-        vinculoHint.innerText = "Digite pra buscar um item já cadastrado no Banco Global de Itens (opcional).";
+        atualizarAvisoVinculo();
         const texto = inputNome.value.trim().toLowerCase();
         if (!texto) { opcoesDiv.style.display = "none"; return; }
         const encontrados = itensGlobaisCache.filter(it => (it.nome || "").toLowerCase().includes(texto)).slice(0, 8);
@@ -7880,13 +8072,15 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
             div.addEventListener("click", () => {
                 inputNome.value = it.nome;
                 itemGlobalIdVinculado = it.id;
-                vinculoHint.innerText = "Vinculada a um item do Banco Global de Itens.";
+                atualizarAvisoVinculo();
                 opcoesDiv.style.display = "none";
             });
             opcoesDiv.appendChild(div);
         });
         opcoesDiv.style.display = "block";
     });
+    selectPericia.addEventListener("change", atualizarAvisoVinculo);
+    atualizarAvisoVinculo();
 
     // Ingredientes: cada linha é { material, quantidade }, com o material
     // restrito à lista fechada MATERIAIS_CRIACAO (seção "Materiais" do
@@ -7952,11 +8146,67 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot) {
     }
     modal.querySelector("#btn-add-ingrediente").addEventListener("click", () => adicionarLinhaIngrediente());
 
+    // "+ Criar item no Banco Global" — pra quando o item de verdade
+    // ainda não existe no Banco (ver aviso de PERICIAS_QUE_EXIGEM_ITEM_
+    // VINCULADO acima): sai pro modal de item de verdade (Biblioteca de
+    // Itens, se Mestre; item de ficha com "Salvar no Banco Global" já
+    // marcado, se jogador — só o Mestre mexe direto na Biblioteca) já
+    // com o nome preenchido, e guarda tudo que já tinha sido digitado
+    // aqui pra restaurar sozinho ao voltar (ver receitaAguardandoVinculo
+    // e fecharModal).
+    modal.querySelector("#btn-receita-criar-item").addEventListener("click", () => {
+        const nomeRascunho = inputNome.value.trim();
+        if (!nomeRascunho) { toast("Dê um nome ao item antes de criar — ele preenche o nome do item novo no Banco Global.", "erro"); return; }
+        receitaAguardandoVinculo = {
+            receitaExistente,
+            opcoesSlot,
+            rascunho: {
+                nome: nomeRascunho,
+                periciaVinculada: selectPericia.value,
+                nivel: Number(selectNivel.value) || 1,
+                dificuldade: modal.querySelector("#receita-dificuldade").value !== "" ? Number(modal.querySelector("#receita-dificuldade").value) || 0 : null,
+                dificuldadeArmar: modal.querySelector("#receita-dificuldade-armar").value !== "" ? Number(modal.querySelector("#receita-dificuldade-armar").value) || 0 : null,
+                tempoCriacao: modal.querySelector("#receita-tempo").value.trim(),
+                ingredientes: Array.from(listaIngredientes.querySelectorAll(".receita-ingrediente-linha")).map(linha => {
+                    const selects = linha.querySelectorAll("select");
+                    const materialNome = selects[0].value;
+                    return {
+                        material: materialNome,
+                        qualidade: qualidadesDoMaterial(materialNome) ? selects[1].value : null,
+                        quantidade: Number(linha.querySelector("input").value) || 1
+                    };
+                }),
+                custo: modal.querySelector("#receita-custo").value !== "" ? Number(modal.querySelector("#receita-custo").value) || 0 : null,
+                descricao: modal.querySelector("#receita-descricao").value.trim(),
+                itemGlobalId: itemGlobalIdVinculado
+            }
+        };
+        modal.remove();
+        if (isMestre) {
+            abrirModalNovo("itensGlobais");
+        } else {
+            abrirModalNovo("inventario");
+        }
+        // Pré-preenche depois que o modal de item já montou os campos
+        // (abrirModalNovo/prepararModalParaLista rodam de forma síncrona
+        // — este setTimeout(0) só garante que roda DEPOIS disso).
+        setTimeout(() => {
+            if (el.modalNome) el.modalNome.value = nomeRascunho;
+            if (!isMestre && el.modalCampoSalvarBanco && el.modalCampoSalvarBanco.style.display !== "none") {
+                el.modalSalvarBanco.checked = true;
+            }
+        }, 0);
+    });
+
 
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-confirmar-receita").addEventListener("click", async () => {
         const nome = inputNome.value.trim();
         if (!nome) { toast("Dê um nome ao item a ser criado.", "erro"); return; }
+        if (!itemGlobalIdVinculado && PERICIAS_QUE_EXIGEM_ITEM_VINCULADO.includes(selectPericia.value)) {
+            toast(`Vincule essa receita a um item real do Banco Global antes de salvar — sem isso, o item criado por ela não vai ter tag, bônus nem efeito nenhum. Cadastre o item primeiro (pelo "+ Adicionar item" com "Salvar no Banco Global" marcado) e depois vincule pelo nome aqui.`, "erro");
+            return;
+        }
         const nomeCriador = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
         const receita = {
             nome,
@@ -8508,6 +8758,23 @@ function abrirModalEdicao(lista, id) {
 function fecharModal() {
     el.modal.classList.remove("active");
     modalContexto = null;
+    // Retoma o modal de receita que ficou pendente (ver comentário na
+    // declaração de receitaAguardandoVinculo) — dispara em QUALQUER
+    // fechamento do modal de item enquanto há uma receita esperando
+    // (salvo com sucesso, cancelado, ou fechado clicando fora).
+    if (receitaAguardandoVinculo) {
+        const pendente = receitaAguardandoVinculo;
+        const idBanco = idBancoParaRetomarReceita;
+        receitaAguardandoVinculo = null;
+        idBancoParaRetomarReceita = null;
+        toast(idBanco
+            ? `Item "${pendente.rascunho.nome}" criado no Banco Global — voltando pra receita já vinculada.`
+            : `Voltando pra receita (nenhum item novo foi salvo no Banco Global, então ela continua sem vínculo).`);
+        abrirModalCriarReceita(pendente.receitaExistente, pendente.opcoesSlot, {
+            ...pendente.rascunho,
+            itemGlobalId: idBanco || pendente.rascunho.itemGlobalId || null
+        });
+    }
 }
 
 function esconderTodosCamposEspeciais() {
@@ -8534,6 +8801,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoMaterialQualidade.style.display = "none";
     el.modalCampoMaterialQuantidade.style.display = "none";
     el.modalConfigArma.style.display = "none";
+    el.modalConfigExplosivo.style.display = "none";
     el.modalConfigReducaoDano.style.display = "none";
     el.modalCampoSubstanciaVicio.style.display = "none";
     el.modalCampoTipoVeiculo.style.display = "none";
@@ -9203,11 +9471,12 @@ function lerReducaoDanoDoModal() {
 
 function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
-    // marcado como equipável, não só armas). Some pra tag "Arma": arma
-    // já é sempre equipável por natureza (ver ehArma em itemEhEquipavel,
-    // inventario.js), então o checkbox ali seria redundante/confuso.
-    // Some também sem tag nenhuma escolhida ainda.
-    const podeMarcarEquipavel = !!tagKey && tagKey !== "arma";
+    // marcado como equipável, não só armas). Some pra tag "Arma" e
+    // "Explosivo": as duas já são sempre equipáveis por natureza (ver
+    // ehArmaOuExplosivo em itemEhEquipavel, inventario.js), então o
+    // checkbox ali seria redundante/confuso. Some também sem tag
+    // nenhuma escolhida ainda.
+    const podeMarcarEquipavel = !!tagKey && tagKey !== "arma" && tagKey !== "explosivo";
     el.modalCampoEquipavel.style.display = podeMarcarEquipavel ? "flex" : "none";
     if (!podeMarcarEquipavel) el.modalEquipavel.checked = false;
 
@@ -9219,7 +9488,7 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // — o campo fica aqui, genérico, e quem decide se conta ou não é
     // maosDisponiveis/itemPodeSerLevadoSolto em inventario.js). Some só
     // sem tag nenhuma escolhida ainda.
-    const podeTerMaosNecessarias = tagKey === "arma" || podeMarcarEquipavel;
+    const podeTerMaosNecessarias = tagKey === "arma" || tagKey === "explosivo" || podeMarcarEquipavel;
     el.modalCampoMaosNecessarias.style.display = podeTerMaosNecessarias ? "flex" : "none";
     if (podeTerMaosNecessarias) {
         const valor = Number(maosNecessariasAtual) === 2 ? "2" : "1";
@@ -9391,13 +9660,64 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // só), só um aviso explicando que a escolha é feita ao usar o item.
     el.hintFerramentaCriacaoGeral.style.display = ehFerramentaCriacaoGeral(tagKey) ? "block" : "none";
 
+    const armaOuExplosivo = ehArmaOuExplosivo(tagKey);
+    const explosivoItem = ehExplosivo(tagKey);
     const arma = ehArma(tagKey);
-    el.modalConfigArma.style.display = arma ? "block" : "none";
-    if (arma) {
+    el.modalConfigArma.style.display = armaOuExplosivo ? "block" : "none";
+    if (armaOuExplosivo) {
         el.modalArmaDanoBase.value = (armaConfig && armaConfig.danoBase) ?? 0;
-        el.modalArmaTipoDano.value = (armaConfig && armaConfig.tipoDano) || TIPOS_DANO[0].key;
+        // Explosivo já entra com "Explosão" pré-selecionado (é o tipo de
+        // dano correto pra bomba/granada na imensa maioria dos casos) —
+        // ainda dá pra trocar manualmente se a receita pedir outro tipo
+        // (ex.: uma bomba de fósforo branco = Fogo).
+        el.modalArmaTipoDano.value = (armaConfig && armaConfig.tipoDano) || (explosivoItem ? "explosao" : TIPOS_DANO[0].key);
+        // Escala (multiplicador sobre atributo) é conceito de arma branca
+        // corpo a corpo — o dano de uma explosão não escala com quem a
+        // arremessa, então o campo (escondido pra Explosivo pela mesma
+        // regra de arma de fogo, ver atualizarVisibilidadeArmaFogo) nunca
+        // é preenchido/lido pra essa tag.
         el.modalArmaEscala.value = (armaConfig && armaConfig.escala) || "";
         montarModificacoesArma((armaConfig && armaConfig.modificacoesArma) || []);
+    }
+
+    // Configuração do explosivo (manual pg. 81-82) — só pra tag
+    // "explosivo". Popula os selects de "modelo padrão" (autopreenchimento)
+    // e "módulo de detonação" só a primeira vez (não recriar toda hora
+    // perde o listener); os VALORES atuais (dificuldade de armar, raio,
+    // módulo escolhido) são sempre re-sincronizados com o item.
+    el.modalConfigExplosivo.style.display = explosivoItem ? "block" : "none";
+    if (explosivoItem) {
+        if (!el.modalExplosivoModelo.dataset.montado) {
+            EXPLOSIVOS_PADRAO.forEach(modelo => {
+                const opt = document.createElement("option");
+                opt.value = modelo.nome;
+                opt.innerText = `${modelo.nome} (Nível ${modelo.nivel} — ${modelo.dano} dano, raio ${modelo.raio}m)`;
+                el.modalExplosivoModelo.appendChild(opt);
+            });
+            el.modalExplosivoModelo.dataset.montado = "1";
+            el.modalExplosivoModelo.addEventListener("change", () => {
+                const modelo = EXPLOSIVOS_PADRAO.find(m => m.nome === el.modalExplosivoModelo.value);
+                if (!modelo) return;
+                el.modalArmaDanoBase.value = modelo.dano;
+                el.modalExplosivoDificuldadeArmar.value = modelo.dificuldadeArmar;
+                el.modalExplosivoRaio.value = modelo.raio;
+                if (el.modalNivelTag) el.modalNivelTag.value = String(modelo.nivel);
+                if (!el.modalDescricao.value.trim()) el.modalDescricao.value = modelo.descricao;
+            });
+        }
+        if (!el.modalExplosivoModulo.dataset.montado) {
+            MODULOS_DETONACAO.forEach(mod => {
+                const opt = document.createElement("option");
+                opt.value = mod.nome;
+                opt.innerText = `${mod.nome} (Nível ${mod.nivel})`;
+                el.modalExplosivoModulo.appendChild(opt);
+            });
+            el.modalExplosivoModulo.dataset.montado = "1";
+        }
+        el.modalExplosivoModelo.value = (armaConfig && armaConfig.modeloPadrao) || "";
+        el.modalExplosivoDificuldadeArmar.value = (armaConfig && armaConfig.dificuldadeArmar) ?? 0;
+        el.modalExplosivoRaio.value = (armaConfig && armaConfig.raio) ?? 0;
+        el.modalExplosivoModulo.value = (armaConfig && armaConfig.moduloDetonacao) || "";
     }
     // Tipo de dano extra — só faz sentido em arma branca (corpo a corpo,
     // não-fogo); arma de fogo dispara sempre o mesmo tipo de projétil.
@@ -9860,7 +10180,7 @@ async function salvarPericiaDoModal(id) {
 // antes de editar (ou null pra item novo/Banco Global) — só serve pra
 // preservar `camaraCarregada`, que é estado de jogo (bala já carregada
 // na câmara), não um campo que o modal deixa o jogador escolher direto.
-function lerConfigArmaDoModal(periciaUso, calibre, armaExistente) {
+function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     const ehFogo = ehArmaDeFogo(periciaUso);
     // "Usa carregador?" é escolha explícita (checkbox) desde que deixou
     // de ser automática por calibre — ver armaUsaCarregador. Sem
@@ -9888,7 +10208,17 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente) {
         usaCarregador,
         carregadorId: usaCarregador ? (el.modalArmaCarregador.value || null) : null,
         temCamaraExtra,
-        camaraCarregada: temCamaraExtra ? !!(armaExistente && armaExistente.camaraCarregada) : false
+        camaraCarregada: temCamaraExtra ? !!(armaExistente && armaExistente.camaraCarregada) : false,
+        // Explosivo (manual pg. 81-82): dificuldadeArmar é a que fica
+        // gravada no ITEM pronto e é rolada de novo toda vez que ele é
+        // armado/usado (diferente da dificuldade de CRIAR, que já foi
+        // testada uma vez lá na receita). raio e módulo são referência
+        // pro Mestre/jogador na hora de narrar o uso — ver
+        // abrirModalArmarExplosivo.
+        modeloPadrao: tag === "explosivo" ? (el.modalExplosivoModelo.value || null) : null,
+        dificuldadeArmar: tag === "explosivo" ? (Number(el.modalExplosivoDificuldadeArmar.value) || 0) : null,
+        raio: tag === "explosivo" ? (Number(el.modalExplosivoRaio.value) || 0) : null,
+        moduloDetonacao: tag === "explosivo" ? (el.modalExplosivoModulo.value || null) : null
     };
 }
 
@@ -10163,7 +10493,7 @@ async function salvarItemDoModal(id) {
         calibre,
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
-        arma: ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre, existenteItem.arma) : null,
+        arma: ehArmaOuExplosivo(tag) ? lerConfigArmaDoModal(periciaUso, calibre, existenteItem.arma, tag) : null,
         carregador,
         projetil,
         // Equipável (checkbox independente da tag — ver atualizarCamposPorTag):
@@ -10174,7 +10504,7 @@ async function salvarItemDoModal(id) {
         // acima (ver equipadaFinal, logo depois do bloco "Guardar dentro
         // de") — senão editar qualquer outro campo do item desequiparia
         // sem querer.
-        equipavel: tag !== "arma" ? !!el.modalEquipavel.checked : false,
+        equipavel: (tag !== "arma" && tag !== "explosivo") ? !!el.modalEquipavel.checked : false,
         equipada: equipadaFinal,
         // Material de criação: tipo/qualidade/quantidade em estoque —
         // ver atualizarCamposPorTag. Itens antigos que só tinham a
@@ -10215,7 +10545,7 @@ async function salvarItemDoModal(id) {
     if (el.modalCampoSalvarBanco.style.display !== "none" && el.modalSalvarBanco.checked) {
         const nomeJogador = fichaAtual?.config?.nomeExibicao || fichaAtualId;
         try {
-            await salvarItemNoBanco(registro, nomeJogador);
+            idBancoParaRetomarReceita = await salvarItemNoBanco(registro, nomeJogador);
             toast(`Item salvo na ficha e no Banco Global.`);
         } catch (erro) {
             console.error("Falha ao salvar item no Banco Global:", erro);
@@ -10285,7 +10615,7 @@ async function salvarItemBancoDoModal(id) {
     if (tagExigeQuantidadeProjetil(tag)) {
         projetil = { quantidade: Math.max(0, Number(el.modalProjetilQuantidade.value) || 0) };
     }
-    const armaConfig = ehArma(tag) ? lerConfigArmaDoModal(periciaUso, calibre, null) : null;
+    const armaConfig = ehArmaOuExplosivo(tag) ? lerConfigArmaDoModal(periciaUso, calibre, null, tag) : null;
     if (armaConfig) { armaConfig.carregadorId = null; armaConfig.camaraCarregada = false; }
 
     const registro = {
@@ -10317,7 +10647,7 @@ async function salvarItemBancoDoModal(id) {
         projetil,
         // Equipável — molde do Banco Global; item criado a partir dele
         // já nasce com essa marcação (ver salvarItemDoModal).
-        equipavel: tag !== "arma" ? !!el.modalEquipavel.checked : false,
+        equipavel: (tag !== "arma" && tag !== "explosivo") ? !!el.modalEquipavel.checked : false,
         // Molde do Banco Global de material: guarda tipo/qualidade como
         // referência, mas a quantidade em estoque é zerada — ela é
         // específica de cada ficha, não faz sentido "herdar estoque"
@@ -10331,8 +10661,9 @@ async function salvarItemBancoDoModal(id) {
         if (id) {
             await atualizarItemBanco(id, registro);
             toast("Item do Banco Global atualizado.");
+            idBancoParaRetomarReceita = id;
         } else {
-            await salvarItemNoBanco(registro, null);
+            idBancoParaRetomarReceita = await salvarItemNoBanco(registro, null);
             toast("Item criado no Banco Global.");
         }
         fecharModal();

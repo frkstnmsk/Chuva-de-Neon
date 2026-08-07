@@ -507,6 +507,13 @@
     font-weight: 400;
 }
 
+.hint-inline.hint-alerta {
+    display: block;
+    color: #ffb020;
+    font-weight: 600;
+    margin-top: 4px;
+}
+
 /* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
 .determinacoes-rolagem {
     display: flex;

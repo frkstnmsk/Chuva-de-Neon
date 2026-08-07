@@ -276,7 +276,8 @@ export const TAGS_ITEM = [
     { key: "mecanito", label: "Mecânito", temNivel: false },
     { key: "droga", label: "Droga / químico", temNivel: false },
     { key: "equipamento_medico", label: "Equipamento médico", temNivel: false },
-    { key: "explosivo", label: "Explosivo", temNivel: false },
+    { key: "explosivo", label: "Explosivo", temNivel: true },
+    { key: "modulo_detonacao", label: "Módulo de Detonação", temNivel: true },
     { key: "material", label: "Material de criação", temNivel: false },
     { key: "recipiente", label: "Recipiente (guarda outros itens)", temNivel: false },
     { key: "vestimenta", label: "Vestimenta (roupa que também guarda outros itens)", temNivel: false },
@@ -308,6 +309,67 @@ export function tagTemNivel(tagKey) {
 export function ehArma(tagKey) {
     return tagKey === "arma";
 }
+
+// Explosivo é tratado como uma categoria de dano PRÓPRIA, separada de
+// "Arma" — uma bomba/granada não é uma arma disfarçada, é o item que a
+// tag já promete (ver TAGS_ITEM acima). Fora isso, ela reaproveita a
+// MESMA infraestrutura de dano de uma arma (dano base, tipo de dano,
+// modificações — ver "Configuração da arma" no modal de item e
+// atualizarCamposPorTag/lerConfigArmaDoModal em ficha.js), só que sem
+// escala (o dano de uma explosão não escala com o atributo de quem
+// arremessa, ao contrário de uma arma branca) e sem os campos
+// exclusivos de arma de fogo. ehArmaOuExplosivo é o helper que os
+// pontos do sistema que só precisam saber "isso causa dano de verdade,
+// como uma arma" (ex.: liberar o botão de atacar em combate, mostrar a
+// seção de dano no modal de item) devem usar; ehArma sozinho continua
+// servindo pra tudo que É específico de arma (carregador, arma de
+// fogo, escala corpo a corpo, checkbox "equipável" implícito etc.).
+export function ehExplosivo(tagKey) {
+    return tagKey === "explosivo";
+}
+
+export function ehArmaOuExplosivo(tagKey) {
+    return ehArma(tagKey) || ehExplosivo(tagKey);
+}
+
+export function ehModuloDetonacao(tagKey) {
+    return tagKey === "modulo_detonacao";
+}
+
+// ---------------------------------------------------------------------
+// Explosivos (manual pg. 82) — os 5 modelos padrão de bomba da perícia
+// Explosivos. Cada um tem DUAS dificuldades (teste e dif "criar e
+// armar"): a primeira é rolada na hora de CRIAR o item (perícia
+// Explosivos, resolverCriacaoReceita em ficha.js); a segunda é a que
+// fica gravada no item pronto e é rolada de novo toda vez que ele for
+// ARMADO/usado (ver dificuldadeArmar no item, e "Usar" em combate —
+// abrirModalArmarExplosivo). Raio e dano são só referência informativa
+// pro Mestre aplicar manualmente (o sistema não simula área/alcance).
+// Dados da perícia Química (bombas por pontos de material) ficam de
+// fora por enquanto — não implementados.
+// ---------------------------------------------------------------------
+export const EXPLOSIVOS_PADRAO = [
+    { nome: "Granular / Pequeno Porte", nivel: 1, dano: 50, raio: 2, dificuldadeCriar: 12, dificuldadeArmar: 8, receita: "1 metal leve, 1 CEB", preco: 2650, descricao: "Pequena carga para portas comuns ou equipamentos." },
+    { nome: "Carga de Ruptura", nivel: 2, dano: 100, raio: 3, dificuldadeCriar: 14, dificuldadeArmar: 10, receita: "1 metal leve, 2 CEB", preco: 5200, descricao: "Dano a veículos leves e cofres pequenos." },
+    { nome: "Dispositivo de Sabotagem", nivel: 3, dano: 200, raio: 4, dificuldadeCriar: 16, dificuldadeArmar: 12, receita: "1 metal leve, 3 CEB, 1 eletrônico", preco: 30700, descricao: "Destrói veículos blindados e derruba pequenos edifícios." },
+    { nome: "Demolição Estrutural", nivel: 4, dano: 300, raio: 6, dificuldadeCriar: 18, dificuldadeArmar: 14, receita: "2 metais leves, 4 CEB, 1 eletrônico", preco: 41300, descricao: "Derruba prédios." },
+    { nome: "Termobárica / Arrasa Quarteirão", nivel: 5, dano: 600, raio: 10, dificuldadeCriar: 22, dificuldadeArmar: 18, receita: "2 metais leves, 5 CEB, 2 eletrônicos", preco: 130100, descricao: "Aniquilação total no alcance e efeitos colaterais até 50m. Consome oxigênio: qualquer ser vivo no raio faz teste de Constituição (dif 20) ou desmaia por 1d4 turnos." }
+];
+
+// Módulos de detonação (manual pg. 81) — item À PARTE, acoplado ao
+// explosivo na criação, sem teste pra juntar os dois (só a criação do
+// módulo em si tem teste, com a perícia/dificuldade daqui). Determinam
+// COMO o explosivo arma/detona (fusível, sensor, controle remoto...).
+export const MODULOS_DETONACAO = [
+    { nome: "Fusível Simples", nivel: 1, efeito: "Queima por até três turnos antes de explodir. Pode ser cortado. Pode ser usado como pino de granada — não precisa de teste pra armar e não dá pra interromper a detonação.", receita: "1 metal leve, 1 eletrônico", preco: 350, periciaCriacao: "Ofícios Utilitários", dificuldadeCriar: 8 },
+    { nome: "Fio de Trava", nivel: 1, efeito: "Ativa se o fio for rompido. Usado como booby trap.", receita: "1 metal leve, 1 eletrônico", preco: 350, periciaCriacao: "Ofícios Utilitários", dificuldadeCriar: 9 },
+    { nome: "Temporizador Digital", nivel: 2, efeito: "Programável de um segundo a vinte e quatro horas.", receita: "2 eletrônicos, 1 eletrônico avançado", preco: 1000, periciaCriacao: "Eletrônica", dificuldadeCriar: 10 },
+    { nome: "Sensor de Pressão", nivel: 2, efeito: "Ativa ao ser pisado por dois quilos ou mais.", receita: "1 metal leve, 2 eletrônicos, 1 eletrônico avançado", preco: 1150, periciaCriacao: "Eletrônica", dificuldadeCriar: 12 },
+    { nome: "Controle Remoto (Celular)", nivel: 2, efeito: "Alcance global (com sinal de rede). Pode ser rastreado.", receita: "2 eletrônicos, 1 eletrônico avançado", preco: 1000, periciaCriacao: "Eletrônica", dificuldadeCriar: 12 },
+    { nome: "Controle Remoto (Rádio)", nivel: 2, efeito: "Alcance cem metros. Sinal pode ser interceptado (Hacking dif 14).", receita: "2 eletrônicos, 2 eletrônicos avançados", preco: 1600, periciaCriacao: "Eletrônica", dificuldadeCriar: 12 },
+    { nome: "Sensor de Movimento", nivel: 3, efeito: "Ativa ao detectar calor ou vibração num raio de dois metros.", receita: "2 eletrônicos, 2 eletrônicos avançados", preco: 3200, periciaCriacao: "Eletrônica", dificuldadeCriar: 13 },
+    { nome: "Frequência de Rádio Codificada", nivel: 3, efeito: "Sinal criptografado (Hacking dif 18). Alcance quinhentos metros.", receita: "2 eletrônicos, 2 eletrônicos avançados", preco: 3200, periciaCriacao: "Eletrônica", dificuldadeCriar: 14 }
+];
 
 export function ehCarregador(tagKey) {
     return tagKey === "carregador";
@@ -957,7 +1019,7 @@ export function ehFerramentaCriacaoGeral(tagKey) {
 // modal) — armas, eletrônicos, ferramentas de criação (química e
 // biomecânica) e destraves.
 export function tagTemPericiaUso(tagKey) {
-    return tagKey === "arma" || tagKey === "eletronico" ||
+    return tagKey === "arma" || tagKey === "explosivo" || tagKey === "eletronico" ||
         tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
         tagKey === "destrave";
 }
@@ -976,7 +1038,7 @@ export function tagTemPericiaUso(tagKey) {
 // também é válido (o item só não ganha o botão "Usar" com rolagem
 // automática).
 export function tagExigePericiaUso(tagKey) {
-    return tagKey === "arma" ||
+    return tagKey === "arma" || tagKey === "explosivo" ||
         tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
         tagKey === "destrave";
 }
@@ -1091,6 +1153,12 @@ export function periciasVinculaveisPorTag(tagKey) {
         // penalidade padrão de manobra sem treinamento (-1 fixo) — a
         // mesma regra já usada em qualquer perícia no nível 0/ausente.
         case "arma": return [...PERICIAS_ARMA_COMBATE, "Sem Perícia"];
+        // Explosivo usa a própria perícia de criação (Explosivos) também
+        // pra arremessar/detonar — é ela que o botão "Usar"/"Atacar" rola
+        // em combate (ver dificuldadeArmar em receitas-globais.js: o
+        // manual já trata "criar" e "armar/usar" como testes da mesma
+        // perícia).
+        case "explosivo": return ["Explosivos", "Sem Perícia"];
         case "eletronico": return PERICIAS_ELETRONICO;
         case "ferramenta_criacao": return PERICIAS_FERRAMENTA_CRIACAO;
         case "ferramenta_criacao_quimica": return PERICIAS_FERRAMENTA_CRIACAO_QUIMICA;
