@@ -218,6 +218,7 @@
                     <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
                     <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
                     <button class="tab-btn" data-tab="combate" type="button">Combate</button>
+                    <button class="tab-btn" data-tab="saude" type="button">Saúde</button>
                     <button class="tab-btn" data-tab="veiculos" type="button">Veículos</button>
                     <button class="tab-btn" data-tab="cenario" type="button">Cenário</button>
                     <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
@@ -423,6 +424,19 @@
                     <ul class="entity-list manobras-list" id="lista-manobras-combate"></ul>
                 </section>
 
+                <!-- ===================== SAÚDE ===================== -->
+                <!-- Feridas persistentes (ver plano-sistema-saude-ferimentos.txt).
+                     Etapa 5 do plano: Testar Infecção migrado pra cá (por
+                     ferida, só o Mestre) e removido do Gerenciador de
+                     Combate — ver botaoTestarInfeccao/abrirModalTestarInfeccaoFerida
+                     em ficha.js. -->
+                <section class="tab-panel panel" data-tab="saude">
+                    <div class="section-header">Feridas <span class="hint-inline">criadas automaticamente por golpes perfurantes/cortantes mirados e tiros — fraturas e queimaduras são lançadas manualmente pelo Mestre</span></div>
+                    <div class="hint">Recuperação de PV fica bloqueada enquanto houver ferida que não esteja no estado "Tratada". Qualquer jogador com a perícia médica necessária pode tratar outro jogador.</div>
+                    <button id="btn-tratar-outro-jogador" class="btn-ghost" type="button">🩺 Tratar outro jogador</button>
+                    <div id="saude-lista"></div>
+                </section>
+
                 <!-- ===================== VEÍCULOS ===================== -->
                 <section class="tab-panel panel" data-tab="veiculos">
                     <div class="section-header">Veículos</div>
@@ -484,32 +498,11 @@
                 <!-- ===================== DARK NET ===================== -->
                 <section class="tab-panel panel" data-tab="darknet">
                     <div class="section-header">Dark Net</div>
-                    <div class="grid-form">
-                        <div class="campo">
-                            <label for="f-dm">Dm</label>
-                            <input type="text" id="f-dm" data-field="dm" placeholder="www.dm.dn/...">
-                        </div>
-                        <div class="campo">
-                            <label for="f-void">Void</label>
-                            <input type="text" id="f-void" data-field="void" placeholder="www.void.dn/...">
-                        </div>
-                        <div class="campo">
-                            <label for="f-p2k">P2K</label>
-                            <input type="text" id="f-p2k" data-field="p2k">
-                        </div>
-                        <div class="campo">
-                            <label for="f-rabbithole">RabbitHole</label>
-                            <input type="text" id="f-rabbithole" data-field="rabbithole">
-                        </div>
-                        <div class="campo">
-                            <label for="f-p2c">P2C</label>
-                            <input type="text" id="f-p2c" data-field="p2c">
-                        </div>
-                        <div class="campo">
-                            <label for="f-creators">Creators</label>
-                            <input type="text" id="f-creators" data-field="creators">
-                        </div>
+                    <div class="darknet-credencial-adicionar">
+                        <select id="darknet-credencial-site-select" title="Escolha o site"></select>
+                        <button id="btn-add-credencial-darknet" class="btn-lime" type="button">+ Adicionar credenciais</button>
                     </div>
+                    <div class="darknet-grid" id="darknet-grid"></div>
                 </section>
 
                 <!-- ===================== NOTAS ===================== -->

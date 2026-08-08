@@ -196,6 +196,7 @@ async function criarFichaNova(idLimpo, senha, nomeExibicao, mesaId) {
             nome: nomeExibicao, vulgo: "", idade: "", nacionalidade: "", funcao: "",
             maldade: 0, remorso: 0, status: 0,
             dm: "", void: "", p2k: "", rabbithole: "", p2c: "", creators: "",
+            darkart: "", blackprint: "",
             nivel: 1, xp: 0,
             forca: 0, constituicao: 0, destreza: 0, sabedoria: 0,
             inteligencia: 0, raciocinio: 0, carisma: 0, manipulacao: 0,

@@ -15,10 +15,11 @@ import {
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
     calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
     dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
-    dificuldadeInfeccao, DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
+    DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
     calcularTempoRecuperacaoPV, calcularAbstinenciaVicio,
     extrairDuracaoHorasDaDescricao, horasTotaisCalendario,
-    calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel
+    calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel,
+    TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -105,13 +106,15 @@ import {
     definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
     definirAlcanceLimitado, soltarAlcanceLimitado,
     definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados,
-    aplicarInfeccao, curarInfeccao, testarInfeccao,
     ouvirCenarios, criarCenario, renomearCenario, excluirCenario,
     adicionarParticipanteCenario, removerParticipanteCenario,
     adicionarItemCenario, removerItemCenario,
     adicionarVeiculoCenario, removerVeiculoCenario, editarVeiculoCenario,
     adicionarDinheiroCenario, removerDinheiroCenario
 } from "./mestre.js";
+import {
+    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida
+} from "./saude.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
     atualizarItemBanco, excluirItemBanco, autopreencherItemDoBanco, buscarItemBancoPorId
@@ -201,6 +204,12 @@ let todasAsFichasCache = {};
 // configurarRecuperacaoPV) montar o pedido sem precisar recalcular tudo
 // de novo — null quando não há PV perdido ou já existe recuperação ativa.
 let pvRecuperacaoContexto = null;
+// Último { d, pvMaximoTotal } passado pra renderizarRecuperacaoPV (Etapa
+// 6 do plano de saúde) — guardado pra poder re-renderizar o painel de
+// recuperação de PV quando as FERIDAS mudam (listener separado de
+// ouvirFeridas, ver configurarSaude), sem precisar duplicar aqui todo o
+// cálculo de pvMaximoTotal que já acontece em renderizarAtributos.
+let ultimoContextoRecuperacaoPV = null;
 // Cache local do Banco Global de Itens — carregado pra todo mundo (jogador
 // e Mestre), já que o autocompletar do modal de item precisa dele em
 // qualquer ficha, não só na Biblioteca do Painel do Mestre.
@@ -219,6 +228,15 @@ let pendentesCache = []; // fila de Ações Pendentes (compartilhada)
 let contadorPendentesAnterior = 0; // pra detectar chegada de pedido novo e disparar alerta
 let cenariosCache = []; // lista de Cenários (compartilhada — ver ouvirCenarios em mestre.js)
 
+// Feridas da ficha atualmente aberta (ver saude.js / aba "Saúde").
+// Diferente de cenariosCache, não é compartilhado entre todo mundo — é
+// específico da fichaAtualId, e por isso precisa de um listener próprio
+// que é re-registrado sempre que a ficha ativa muda (ver configurarSaude).
+// Escopo desta fase: só fichas de jogador (modoNpc fica de fora).
+let feridasCache = [];
+let unsubFeridas = null;
+let feridasFichaIdOuvida = null;
+
 // Semáforo: quando > 0, o listener onValue de ativarSincronizacao ignora
 // os snapshots recebidos, pra evitar que o Firebase re-entregue um estado
 // parcialmente escrito durante uma sequência de múltiplos updates.
@@ -232,7 +250,19 @@ let _pausarListener = 0;
 // de forma síncrona (cache local) em vez de assíncrona.
 const CAMPOS_PERFIL_SIMPLES = ["nome", "vulgo", "idade", "nacionalidade",
     "maldade", "remorso", "status", "nivel", "xp"];
-const CAMPOS_DARKNET_NOTAS = ["dm", "void", "p2k", "rabbithole", "p2c", "creators"];
+// Sites da Dark Net previstos no manual — "The Corridor" fica de fora
+// de propósito (não representado nesta ficha).
+const DARKNET_SITES = [
+    { id: "dm", nome: "Dm", placeholder: "www.dm.dn/..." },
+    { id: "void", nome: "Void", placeholder: "www.void.dn/..." },
+    { id: "p2k", nome: "P2K" },
+    { id: "rabbithole", nome: "RabbitHole" },
+    { id: "p2c", nome: "P2C" },
+    { id: "creators", nome: "Creators" },
+    { id: "darkart", nome: "DarkArt" },
+    { id: "blackprint", nome: "BlackPrint" }
+];
+const CAMPOS_DARKNET_NOTAS = DARKNET_SITES.map(s => s.id);
 const TITULOS_MODAL = {
     pericias: "Perícia", inventario: "Item de inventário", vantagens: "Vantagem",
     desvantagens: "Desvantagem", fatosUniversais: "Fato universal",
@@ -363,6 +393,8 @@ const el = {
     veiculosLista: document.getElementById("veiculos-lista"),
     btnAddVeiculo: document.getElementById("btn-add-veiculo"),
     cenarioLista: document.getElementById("cenario-lista"),
+    saudeLista: document.getElementById("saude-lista"),
+    btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
     modalCampoTipoVeiculo: document.getElementById("modal-campo-tipo-veiculo"),
     modalTipoVeiculo: document.getElementById("modal-tipo-veiculo"),
     modalConfigVeiculo: document.getElementById("modal-config-veiculo"),
@@ -603,6 +635,14 @@ async function init() {
     // item novo direto no inventário. O jogador usa "Usar"/"Mover"/"Dar",
     // e remoção/transferência sempre passam pelo Sistema de Aprovação.
     document.getElementById("btn-add-item").style.display = isMestre ? "inline-block" : "none";
+
+    // "Tratar outro jogador" (aba Saúde): só faz sentido pra quem tem
+    // uma ficha própria pra rolar o teste (o Mestre não trata ninguém
+    // por aqui — ver plano-sistema-saude-ferimentos.txt, seção 6).
+    if (el.btnTratarOutroJogador) {
+        el.btnTratarOutroJogador.style.display = isMestre ? "none" : "inline-block";
+        el.btnTratarOutroJogador.addEventListener("click", abrirModalTratarOutroJogador);
+    }
 
     el.btnLogout.addEventListener("click", () => {
         localStorage.removeItem("cdn_session");
@@ -866,6 +906,7 @@ function ativarSincronizacao() {
         dispararEfeitoDanoSeCaiu();
 
         aplicarVisibilidadeAbasNpc();
+        configurarSaude();
 
         verificarCriacaoPendente();
         verificarLevelUpPendente();
@@ -1200,7 +1241,7 @@ function gerenciarLayoutAbas() {
 // ele — o resto (Perfil, Atributos, Perícias, Inventário, Combate,
 // Vantagens/Desvantagens, Especializações, Notas) continua igual à
 // ficha normal.
-const ABAS_OCULTAS_NPC = ["financas", "treinamento", "darknet", "veiculos"];
+const ABAS_OCULTAS_NPC = ["financas", "treinamento", "darknet", "veiculos", "saude"];
 function aplicarVisibilidadeAbasNpc() {
     if (!el.tabsNav) return;
     const abaAtivaOculta = modoNpc && ABAS_OCULTAS_NPC.includes(
@@ -1411,13 +1452,18 @@ function podeEditarPericiaAtributo() {
     if (isMestre && modoNpc) return true;
     // Godmode do mestre ignora tudo
     if (isMestre && godmodeAtivo) return true;
-    // "Regra de ouro" — os 3 momentos legítimos de edição:
+    // "Regra de ouro" — os 2 momentos legítimos de edição livre:
     // 1. Criação de personagem em andamento
     if (!fichaAtual.criacao.concluida) return true;
     // 2. Level Up pendente
     if (fichaAtual.levelUpPendente && fichaAtual.levelUpPendente.ativo) return true;
-    // 3. Treinamento ativo
-    if (fichaAtual.treinamento && fichaAtual.treinamento.ativo) return true;
+    // Treinamento NÃO libera edição da ficha. O ganho da perícia/atributo
+    // treinado é aplicado automaticamente pelo próprio sistema de
+    // Treinamento (ver treinamento.js → aplicarAumentoCaracteristica,
+    // chamada quando avancarUmDiaTreinamento bate o total de dias). Deixar
+    // treinamento.ativo liberar esta função era um exploit: enquanto
+    // qualquer característica estivesse em treino, o jogador podia editar
+    // QUALQUER atributo/perícia da ficha livremente, não só a treinada.
     return false;
 }
 
@@ -2040,6 +2086,7 @@ function renderizarAtributos(modificadoresPlanos) {
     renderizarEstadoEnergia(estadoEnergia);
 
     renderizarBarrasVitaisTopo(d.pvAtual, pvMaximoTotal, estadoSaude, d.energiaAtual, energiaMaximoTotal, estadoEnergia);
+    ultimoContextoRecuperacaoPV = { d, pvMaximoTotal };
     renderizarRecuperacaoPV(d, pvMaximoTotal);
 
     // Secundários calculados
@@ -2283,6 +2330,22 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     if (pvPerdidos <= 0 || pvMaximoTotal <= 0) {
         pvRecuperacaoContexto = null;
         el.recuperacaoPvPainel.style.display = "none";
+        return;
+    }
+
+    // Etapa 6 do plano de saúde: recuperação de PV fica bloqueada
+    // enquanto existir ferida (fichas/{id}/feridas) em qualquer estado
+    // diferente de "tratada" — reaproveita feridasCache, já mantido em
+    // sincronia com a ficha atualmente aberta por configurarSaude
+    // (ouvirFeridas em saude.js). Em modoNpc feridasCache fica sempre
+    // vazio (NPCs ficam de fora do sistema de feridas nesta fase), então
+    // nunca bloqueia.
+    const feridaAberta = feridasCache.find(f => !feridaEstaFechada(f));
+    if (feridaAberta) {
+        pvRecuperacaoContexto = null;
+        el.recuperacaoPvPainel.style.display = "";
+        el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Trate os ferimentos antes de pedir recuperação de PV.`;
+        if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
 
@@ -3570,74 +3633,14 @@ function abrirModalQuebrarOssosJJ(modificadorNaoUsado, nivelJJ) {
 }
 
 // Infecção — Complicações de ferimentos (manual; ver dificuldadeInfeccao
-// em regras.js e testarInfeccao/aplicarInfeccao em mestre.js). Modal do
-// Mestre, aberto de dentro do Gerenciador de Combate ("Testar Infecção"
-// em qualquer participante — não depende de já estar infectado). Dois
-// caminhos:
-// - "Rolar teste": monta a dificuldade final com dificuldadeInfeccao
-//   (base 18 fixa pra tratamento malfeito/ambiente sujo, ou 18-22 pra
-//   ferimento profundo — a critério do Mestre — menos o modificador de
-//   itens/tratamento, ex.: -2 com Soro Fisiológico) e chama
-//   testarInfeccao, que já rola e aplica a flag em caso de falha.
-// - "Aplicar infecção direto": cobre o caso do manual em que NÃO há
-//   teste (falha em Remover Projétil com complicação — projétil
-//   alojado, infecção garantida).
-function abrirModalTestarInfeccao(participanteId, nomeParticipante) {
-    let modal = document.getElementById("modal-testar-infeccao");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "modal-testar-infeccao";
-        modal.className = "panel combate-painel-jogador";
-        document.body.appendChild(modal);
-    }
-    modal.innerHTML = `
-        <div class="combate-painel-topo">
-            <span class="eyebrow">Infecção — ${escapeHtml(nomeParticipante)}</span>
-            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
-        </div>
-        <p class="hint">Manual: dificuldade 18 fixa pra tratamento malfeito/ambiente sujo (não isolar o ferimento, mãos/equipamento não esterilizados); ${DIFICULDADE_INFECCAO_MINIMA} a ${DIFICULDADE_INFECCAO_MAXIMA} pra ferimento profundo/grave, mesmo com tratamento adequado — esse teste se repete uma vez por cena até receber tratamento médico. Itens como Soro Fisiológico reduzem a dificuldade em -2.</p>
-        <label style="display:block;margin-top:10px;">Dificuldade base (${DIFICULDADE_INFECCAO_MINIMA}-${DIFICULDADE_INFECCAO_MAXIMA})
-            <input type="number" id="infeccao-dificuldade" value="${DIFICULDADE_INFECCAO_MINIMA}" min="1" style="width:100%;">
-        </label>
-        <label style="display:block;margin-top:10px;">Modificador de itens/tratamento (ex: -2 com Soro Fisiológico)
-            <input type="number" id="infeccao-modificador" value="0" style="width:100%;">
-        </label>
-        <label style="display:block;margin-top:10px;">Origem / observação
-            <input type="text" id="infeccao-origem" placeholder="Ex: ferimento de bala no torso, tratado sem esterilizar" style="width:100%;">
-        </label>
-        <button type="button" class="btn-lime" id="btn-rolar-teste-infeccao" style="margin-top:14px;width:100%;">Rolar teste de Constituição</button>
-        <button type="button" class="btn-red" id="btn-infeccao-garantida" style="margin-top:8px;width:100%;">Aplicar infecção direto (sem teste — ex: projétil que ficou alojado)</button>
-    `;
-    const fechar = () => modal.remove();
-    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
-    modal.querySelector("#btn-rolar-teste-infeccao").addEventListener("click", async () => {
-        const dificuldadeBase = Number(modal.querySelector("#infeccao-dificuldade").value) || DIFICULDADE_INFECCAO_MINIMA;
-        const modificadorItens = Number(modal.querySelector("#infeccao-modificador").value) || 0;
-        const origem = modal.querySelector("#infeccao-origem").value.trim() || "Complicação de ferimento";
-        try {
-            const dificuldade = dificuldadeInfeccao(dificuldadeBase, modificadorItens);
-            const resultado = await testarInfeccao(participanteId, dificuldade, origem);
-            if (!resultado) { toast("Não foi possível testar — participante não encontrado.", "erro"); return; }
-            await registrarRolagem({ quem: nomeParticipante, modificador: resultado.modConstituicao, resultado: resultado.resultado, detalhe: resultado.detalhe });
-            toast(resultado.detalhe, resultado.sucesso ? undefined : "erro");
-            fechar();
-        } catch (e) {
-            toast(e.message || "Falha ao testar infecção.", "erro");
-        }
-    });
-    modal.querySelector("#btn-infeccao-garantida").addEventListener("click", async () => {
-        const origem = modal.querySelector("#infeccao-origem").value.trim() || "Infecção garantida (complicação de tratamento)";
-        try {
-            await aplicarInfeccao(participanteId, origem, true);
-            const detalhe = `${nomeParticipante} recebeu uma infecção GARANTIDA (sem teste): ${origem}.`;
-            await registrarRolagem({ quem: nomeParticipante, modificador: 0, resultado: "Infecção garantida", detalhe });
-            toast(detalhe, "erro");
-            fechar();
-        } catch (e) {
-            toast(e.message || "Falha ao aplicar infecção.", "erro");
-        }
-    });
-}
+// em regras.js). Etapa 5 do plano: o modal "Testar Infecção" saiu do
+// Gerenciador de Combate e virou parte da aba Saúde, vinculado a uma
+// FERIDA específica (abrirModalTestarInfeccaoFerida, junto com o resto
+// da aba Saúde, mais abaixo neste arquivo) — em vez de um participante
+// de combate solto. O caso "aplicar infecção direto, sem teste" (falha
+// em Remover Projétil com complicação) já é automático dentro de
+// tratarFerida (saude.js), então não precisa mais de um botão dedicado
+// aqui.
 
 // CQC nível 2 e nível 4 (manual): checkbox pré-rolagem de iniciativa —
 // nível 2 pergunta quem está avançando contra oponentes armados pra
@@ -4626,6 +4629,13 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // internamente quando o teste falha).
     let notaSangramento = "";
     let notaEfeitoLocal = "";
+    // Feridas persistentes (ver plano-sistema-saude-ferimentos.txt) — só
+    // pra fichas de JOGADOR nesta fase (NPC fica de fora por enquanto).
+    // Local salvo na ferida usa a mesma chave de LOCAIS_MIRA, com
+    // "padrao" convertido pra "torso" (mesma convenção já usada pro
+    // Sangramento de tiro sem mira, logo abaixo).
+    const criaFeridaHabilitado = danoTotal > 0 && participante.tipo === "ficha";
+    const localFerida = localMira.key === "padrao" ? "torso" : localMira.key;
     if (danoTotal > 0 && (ehFogo || ehDanoPerfurante(tipoDanoKey)) && participante._pid && combateComIniciativaAtivo()) {
         const regraSangramentoAplicavel = ehFogo
             ? (localMira.sangramento || localMiraPorKey("torso").sangramento)
@@ -4633,11 +4643,27 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         if (regraSangramentoAplicavel) {
             const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, regraSangramentoAplicavel, ehFogo);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+            // Sangrou -> ferida "sangramento". Não sangrou E foi tiro ->
+            // bala fica alojada (ferida "projetil" — precisa de Remover
+            // Projétil antes de poder suturar). Não sangrou e foi corpo
+            // a corpo -> resistiu, sem ferida nenhuma.
+            if (criaFeridaHabilitado && resultadoSangramento) {
+                if (resultadoSangramento.sangramento) {
+                    await criarFerida(participante.refId, { tipo: "sangramento", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+                } else if (ehFogo) {
+                    await criarFerida(participante.refId, { tipo: "projetil", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+                }
+            }
         }
     }
     if (danoTotal > 0 && localMira.key !== "padrao") {
         if (ehDanoCortante(tipoDanoKey)) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${localMira.label}: aplica-se a regra de Amputação (resolva com o Mestre).`;
+            // Corte sempre abre ferida precisando de sutura, além da
+            // regra de Amputação (que continua manual/narrativa).
+            if (criaFeridaHabilitado) {
+                await criarFerida(participante.refId, { tipo: "corte", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+            }
         }
         if (ehDanoContundente(tipoDanoKey) && localMira.key === "cabeca") {
             notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;
@@ -8255,14 +8281,168 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
 // DARK NET / NOTAS
 // ---------------------------------------------------------------------
 function renderizarDarknetENotas() {
+    montarGradeDarknetSeNecessario();
     CAMPOS_DARKNET_NOTAS.forEach(campo => {
         const input = document.querySelector(`[data-field="${campo}"]`);
         if (input && document.activeElement !== input) input.value = fichaAtual.dados[campo] || "";
     });
+    renderizarCredenciaisDarknet();
     renderizarDeterminacoes();
     const notas = document.querySelector('[data-field="notas"]');
     if (notas && document.activeElement !== notas) notas.value = fichaAtual.notas || "";
 }
+
+// Monta a grade de caixas da Dark Net uma única vez (uma caixa por site
+// do manual, exceto "The Corridor") — o campo de link/acesso de cada
+// site segue o mesmo padrão data-field de sempre; a lista de
+// credenciais de cada caixa é preenchida/atualizada por
+// renderizarCredenciaisDarknet(). Também popula o <select> do botão
+// único "Adicionar credenciais" do topo da aba.
+let darknetGridMontada = false;
+function montarGradeDarknetSeNecessario() {
+    const grid = document.getElementById("darknet-grid");
+    if (!grid || darknetGridMontada) return;
+
+    grid.innerHTML = "";
+    DARKNET_SITES.forEach(site => {
+        const box = document.createElement("div");
+        box.className = "darknet-site";
+        box.dataset.site = site.id;
+
+        const header = document.createElement("div");
+        header.className = "darknet-site-header";
+        header.textContent = site.nome;
+        box.appendChild(header);
+
+        const campo = document.createElement("div");
+        campo.className = "campo";
+        const label = document.createElement("label");
+        label.setAttribute("for", `f-${site.id}`);
+        label.textContent = "Link / acesso";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.id = `f-${site.id}`;
+        input.dataset.field = site.id;
+        if (site.placeholder) input.placeholder = site.placeholder;
+        campo.appendChild(label);
+        campo.appendChild(input);
+        box.appendChild(campo);
+
+        const listaLabel = document.createElement("div");
+        listaLabel.className = "hint-inline";
+        listaLabel.textContent = "Credenciais";
+        box.appendChild(listaLabel);
+
+        const lista = document.createElement("div");
+        lista.className = "darknet-credenciais-lista";
+        lista.dataset.siteCredenciais = site.id;
+        box.appendChild(lista);
+
+        grid.appendChild(box);
+    });
+    darknetGridMontada = true;
+
+    const select = document.getElementById("darknet-credencial-site-select");
+    if (select) {
+        select.innerHTML = DARKNET_SITES.map(s => `<option value="${s.id}">${s.nome}</option>`).join("");
+    }
+}
+
+// Credenciais da Dark Net: cada site guarda uma lista de anotações de
+// texto livre (usuário/senha/nota — sem campos fixos, ver decisão do
+// jogador). Fica em fichaAtual.darknetCredenciais = { [siteId]: [""...] },
+// salvo inteiro a cada alteração (mesmo padrão de fichaAtual.determinacoes).
+function credenciaisDoSite(siteId) {
+    if (!fichaAtual.darknetCredenciais) fichaAtual.darknetCredenciais = {};
+    if (!Array.isArray(fichaAtual.darknetCredenciais[siteId])) fichaAtual.darknetCredenciais[siteId] = [];
+    return fichaAtual.darknetCredenciais[siteId];
+}
+
+const darknetCredenciaisContagemRenderizada = {};
+function renderizarCredenciaisDarknet() {
+    DARKNET_SITES.forEach(site => {
+        const lista = document.querySelector(`[data-site-credenciais="${site.id}"]`);
+        if (!lista) return;
+        const valores = credenciaisDoSite(site.id);
+
+        if (darknetCredenciaisContagemRenderizada[site.id] !== valores.length) {
+            lista.innerHTML = "";
+            if (valores.length === 0) {
+                const vazio = document.createElement("div");
+                vazio.className = "darknet-credenciais-vazio hint-inline";
+                vazio.textContent = "Nenhuma credencial cadastrada.";
+                lista.appendChild(vazio);
+            } else {
+                valores.forEach((_, idx) => lista.appendChild(criarLinhaCredencialDarknet(site.id, idx)));
+            }
+            darknetCredenciaisContagemRenderizada[site.id] = valores.length;
+        }
+
+        lista.querySelectorAll("input[data-darknet-credencial-index]").forEach(inp => {
+            const idx = Number(inp.dataset.darknetCredencialIndex);
+            if (document.activeElement !== inp) inp.value = valores[idx] || "";
+        });
+    });
+}
+
+function criarLinhaCredencialDarknet(siteId, idx) {
+    const linha = document.createElement("div");
+    linha.className = "darknet-credencial-item";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.dataset.darknetCredencial = siteId;
+    input.dataset.darknetCredencialIndex = String(idx);
+    input.placeholder = "usuário, senha, nota...";
+
+    const remover = document.createElement("button");
+    remover.type = "button";
+    remover.className = "btn-ghost darknet-credencial-remover";
+    remover.title = "Remover credencial";
+    remover.textContent = "✕";
+    remover.addEventListener("click", () => removerCredencialDarknet(siteId, idx));
+
+    linha.appendChild(input);
+    linha.appendChild(remover);
+    return linha;
+}
+
+function adicionarCredencialDarknet(siteId) {
+    if (!fichaAtual || !idAtivo()) return;
+    credenciaisDoSite(siteId).push("");
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    renderizarCredenciaisDarknet();
+    setTimeout(() => {
+        const campos = document.querySelectorAll(`input[data-darknet-credencial="${siteId}"]`);
+        const ultimo = campos[campos.length - 1];
+        if (ultimo) ultimo.focus();
+    }, 0);
+}
+
+function removerCredencialDarknet(siteId, idx) {
+    if (!fichaAtual || !idAtivo()) return;
+    credenciaisDoSite(siteId).splice(idx, 1);
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    renderizarCredenciaisDarknet();
+}
+
+document.getElementById("btn-add-credencial-darknet")?.addEventListener("click", () => {
+    const select = document.getElementById("darknet-credencial-site-select");
+    if (!select || !select.value) return;
+    adicionarCredencialDarknet(select.value);
+});
+
+// Grava o texto de cada credencial (mesmo padrão "set no array inteiro"
+// usado pelas caixas de Determinação).
+document.addEventListener("input", (e) => {
+    const siteCred = e.target.dataset && e.target.dataset.darknetCredencial;
+    const idxRaw = e.target.dataset && e.target.dataset.darknetCredencialIndex;
+    if (siteCred === undefined || idxRaw === undefined || !idAtivo()) return;
+    const idx = Number(idxRaw);
+    const lista = credenciaisDoSite(siteCred);
+    lista[idx] = e.target.value;
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+});
 
 // Quantidade de slots de Determinação liberados pelo Nível do
 // personagem: 3 no nível 1, 6 no nível 3, 9 no nível 6, 10 a partir do
@@ -8652,24 +8832,53 @@ document.addEventListener("input", (e) => {
 // ou do override de Godmode — ver maximoComOverride) nem ficar negativo. Sem
 // essa trava, o campo aceitava qualquer número digitado (inclusive durante a
 // Criação, antes de a ficha estar fechada), inflando o PV permanentemente.
+//
+// Campo vazio (ex: selecionou o valor antigo pra apagar e digitar um novo)
+// NÃO grava nada — só quando há um número de verdade no campo. Isso corrige
+// um bug sério: antes, apagar o campo salvava `pvAtual: null` (o campo
+// virava "" → Number("") tratado como null), e por convenção usada no
+// resto do app (calcularEstadoSaude, o próprio render deste input, o
+// painel de Recuperação de PVs) `pvAtual === null` significa "PV no
+// máximo" — pensado só pra ficha nova/NPC recém-criado, que ainda não tem
+// ferimento registrado. Como esse input salva sozinho a cada tecla (ver
+// agendarSalvamento, debounce de 500ms), bastava o autosave disparar
+// durante o instante em que o campo ficava vazio (ex: a pessoa se
+// distraiu logo depois de apagar, antes de digitar o número novo) pra o
+// personagem aparecer com PV cheio do nada pra todo mundo em tempo real
+// — sem nenhum Timeskip, sem recuperação, sem nada. Se o campo for
+// deixado vazio (blur), o handler de "blur" mais abaixo restaura o
+// último valor válido.
 document.addEventListener("input", (e) => {
     const recursoKey = e.target.dataset && e.target.dataset.recursoKey;
     if (!recursoKey || !idAtivo()) return;
-    let valor = e.target.value === "" ? null : Number(e.target.value);
-    if (valor !== null && !Number.isNaN(valor)) {
-        const modificadoresPlanos = modificadoresAtuais();
-        const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
-        const bonusExtra = recursoKey === "pv" ? (Number(fichaAtual.dados.pvBonusExtra) || 0) : 0;
-        const totalCalculado = Math.round(derivados.recursos[recursoKey].total) + bonusExtra;
-        const max = maximoComOverride(recursoKey, fichaAtual.dados, totalCalculado);
-        if (valor > max) valor = max;
-        if (valor < 0) valor = 0;
-        if (Number(e.target.value) !== valor) e.target.value = valor; // reflete o clamp na tela
-    }
+    if (e.target.value === "") return; // ainda digitando — não grava nada
+    let valor = Number(e.target.value);
+    if (Number.isNaN(valor)) return;
+
+    const modificadoresPlanos = modificadoresAtuais();
+    const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
+    const bonusExtra = recursoKey === "pv" ? (Number(fichaAtual.dados.pvBonusExtra) || 0) : 0;
+    const totalCalculado = Math.round(derivados.recursos[recursoKey].total) + bonusExtra;
+    const max = maximoComOverride(recursoKey, fichaAtual.dados, totalCalculado);
+    if (valor > max) valor = max;
+    if (valor < 0) valor = 0;
+    if (Number(e.target.value) !== valor) e.target.value = valor; // reflete o clamp na tela
+
     const campo = recursoKey + "Atual";
     fichaAtual.dados[campo] = valor;
     agendarSalvamento(`dados/${campo}`, valor);
 });
+
+// Campo de PV/Energia atual deixado vazio ao sair dele (usuário apagou
+// tudo e não chegou a digitar um número novo) — restaura o valor válido
+// mais recente em vez de deixar "" (que nunca deveria significar "sem PV
+// perdido", ver comentário acima). "blur" não faz bubble, por isso o
+// listener precisa ser registrado em modo captura (terceiro argumento).
+document.addEventListener("blur", (e) => {
+    const recursoKey = e.target.dataset && e.target.dataset.recursoKey;
+    if (!recursoKey || e.target.value !== "") return;
+    renderizarAtributos(modificadoresAtuais());
+}, true);
 
 // PV/Energia máximo — só aparece editável em Godmode (ver renderizarAtributos).
 // Sobrescreve o valor calculado pela fórmula, guardado em
@@ -8919,7 +9128,7 @@ function prepararModalPericia(existente) {
     if (!podeEditar && !existente) {
         // Jogador sem edição liberada não devia nem conseguir abrir "novo", mas
         // por segurança redundante: avisa que não vai salvar.
-        toast("Edição de perícias só na Criação, Level Up ou Treinamento.", "erro");
+        toast("Edição de perícias só na Criação ou em Level Up pendente.", "erro");
     }
 }
 
@@ -10133,7 +10342,7 @@ async function salvarEntidadeAtual() {
 async function salvarPericiaDoModal(id) {
     const podeEditar = podeEditarPericiaAtributo();
     if (!podeEditar) {
-        toast("Edição de perícias só na Criação, Level Up ou Treinamento.", "erro");
+        toast("Edição de perícias só na Criação ou em Level Up pendente.", "erro");
         return;
     }
     const nome = el.modalPericiaValor.value;
@@ -10793,7 +11002,7 @@ async function excluirEntidadeAtual() {
     if (!fichaAtual || !idAtivo()) { toast("Nenhuma ficha selecionada.", "erro"); return; }
 
     if (lista === "pericias" && !podeEditarPericiaAtributo()) {
-        toast("Edição de perícias só na Criação, Level Up ou Treinamento.", "erro");
+        toast("Edição de perícias só na Criação ou em Level Up pendente.", "erro");
         return;
     }
 
@@ -11173,6 +11382,376 @@ function configurarCenarios() {
         }
         if (typeof renderizarCenarios === "function") renderizarCenarios();
     });
+}
+
+// =====================================================================
+// SAÚDE (ver plano-sistema-saude-ferimentos.txt, Etapa 3): feridas
+// persistentes da ficha atualmente aberta. Diferente dos outros
+// listeners deste arquivo, este é específico de UMA ficha (fichaAtualId)
+// e não do conjunto compartilhado da mesa — por isso precisa ser
+// re-registrado sempre que a ficha ativa muda (Mestre trocando de
+// personagem no selectFicha, ou alternando entre ficha/NPC). Chamado a
+// cada snapshot de ativarSincronizacao(); o guard de id evita
+// reassinar o listener à toa quando nada mudou.
+// Escopo desta fase: só ficha de jogador — em modo NPC a lista fica
+// vazia (feridas de NPC ficam de fora por enquanto).
+// =====================================================================
+function configurarSaude() {
+    const alvo = !modoNpc && fichaAtualId ? fichaAtualId : null;
+    if (alvo === feridasFichaIdOuvida) return;
+    feridasFichaIdOuvida = alvo;
+    if (unsubFeridas) { unsubFeridas(); unsubFeridas = null; }
+    if (!alvo) {
+        feridasCache = [];
+        renderizarSaude();
+        return;
+    }
+    unsubFeridas = ouvirFeridas(alvo, (lista) => {
+        feridasCache = lista || [];
+        renderizarSaude();
+        // Etapa 6: uma ferida abrindo/fechando pode travar ou destravar
+        // a recuperação de PV — re-renderiza o painel com o último
+        // contexto (d, pvMaximoTotal) conhecido, sem esperar a próxima
+        // atualização da ficha em si.
+        if (ultimoContextoRecuperacaoPV) {
+            renderizarRecuperacaoPV(ultimoContextoRecuperacaoPV.d, ultimoContextoRecuperacaoPV.pvMaximoTotal);
+        }
+    });
+}
+
+function tituloTipoFerida(tipo) {
+    return {
+        sangramento: "Sangramento", corte: "Corte", projetil: "Projétil alojado",
+        fratura: "Fratura", queimadura: "Queimadura"
+    }[tipo] || tipo;
+}
+function tituloLocalFerida(local) {
+    return { cabeca: "Cabeça", torso: "Torso", membro: "Membro", extremidade: "Extremidade" }[local] || local;
+}
+function tituloEstadoFerida(estado) {
+    return {
+        aberta: "Aberta", estancada: "Estancada", sem_sangramento: "Projétil removido", tratada: "Tratada"
+    }[estado] || estado;
+}
+
+// Deriva as ações de tratamento disponíveis pra uma ferida a partir de
+// TRATAMENTOS_FERIDA + feridaAceitaSutura (regras.js) — em vez de
+// hardcodar a máquina de estados de novo aqui, reaproveita a mesma
+// fonte de verdade que tratarFerida() usa pra validar/aplicar. Uma
+// ferida "tratada" nunca tem ação disponível.
+function acoesDeTratamentoParaFerida(ferida) {
+    if (!ferida || ferida.estado === "tratada") return [];
+    return Object.entries(TRATAMENTOS_FERIDA)
+        .filter(([acao, config]) => {
+            if (!config.tiposFerida.includes(ferida.tipo)) return false;
+            if (acao === "suturar_ferimento") return feridaAceitaSutura(ferida);
+            return ferida.estado === "aberta";
+        })
+        .map(([acao]) => acao);
+}
+
+function renderizarSaude() {
+    if (!el.saudeLista) return;
+
+    if (modoNpc) {
+        el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de feridas.</p>`;
+        return;
+    }
+    if (!feridasCache.length) {
+        el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">Nenhuma ferida registrada.</p>`;
+        return;
+    }
+
+    const feridasOrdenadas = [...feridasCache].sort((a, b) => (b.criadaEm || 0) - (a.criadaEm || 0));
+
+    el.saudeLista.innerHTML = feridasOrdenadas.map(ferida => {
+        const acoes = acoesDeTratamentoParaFerida(ferida);
+        const badgeInfeccao = ferida.infeccaoAtiva
+            ? `<span class="mod-pill negativo">🦠 Infeccionada${ferida.infeccaoGarantida ? " (garantida)" : ""}</span>`
+            : "";
+        const botoesTratamento = isMestre
+            ? ""
+            : acoes.map(acao => `<button type="button" class="btn-lime btn-tratar-ferida" data-ferida-id="${ferida.id}" data-acao="${acao}">${escapeHtml(TRATAMENTOS_FERIDA[acao].label)}</button>`).join(" ");
+        const semAcao = !isMestre && !acoes.length && ferida.estado !== "tratada"
+            ? `<span class="hint">Nenhum tratamento disponível no momento.</span>` : "";
+        // Testar Infecção (Etapa 5 do plano): migrado pra cá, vinculado à
+        // ferida específica — só o Mestre dispara, a qualquer momento
+        // enquanto a ferida não estiver "tratada" (não depende de já
+        // estar infeccionada, igual o antigo botão do Gerenciador de
+        // Combate).
+        const botaoTestarInfeccao = (isMestre && ferida.estado !== "tratada")
+            ? `<button type="button" class="btn-ghost btn-testar-infeccao-ferida" data-ferida-id="${ferida.id}" title="Teste de Constituição vs. Infecção (manual: Complicações de ferimentos)">🦠 Testar Infecção</button>`
+            : "";
+
+        const historico = Object.values(ferida.historico || {}).sort((a, b) => (a.data || 0) - (b.data || 0));
+        const historicoHtml = historico.length
+            ? `<details class="ferida-historico">
+                <summary>Histórico (${historico.length})</summary>
+                <ul>${historico.map(h => `<li>${escapeHtml(h.acao || "")}${h.quem ? ` — ${escapeHtml(h.quem)}` : ""}: ${escapeHtml(h.resultado || "")}</li>`).join("")}</ul>
+               </details>`
+            : "";
+
+        return `
+        <div class="ferida-card" data-ferida-id="${ferida.id}">
+            <div class="ferida-topo">
+                <span class="ferida-tipo">${tituloTipoFerida(ferida.tipo)}${ferida.local ? ` — ${tituloLocalFerida(ferida.local)}` : ""}</span>
+                <span class="mod-pill${ferida.estado === "tratada" ? " positivo" : ""}">${tituloEstadoFerida(ferida.estado)}</span>
+                ${badgeInfeccao}
+            </div>
+            ${ferida.origem ? `<div class="hint">Origem: ${escapeHtml(ferida.origem)}</div>` : ""}
+            <div class="ferida-acoes">${botoesTratamento}${semAcao}${botaoTestarInfeccao}</div>
+            ${historicoHtml}
+        </div>`;
+    }).join("");
+
+    if (!isMestre) {
+        el.saudeLista.querySelectorAll(".btn-tratar-ferida").forEach(btn => {
+            btn.addEventListener("click", () => abrirModalTratarFerida(btn.dataset.feridaId, btn.dataset.acao));
+        });
+    }
+    if (isMestre) {
+        el.saudeLista.querySelectorAll(".btn-testar-infeccao-ferida").forEach(btn => {
+            btn.addEventListener("click", () => abrirModalTestarInfeccaoFerida(btn.dataset.feridaId));
+        });
+    }
+}
+
+// Modal de tratamento — Etapa 3: só o próprio personagem se tratando,
+// então tratadorPericias/tratadorNome sempre vêm de fichaAtual (sem
+// seletor de paciente, que é a Etapa 4). Segue o mesmo padrão visual e
+// de feedback (toast + registrarRolagem) do modal de Testar Infecção
+// por ferida (abrirModalTestarInfeccaoFerida, mais abaixo).
+// `alvo` (opcional): { fichaId, nome } do PACIENTE — usado pelo fluxo
+// "Tratar outro jogador" (Etapa 4, ver abrirModalTratarOutroJogador).
+// Sem isso, assume que é a própria ficha aberta (Etapa 3 — tratar a si
+// mesmo). Quem ROLA o teste (perícias em tratadorPericias) é sempre
+// fichaAtual — a pessoa com a ficha aberta nesta tela — nunca o
+// paciente, mesmo tratando outro jogador.
+function abrirModalTratarFerida(feridaId, acao, alvo) {
+    const config = TRATAMENTOS_FERIDA[acao];
+    if (!config) return;
+    const tratandoOutro = !!alvo;
+    const fichaAlvoId = tratandoOutro ? alvo.fichaId : fichaAtualId;
+    const nomeAlvo = tratandoOutro ? alvo.nome : (fichaAtual?.dados?.nome || fichaAtualId);
+
+    // A própria ficha usa feridasCache (já sincronizado pelo listener
+    // dedicado); pra outro jogador, lê direto do snapshot ao vivo de
+    // todasAsFichasCache (raw, inclui o nó feridas — normalizarFicha não).
+    const ferida = tratandoOutro
+        ? Object.entries((todasAsFichasCache[fichaAlvoId] || {}).feridas || {}).map(([id, v]) => ({ id, ...v })).find(f => f.id === feridaId)
+        : feridasCache.find(f => f.id === feridaId);
+    if (!ferida) { toast("Essa ferida não existe mais.", "erro"); return; }
+
+    let modal = document.getElementById("modal-tratar-ferida");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-tratar-ferida";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    // Info do plano (seção 6, item 3): mostra quais das perícias aceitas
+    // pra ESSA ação você (fichaAtual) tem e em que nível — só informativo,
+    // já que tratarFerida() sempre usa a maior entre elas sozinho.
+    const periciasComNivel = config.pericias.map(nome => {
+        const entrada = Object.values(fichaAtual.pericias || {}).find(p => p.nome === nome);
+        return entrada ? `${nome} (nível ${Number(entrada.nivel) || 0})` : null;
+    }).filter(Boolean);
+    const infoPericias = periciasComNivel.length
+        ? `Suas perícias que servem pra isso: ${periciasComNivel.join(", ")}.`
+        : `Você não tem nenhuma das perícias aceitas (${config.pericias.join(" / ")}) — a rolagem conta como nível 0 nelas.`;
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">${escapeHtml(config.label)}${tratandoOutro ? ` — ${escapeHtml(nomeAlvo)}` : ""} — ${tituloTipoFerida(ferida.tipo)}${ferida.local ? ` (${tituloLocalFerida(ferida.local)})` : ""}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Itens sugeridos pelo manual: ${escapeHtml(config.itensSugeridos)}.</p>
+        <p class="hint">${escapeHtml(infoPericias)}</p>
+        <label style="display:block;margin-top:10px;">Item usado
+            <select id="ferida-situacao-item" style="width:100%;">
+                <option value="adequado">Item adequado (sem penalidade)</option>
+                <option value="improvisado">Item improvisado (-1)</option>
+                <option value="nenhum">Sem item (-2)</option>
+            </select>
+        </label>
+        <label style="display:block;margin-top:10px;">Dificuldade (${config.dificuldadeMin}-${config.dificuldadeMax})
+            <input type="number" id="ferida-dificuldade" value="${config.dificuldadeMin}" min="${config.dificuldadeMin}" max="${config.dificuldadeMax}" style="width:100%;">
+        </label>
+        <label style="display:block;margin-top:10px;">Bônus específico do item (ex: Kit de Sutura nível 3 = +2)
+            <input type="number" id="ferida-modificador-extra" value="0" style="width:100%;">
+        </label>
+        <button type="button" class="btn-lime" id="btn-rolar-tratamento-ferida" style="margin-top:14px;width:100%;">Rolar tratamento</button>
+    `;
+    const fechar = () => modal.remove();
+    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+    modal.querySelector("#btn-rolar-tratamento-ferida").addEventListener("click", async () => {
+        const situacaoItem = modal.querySelector("#ferida-situacao-item").value;
+        const dificuldadeEscolhida = Number(modal.querySelector("#ferida-dificuldade").value) || config.dificuldadeMin;
+        const modificadorExtra = Number(modal.querySelector("#ferida-modificador-extra").value) || 0;
+        const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
+        try {
+            const resultado = await tratarFerida(fichaAlvoId, feridaId, {
+                acao, tratadorPericias: fichaAtual.pericias, tratadorNome: nomeTratador,
+                situacaoItem, dificuldadeEscolhida, modificadorExtra
+            });
+            await registrarRolagem({
+                quem: tratandoOutro ? `${nomeTratador} (tratando ${nomeAlvo})` : nomeTratador,
+                modificador: resultado.nivelPericia + resultado.penalidadeItem + resultado.modificadorExtra,
+                resultado: resultado.resultado, detalhe: resultado.detalhe
+            });
+            toast(tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe, resultado.sucesso ? undefined : "erro");
+            fechar();
+        } catch (e) {
+            toast(e.message || "Falha ao tratar a ferida.", "erro");
+        }
+    });
+}
+
+// Modal "Testar Infecção" por ferida (Etapa 5 do plano): substitui o
+// antigo abrirModalTestarInfeccao (que rodava sobre um participante de
+// combate solto). Só o Mestre abre (ver botaoTestarInfeccao em
+// renderizarSaude), sempre sobre a ficha atualmente aberta na tela —
+// não tem seletor de paciente porque a aba Saúde já está mostrando a
+// ficha de um personagem específico. `testarInfeccaoFerida` (saude.js)
+// já aplica a dificuldade final (base - modificador de itens) e marca
+// infeccaoAtiva/infeccaoGarantida na ferida em caso de falha.
+function abrirModalTestarInfeccaoFerida(feridaId) {
+    const ferida = feridasCache.find(f => f.id === feridaId);
+    if (!ferida) { toast("Essa ferida não existe mais.", "erro"); return; }
+    const nomeFicha = fichaAtual?.dados?.nome || fichaAtualId;
+
+    let modal = document.getElementById("modal-testar-infeccao-ferida");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-testar-infeccao-ferida";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Infecção — ${escapeHtml(nomeFicha)} — ${tituloTipoFerida(ferida.tipo)}${ferida.local ? ` (${tituloLocalFerida(ferida.local)})` : ""}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Manual: dificuldade 18 fixa pra tratamento malfeito/ambiente sujo (não isolar o ferimento, mãos/equipamento não esterilizados); ${DIFICULDADE_INFECCAO_MINIMA} a ${DIFICULDADE_INFECCAO_MAXIMA} pra ferimento profundo/grave, mesmo com tratamento adequado — esse teste se repete uma vez por cena até receber tratamento médico. Itens como Soro Fisiológico reduzem a dificuldade em -2.</p>
+        <label style="display:block;margin-top:10px;">Dificuldade base (${DIFICULDADE_INFECCAO_MINIMA}-${DIFICULDADE_INFECCAO_MAXIMA})
+            <input type="number" id="ferida-infeccao-dificuldade" value="${DIFICULDADE_INFECCAO_MINIMA}" min="1" style="width:100%;">
+        </label>
+        <label style="display:block;margin-top:10px;">Modificador de itens/tratamento (ex: -2 com Soro Fisiológico)
+            <input type="number" id="ferida-infeccao-modificador" value="0" style="width:100%;">
+        </label>
+        <label style="display:block;margin-top:10px;">Origem / observação
+            <input type="text" id="ferida-infeccao-origem" placeholder="Ex: ferimento de bala no torso, tratado sem esterilizar" style="width:100%;">
+        </label>
+        <button type="button" class="btn-lime" id="btn-rolar-teste-infeccao-ferida" style="margin-top:14px;width:100%;">Rolar teste de Constituição</button>
+    `;
+    const fechar = () => modal.remove();
+    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+    modal.querySelector("#btn-rolar-teste-infeccao-ferida").addEventListener("click", async () => {
+        const dificuldadeBase = Number(modal.querySelector("#ferida-infeccao-dificuldade").value) || DIFICULDADE_INFECCAO_MINIMA;
+        const modificadorItens = Number(modal.querySelector("#ferida-infeccao-modificador").value) || 0;
+        const origem = modal.querySelector("#ferida-infeccao-origem").value.trim() || "Complicação de ferimento";
+        try {
+            const resultado = await testarInfeccaoFerida(fichaAtualId, feridaId, dificuldadeBase, modificadorItens, origem);
+            await registrarRolagem({ quem: nomeFicha, modificador: resultado.modConstituicao, resultado: resultado.resultado, detalhe: resultado.detalhe });
+            toast(resultado.detalhe, resultado.sucesso ? undefined : "erro");
+            fechar();
+        } catch (e) {
+            toast(e.message || "Falha ao testar infecção.", "erro");
+        }
+    });
+}
+
+// Modal "Tratar outro jogador" (Etapa 4 do plano): paciente -> ferida ->
+// ação, em cascata. A rolagem em si (item usado, dificuldade, bônus
+// extra) reaproveita abrirModalTratarFerida passando `alvo`, pra não
+// duplicar aquele formulário — só muda quem é o dono da ferida.
+function abrirModalTratarOutroJogador() {
+    const outras = Object.entries(todasAsFichasCache || {}).filter(([id]) => id !== fichaAtualId);
+    if (!outras.length) { toast("Não há outras fichas ativas na rede pra tratar.", "erro"); return; }
+
+    let modal = document.getElementById("modal-tratar-outro");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-tratar-outro";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const opcoesPaciente = outras
+        .sort(([, a], [, b]) => ((a.config && a.config.nomeExibicao) || "").localeCompare((b.config && b.config.nomeExibicao) || ""))
+        .map(([id, f]) => `<option value="${id}">${escapeHtml((f.config && f.config.nomeExibicao) || id)}</option>`)
+        .join("");
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Tratar outro jogador</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <label style="display:block;margin-top:10px;">Paciente
+            <select id="tratar-outro-paciente" style="width:100%;">
+                <option value="">Escolha…</option>
+                ${opcoesPaciente}
+            </select>
+        </label>
+        <div id="tratar-outro-corpo"></div>
+    `;
+    const fechar = () => modal.remove();
+    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+
+    const corpo = modal.querySelector("#tratar-outro-corpo");
+
+    function renderFerida() {
+        const pacienteId = modal.querySelector("#tratar-outro-paciente").value;
+        if (!pacienteId) { corpo.innerHTML = ""; return; }
+
+        const feridasPaciente = Object.entries((todasAsFichasCache[pacienteId] || {}).feridas || {})
+            .map(([id, v]) => ({ id, ...v }))
+            .filter(f => acoesDeTratamentoParaFerida(f).length); // só as que têm alguma ação disponível agora
+
+        if (!feridasPaciente.length) {
+            corpo.innerHTML = `<p class="hint" style="margin-top:10px;">Esse personagem não tem nenhuma ferida pendente de tratamento no momento.</p>`;
+            return;
+        }
+
+        const opcoesFerida = feridasPaciente.map(f =>
+            `<option value="${f.id}">${tituloTipoFerida(f.tipo)}${f.local ? ` — ${tituloLocalFerida(f.local)}` : ""} (${tituloEstadoFerida(f.estado)})</option>`
+        ).join("");
+
+        corpo.innerHTML = `
+            <label style="display:block;margin-top:10px;">Ferida
+                <select id="tratar-outro-ferida" style="width:100%;">${opcoesFerida}</select>
+            </label>
+            <div id="tratar-outro-acao"></div>
+        `;
+        const selectFerida = corpo.querySelector("#tratar-outro-ferida");
+        const areaAcao = corpo.querySelector("#tratar-outro-acao");
+
+        function renderAcao() {
+            const feridaId = selectFerida.value;
+            const ferida = feridasPaciente.find(f => f.id === feridaId);
+            const acoes = ferida ? acoesDeTratamentoParaFerida(ferida) : [];
+            if (!acoes.length) { areaAcao.innerHTML = ""; return; }
+
+            const opcoesAcao = acoes.map(a => `<option value="${a}">${escapeHtml(TRATAMENTOS_FERIDA[a].label)}</option>`).join("");
+            areaAcao.innerHTML = acoes.length > 1
+                ? `<label style="display:block;margin-top:10px;">Tratamento
+                       <select id="tratar-outro-acao-select" style="width:100%;">${opcoesAcao}</select>
+                   </label>
+                   <button type="button" class="btn-lime" id="btn-tratar-outro-continuar" style="margin-top:14px;width:100%;">Continuar</button>`
+                : `<button type="button" class="btn-lime" id="btn-tratar-outro-continuar" style="margin-top:14px;width:100%;">Continuar — ${escapeHtml(TRATAMENTOS_FERIDA[acoes[0]].label)}</button>`;
+
+            areaAcao.querySelector("#btn-tratar-outro-continuar").addEventListener("click", () => {
+                const acaoEscolhida = acoes.length > 1 ? areaAcao.querySelector("#tratar-outro-acao-select").value : acoes[0];
+                const nomePaciente = (todasAsFichasCache[pacienteId].config && todasAsFichasCache[pacienteId].config.nomeExibicao) || pacienteId;
+                fechar();
+                abrirModalTratarFerida(feridaId, acaoEscolhida, { fichaId: pacienteId, nome: nomePaciente });
+            });
+        }
+        selectFerida.addEventListener("change", renderAcao);
+        renderAcao();
+    }
+    modal.querySelector("#tratar-outro-paciente").addEventListener("change", renderFerida);
 }
 
 // Mostra o modal de Esquiva/Bloqueio pra quem RECEBEU o golpe (não pra
@@ -13202,23 +13781,25 @@ function montarGerenciadorCombate(corpoOriginal) {
             const badgeSaude = badgeEstadoSaudeCombate(p);
             const badgeEnergia = badgeEstadoEnergiaCombate(p);
             const badgeStatus = badgeStatusAtivosCombate(p);
-            // Infecção (Complicações de ferimentos — manual; ver
-            // aplicarInfeccao/testarInfeccao em mestre.js): flag
-            // persistente, igual Ossos Quebrados — botão "Tratar" some a
-            // qualquer momento (tratamento médico de verdade, fim de
-            // cena etc.). "Testar Infecção" fica sempre disponível (não
-            // depende de já estar infectado), pois o Mestre pode disparar
-            // esse teste sobre qualquer participante a qualquer momento.
+            // Infecção (Complicações de ferimentos — manual): flag
+            // persistente, agora derivada do sistema de feridas (ver
+            // sincronizarFlagInfeccaoAgregada em saude.js). Etapa 5 do
+            // plano: "Testar Infecção" e "Tratar" saíram daqui — a
+            // primeira mora na aba Saúde, vinculada à ferida específica
+            // (abrirModalTestarInfeccaoFerida em ficha.js); a segunda
+            // deixou de existir como ação solta (o que fecha a infecção
+            // agora é tratar a ferida em si, não um botão de limpar flag).
+            // O badge continua só como indicador visual pro Mestre
+            // acompanhar durante o combate, sem nenhuma ação vinculada.
             const badgeInfeccao = (p.infeccao && p.infeccao.ativo)
-                ? ` <span class="mod-pill negativo" title="Tempo de repouso necessário +50% até tratamento médico${p.infeccao.garantida ? " (infecção garantida)" : ""}${p.infeccao.origem ? ` — ${escapeHtml(p.infeccao.origem)}` : ""}">🦠 Infectado</span> <button type="button" class="btn-ghost btn-curar-infeccao" data-curar-infeccao="${pid}" style="padding:2px 6px;font-size:0.7rem;">Tratar</button>`
+                ? ` <span class="mod-pill negativo" title="Tempo de repouso necessário +50% até tratamento médico${p.infeccao.garantida ? " (infecção garantida)" : ""}${p.infeccao.origem ? ` — ${escapeHtml(p.infeccao.origem)}` : ""}">🦠 Infectado</span>`
                 : "";
-            const botaoTestarInfeccao = ` <button type="button" class="btn-ghost btn-testar-infeccao" data-testar-infeccao="${pid}" style="padding:2px 6px;font-size:0.7rem;" title="Teste de Constituição vs. Infecção (manual: Complicações de ferimentos)">🦠 Testar Infecção</button>`;
             const badgeIniciativaTravada = p.iniciativaTravada
                 ? ` <span class="mod-pill negativo" title="Tirou 1 no d20 da iniciativa — perde esse turno inteiro (0 ações). Ao encerrar o turno, rerrola automaticamente e reordena a fila.">🎲1 Perdeu o turno</span>`
                 : "";
             const acaoExtraCQCTexto = Number(p.acoesExtraCQCMax) > 0 ? ` <span title="CQC nível 5 (Agente Impossível) — ação extra só pra rolagens de CQC">🥋 ${p.acoesExtraCQC}/${p.acoesExtraCQCMax} ação CQC</span>` : "";
             linha.innerHTML = `
-                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeInfeccao}${botaoTestarInfeccao}${badgeIniciativaTravada}</span>
+                <span class="combate-nome">${escapeHtml(p.nome)}${badgeEsquiva}${badgeAcaoGuardada}${badgeContraAtaque}${badgeAgarrado}${badgeAlcance}${badgeDerrubado}${badgeImobilizado}${badgeDesacordado}${badgeOssosQuebrados}${botaoDispararAvancar}${badgeSaude}${badgeEnergia}${badgeStatus}${badgeInfeccao}${badgeIniciativaTravada}</span>
                 <span>Iniciativa ${p.iniciativa} (1d20:${p.rolagemBruta} + Agi ${p.modAgilidade}${p.bonusCQCIniciativa ? " + 1 CQC nível 2" : ""}${p.bonusCobraKaiIniciativa ? ` + ${p.bonusCobraKaiIniciativa} Cobra Kai` : ""})</span>
                 <span>${p.pv}/${p.pvMax} PV</span>
                 <span>${p.acoes}/${p.acoesMax} ações${acaoExtraCQCTexto}</span>
@@ -13256,21 +13837,6 @@ function montarGerenciadorCombate(corpoOriginal) {
                 btnCurarOssos.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     await curarOssosQuebrados(pid);
-                });
-            }
-            const btnCurarInfeccao = linha.querySelector("[data-curar-infeccao]");
-            if (btnCurarInfeccao) {
-                btnCurarInfeccao.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    await curarInfeccao(pid);
-                    toast(`${p.nome}: infecção tratada.`);
-                });
-            }
-            const btnTestarInfeccao = linha.querySelector("[data-testar-infeccao]");
-            if (btnTestarInfeccao) {
-                btnTestarInfeccao.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    abrirModalTestarInfeccao(pid, p.nome);
                 });
             }
             const btnDispararAvancar = linha.querySelector("[data-disparar-avancar-cqc]");
@@ -14139,7 +14705,7 @@ function renderEtapaRevisao() {
         <p class="hint">Função: <strong>${funcaoDe(c.funcaoEscolhida)?.label || "—"}</strong></p>
         <p class="hint">Atributos: ${ATRIBUTOS_PRIMARIOS.map(a => `${a.label} ${fichaAtual.dados[a.key] || 0}`).join(" · ")}</p>
         <p class="hint">Perícias: ${Object.values(fichaAtual.pericias).map(p => `${p.nome} ${p.nivel}`).join(" · ") || "nenhuma"}</p>
-        <p class="hint">Confira tudo. Depois de confirmar, a edição de atributos e perícias fica travada até o próximo Level Up ou Treinamento.</p>
+        <p class="hint">Confira tudo. Depois de confirmar, a edição de atributos e perícias fica travada até o próximo Level Up (o Treinamento aplica o ganho automaticamente, sem destravar a ficha).</p>
     `;
     el.criacaoCorpo.appendChild(resumo);
 

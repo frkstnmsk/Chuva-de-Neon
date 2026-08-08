@@ -31,6 +31,7 @@ export function normalizarFicha(raw) {
             maldade: dados.maldade ?? 0, remorso: dados.remorso ?? 0, status: dados.status ?? 0,
             dm: dados.dm ?? "", void: dados.void ?? "", p2k: dados.p2k ?? "",
             rabbithole: dados.rabbithole ?? "", p2c: dados.p2c ?? "", creators: dados.creators ?? "",
+            darkart: dados.darkart ?? "", blackprint: dados.blackprint ?? "",
             nivel: dados.nivel ?? 1, xp: dados.xp ?? 0,
             forca: dados.forca ?? 0, constituicao: dados.constituicao ?? 0, destreza: dados.destreza ?? 0,
             sabedoria: dados.sabedoria ?? 0, inteligencia: dados.inteligencia ?? 0,
@@ -47,7 +48,18 @@ export function normalizarFicha(raw) {
             // dava pra saber quantos Domingos em aberto ainda faltavam
             // pagar depois de um Timeskip com mais de um Domingo.
             custoVidaPagos: dados.custoVidaPagos || {},
-            criacaoConcluida: dados.criacaoConcluida ?? false
+            criacaoConcluida: dados.criacaoConcluida ?? false,
+            // Estes quatro campos ficavam de fora da lista e eram apagados
+            // da ficha em memória a cada sincronização em tempo real (e,
+            // se alguém clicasse em "Salvar" nesse meio-tempo, apagados do
+            // banco também) — quebrando o multiplicador de infecção na
+            // Recuperação de PVs e os overrides manuais de PV/Energia
+            // máximo do Godmode. Ver renderizarRecuperacaoPV/maximoComOverride
+            // em ficha.js.
+            recuperacaoPV: dados.recuperacaoPV || null,
+            infeccao: dados.infeccao || null,
+            pvMaximoOverride: dados.pvMaximoOverride ?? null,
+            energiaMaximoOverride: dados.energiaMaximoOverride ?? null
         },
         saldos: normalizarSaldos(raw.saldos, dados),
         pericias: normalizarPericias(raw.pericias || {}),
@@ -91,6 +103,10 @@ export function normalizarFicha(raw) {
         // plano-veiculos.txt): só os 5 atributos com escala fixa. Ver
         // normalizarVeiculos abaixo.
         veiculos: normalizarVeiculos(raw.veiculos),
+        // Credenciais da Dark Net (texto livre por site) — ver
+        // credenciaisDoSite/renderizarCredenciaisDarknet em ficha.js.
+        // Aceita só objeto; qualquer coisa fora do formato vira {}.
+        darknetCredenciais: normalizarDarknetCredenciais(raw.darknetCredenciais),
         notas: raw.notas || ""
     };
     // Sistema de Slots de Porte (Fase 8): migra containers antigos pro
@@ -108,6 +124,21 @@ export function normalizarFicha(raw) {
 // strings; fichas já migradas (raw já é array) passam direto, e o
 // texto livre antigo é quebrado por linha, descartando a numeração
 // manual que o próprio jogador digitava.
+// Credenciais da Dark Net: objeto { [siteId]: string[] }. Realtime
+// Database pode entregar `null`/tipos inesperados se o nó nunca foi
+// escrito ou foi corrompido manualmente — aqui filtramos pra garantir
+// sempre um objeto de arrays de string, nunca quebrando o render.
+function normalizarDarknetCredenciais(raw) {
+    const saida = {};
+    if (!raw || typeof raw !== "object") return saida;
+    for (const [siteId, lista] of Object.entries(raw)) {
+        if (Array.isArray(lista)) {
+            saida[siteId] = lista.map(v => (typeof v === "string" ? v : String(v ?? "")));
+        }
+    }
+    return saida;
+}
+
 function normalizarDeterminacoes(raw) {
     if (Array.isArray(raw)) return raw;
     if (typeof raw === "string" && raw.trim()) {
@@ -436,6 +467,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
             nome: nomeExibicao, vulgo: "", idade: "", nacionalidade: "", funcao: "",
             maldade: 0, remorso: 0, status: 0,
             dm: "", void: "", p2k: "", rabbithole: "", p2c: "", creators: "",
+            darkart: "", blackprint: "",
             nivel: 1, xp: 0,
             forca: 0, constituicao: 0, destreza: 0, sabedoria: 0,
             inteligencia: 0, raciocinio: 0, carisma: 0, manipulacao: 0,
@@ -446,7 +478,11 @@ export function fichaVaziaPadrao(nomeExibicao) {
             ganhoFixo: 0,
             ultimoPagamentoCustoVida: 0,
             custoVidaPagos: {},
-            criacaoConcluida: false
+            criacaoConcluida: false,
+            recuperacaoPV: null,
+            infeccao: null,
+            pvMaximoOverride: null,
+            energiaMaximoOverride: null
         },
         saldos: {
             sujo: { nome: "Dinheiro sujo em casa", valor: 0, fixo: true },
@@ -475,6 +511,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         determinacoes: [],
         determinacoesValidadas: [],
         veiculos: {},
+        darknetCredenciais: {},
         notas: ""
     };
 }
@@ -531,6 +568,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
             nacionalidade: "", funcao: npc.funcaoNarrativa ?? "",
             maldade: 0, remorso: 0, status: 0,
             dm: "", void: "", p2k: "", rabbithole: "", p2c: "", creators: "",
+            darkart: "", blackprint: "",
             nivel: 1, xp: 0,
             forca: ap.forca ?? 0, constituicao: ap.constituicao ?? 0, destreza: ap.destreza ?? 0,
             sabedoria: ap.sabedoria ?? 0, inteligencia: ap.inteligencia ?? 0,
@@ -539,7 +577,11 @@ export function normalizarNpcComoFicha(npcId, raw) {
             mortoDeVez: npc.mortoDeVez ?? false,
             pvBonusExtra: 0,
             padraoDeVida: "", ganhoFixo: 0, ultimoPagamentoCustoVida: 0,
-            criacaoConcluida: true
+            criacaoConcluida: true,
+            recuperacaoPV: npc.recuperacaoPV || null,
+            infeccao: npc.infeccao || null,
+            pvMaximoOverride: npc.pvMaximoOverride ?? null,
+            energiaMaximoOverride: npc.energiaMaximoOverride ?? null
         },
         saldos: {},
         pericias,

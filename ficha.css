@@ -514,6 +514,61 @@
     margin-top: 4px;
 }
 
+/* ---------- Dark Net (uma caixa por site do manual) ---------- */
+.darknet-credencial-adicionar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+}
+.darknet-credencial-adicionar select {
+    min-width: 160px;
+}
+.darknet-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+.darknet-site {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+}
+.darknet-site-header {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--neon-lime);
+}
+.darknet-credenciais-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.darknet-credencial-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.darknet-credencial-item input {
+    flex: 1;
+}
+.darknet-credencial-remover {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.darknet-credenciais-vazio {
+    font-style: italic;
+}
+
 /* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
 .determinacoes-rolagem {
     display: flex;
@@ -904,10 +959,15 @@
     border: none;
     color: var(--neon-blue);
     cursor: pointer;
-    font-size: 0.75rem;
-    padding: 0 2px;
+    font-size: 1.3rem;
+    padding: 4px 8px;
     line-height: 1;
     vertical-align: middle;
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .btn-toggle-container:hover { color: var(--neon-lime); }
 .entity-list-nested {
@@ -2105,3 +2165,38 @@ select.select-guardar-dentro {
     padding: 10px 16px;
     box-shadow: 0 0 14px rgba(239, 68, 68, 0.45);
 }
+
+/* ---------- Saúde (aba "Saúde" — feridas persistentes, ver
+   plano-sistema-saude-ferimentos.txt) ---------- */
+.ferida-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-left: 3px solid var(--neon-red);
+    border-radius: 2px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+}
+.ferida-topo {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.ferida-tipo {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+.ferida-acoes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+.ferida-historico {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+.ferida-historico summary { cursor: pointer; }
+.ferida-historico ul { margin: 6px 0 0; padding-left: 18px; }

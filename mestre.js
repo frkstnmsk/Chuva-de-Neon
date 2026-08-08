@@ -21,6 +21,7 @@ import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer } from "./dados-manual.js";
 import { itemCabeNoContainer } from "./inventario.js";
+import { criarFerida } from "./saude.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
@@ -1753,13 +1754,26 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // base (dificuldade 19 no total).
     let notaSangramento = "";
     let notaEfeitoLocal = "";
+    // Feridas persistentes (ver plano-sistema-saude-ferimentos.txt) — só
+    // pra fichas de JOGADOR nesta fase. Tiro nunca passa por este
+    // caminho de reação (ver comentário acima), então só existe o
+    // branch de sangramento corpo a corpo aqui (sem "projétil alojado",
+    // que é exclusivo de tiro — ver o caminho direto em ficha.js).
+    const criaFeridaHabilitado = danoParaAplicar > 0 && r.alvoTipo === "ficha";
+    const localFerida = (r.localMiraKey && r.localMiraKey !== "padrao") ? r.localMiraKey : "torso";
     if (danoParaAplicar > 0 && r.localMiraKey && r.localMiraKey !== "padrao") {
         if (ehDanoPerfurante(r.tipoDanoKey) && r.regraSangramentoLocal) {
             const resultadoSangramento = await testarSangramento(r.participanteId, r.constituicaoAlvo, r.nivelArma, danoParaAplicar, r.regraSangramentoLocal);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
+            if (criaFeridaHabilitado && resultadoSangramento && resultadoSangramento.sangramento) {
+                await criarFerida(r.alvoRefId, { tipo: "sangramento", local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+            }
         }
         if (ehDanoCortante(r.tipoDanoKey)) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${r.localMiraLabel || "local específico"}: aplica-se a regra de Amputação (resolva com o Mestre).`;
+            if (criaFeridaHabilitado) {
+                await criarFerida(r.alvoRefId, { tipo: "corte", local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+            }
         }
         if (ehDanoContundente(r.tipoDanoKey) && r.localMiraKey === "cabeca") {
             notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;

@@ -1059,3 +1059,114 @@ export function diasParaProximaManutencaoVeiculo(tipoVeiculo) {
     const periodicidade = periodicidadeManutencaoVeiculo(tipoVeiculo);
     return DIAS_POR_PERIODICIDADE_MANUTENCAO[periodicidade] || DIAS_POR_PERIODICIDADE_MANUTENCAO.mensal;
 }
+
+// =====================================================================
+// SAÚDE — Ferimentos (ver plano-sistema-saude-ferimentos.txt)
+// =====================================================================
+// Regras puras (dificuldades, perícias aceitas, penalidade de item) do
+// sistema de feridas persistentes. A orquestração de leitura/escrita no
+// Firebase (criar ferida, aplicar tratamento, sincronizar a flag
+// agregada de infecção) fica em saude.js — aqui só ficam os números e
+// tabelas que vêm direto do manual, igual ao resto deste arquivo.
+//
+// Cada ação de tratamento tem uma FAIXA de dificuldade no manual (ex:
+// Suturar Ferimento: 14 corte simples a 18 corte profundo/área de
+// movimento) — quem está tratando escolhe o valor dentro da faixa
+// conforme a gravidade narrativa do ferimento, igual já acontece hoje
+// no modal de Testar Infecção (dificuldadeInfeccao acima).
+// ---------------------------------------------------------------------
+
+// Tipos de ferida possíveis (criados automaticamente pelo golpe, ou
+// lançados manualmente pelo Mestre no caso de fratura/queimadura — o
+// manual não dá uma fórmula de "dano X vira fratura/queimadura").
+export const TIPOS_FERIDA = ["sangramento", "corte", "projetil", "fratura", "queimadura"];
+
+// Ações de tratamento disponíveis, cada uma associada ao(s) tipo(s) de
+// ferida em que se aplica, à(s) perícia(s) que servem pra rolar o
+// teste, e à faixa de dificuldade do manual.
+export const TRATAMENTOS_FERIDA = {
+    estancar_sangramento: {
+        label: "Estancar Sangramento (Estabilização)",
+        tiposFerida: ["sangramento"],
+        pericias: ["Primeiros Socorros", "Medicina"],
+        dificuldadeMin: 12,
+        dificuldadeMax: 18,
+        itensSugeridos: "Atadura, pano limpo, ou Kit de Primeiros Socorros",
+        efeitoSucesso: "estancada"
+    },
+    remover_projetil: {
+        label: "Remover Projétil",
+        tiposFerida: ["projetil"],
+        pericias: ["Medicina", "Cirurgia"],
+        dificuldadeMin: 15,
+        dificuldadeMax: 20,
+        itensSugeridos: "Pinça esterilizada, bisturi, ou Kit Cirúrgico (nível 3+)",
+        efeitoSucesso: "sem_sangramento"
+    },
+    suturar_ferimento: {
+        label: "Suturar Ferimento (Fechar)",
+        // Corte fecha direto; sangramento pode suturar de "aberta" ou
+        // já "estancada"; projétil só depois de "sem_sangramento"
+        // (projétil já removido) — ver feridaAceitaSutura abaixo.
+        tiposFerida: ["corte", "sangramento", "projetil"],
+        pericias: ["Primeiros Socorros", "Medicina"],
+        dificuldadeMin: 14,
+        dificuldadeMax: 18,
+        itensSugeridos: "Agulha cirúrgica, fio cirúrgico, ou Kit de Sutura",
+        efeitoSucesso: "tratada"
+    },
+    tratar_fratura: {
+        label: "Tratar Fratura",
+        tiposFerida: ["fratura"],
+        pericias: ["Medicina"],
+        dificuldadeMin: 16,
+        dificuldadeMax: 22,
+        itensSugeridos: "Talas, ataduras, gesso, ou Kit de Imobilização",
+        efeitoSucesso: "tratada"
+    },
+    tratar_queimadura: {
+        label: "Tratar Queimadura",
+        tiposFerida: ["queimadura"],
+        pericias: ["Primeiros Socorros"],
+        dificuldadeMin: 12,
+        dificuldadeMax: 20,
+        itensSugeridos: "Soro fisiológico, pomada (queimadura), gaze não aderente",
+        efeitoSucesso: "tratada"
+    }
+};
+
+// Suturar é permitido em: ferida "corte" direto ("aberta"); ferida
+// "sangramento" tanto "aberta" quanto já "estancada" (plano, seção 3 —
+// os dois caminhos levam a "tratada"); ou "projetil" já com estado
+// "sem_sangramento" (projétil removido primeiro) — ver
+// plano-sistema-saude-ferimentos.txt, seção 3.
+export function feridaAceitaSutura(ferida) {
+    if (!ferida) return false;
+    if (ferida.tipo === "corte") return ferida.estado === "aberta";
+    if (ferida.tipo === "sangramento") return ferida.estado === "aberta" || ferida.estado === "estancada";
+    if (ferida.tipo === "projetil") return ferida.estado === "sem_sangramento";
+    return false;
+}
+
+// Situação do item usado no tratamento (decisão da mesa, ver plano):
+// item adequado (o que o manual pede) não penaliza e ainda pode ganhar
+// bônus específico do item (preenchido à mão pelo tratador, igual ao
+// campo de modificador livre já usado em Testar Infecção); item
+// improvisado (serve, mas não é o ideal) penaliza -1; sem item nenhum
+// penaliza -2.
+export const PENALIDADE_ITEM_TRATAMENTO = {
+    adequado: 0,
+    improvisado: -1,
+    nenhum: -2
+};
+
+export function modificadorPorSituacaoItem(situacao) {
+    return PENALIDADE_ITEM_TRATAMENTO[situacao] ?? 0;
+}
+
+// Uma ferida só é considerada FECHADA (não bloqueia mais recuperação de
+// PV) quando seu estado chega em "tratada" — ver bloqueio no painel de
+// Recuperação de PVs (ficha.js).
+export function feridaEstaFechada(ferida) {
+    return !!ferida && ferida.estado === "tratada";
+}
