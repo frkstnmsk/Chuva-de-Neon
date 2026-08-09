@@ -473,6 +473,68 @@ export function calcularEstadoSaude(pvAtual, pvMaximo, temTolerancia = false, ig
 }
 
 // ---------------------------------------------------------------------
+// Desmaio Genérico (item 4 do plano de saúde/complicações): gatilho pra
+// virar Ação Pendente pro Mestre quando um golpe único é grande E a
+// ficha já está machucada DEPOIS de levar esse golpe. Não decide nada
+// sozinha — só sinaliza a condição; quem confirma/rejeita é sempre o
+// Mestre (ver criarAcaoPendente "confirmar_desmaio" em mestre.js).
+export function deveConfirmarDesmaio(danoFinal, novoPv, pvMaximo, temTolerancia = false) {
+    const max = Number(pvMaximo) || 0;
+    if (max <= 0) return false;
+    if ((Number(danoFinal) || 0) < max / 5) return false;
+    const estado = calcularEstadoSaude(novoPv, max, temTolerancia, false);
+    return estado.estado === "machucado" || estado.estado === "muito_machucado";
+}
+
+// ---------------------------------------------------------------------
+// Amputação por Limiar de Dano (item 5 do plano de saúde/complicações):
+// dois limiares de dano ÚNICO, independentes de golpe mirado (que já
+// tem sua própria regra obrigatória — ver notaEfeitoLocal em mestre.js
+// — as duas podem coexistir/dobrar no mesmo golpe). Só acha o limiar
+// batido; não decide NADA sozinha — quem confirma/valida é sempre o
+// Mestre (ver criarAcaoPendente "confirmar_amputacao" em mestre.js), já
+// que a ficha não tem hoje um sistema de "membros" pra remover
+// automaticamente.
+export function limiarAmputacaoPorDano(danoFinal, pvMaximo) {
+    const max = Number(pvMaximo) || 0;
+    const dano = Number(danoFinal) || 0;
+    if (max <= 0 || dano <= 0) return null;
+    if (dano >= max / 5) return "membro";
+    if (dano >= max / 10) return "dedo_orelha";
+    return null;
+}
+
+// ---------------------------------------------------------------------
+// Dilaceração (item 7 do plano de saúde/complicações): decide se ESSE
+// golpe específico dilacera. Três fontes independentes (manual):
+//   a) dano de EXPLOSÃO ≥ metade do PV total do alvo — automático por
+//      tipo de dano, não depende de checkbox nenhum;
+//   b) arma (fogo OU branca) marcada `dilacera: true` + ACERTO
+//      CRÍTICO;
+//   c) arma BRANCA marcada `dilacera: true` E
+//      `dilaceraEmGolpeNormal: true` — dilacera em qualquer acerto,
+//      não só crítico.
+// ---------------------------------------------------------------------
+export function golpeDilacera({ ehExplosao = false, danoFinal = 0, pvMaximo = 0, dilacera = false, dilaceraEmGolpeNormal = false, criticoPositivo = false, ehArmaBranca = false } = {}) {
+    if (ehExplosao) {
+        const max = Number(pvMaximo) || 0;
+        return max > 0 && (Number(danoFinal) || 0) >= max / 2;
+    }
+    if (!dilacera) return false;
+    if (criticoPositivo) return true;
+    return ehArmaBranca && dilaceraEmGolpeNormal;
+}
+
+// Sangramento Profundo (item 7): só roda se o golpe dilacerou (ver
+// golpeDilacera acima) E o dano final bateu 1/3 do PV total do alvo —
+// dif e dano ficam a cargo de testarSangramentoProfundo em mestre.js.
+export function deveTestarSangramentoProfundo(dilacerou, danoFinal, pvMaximo) {
+    const max = Number(pvMaximo) || 0;
+    if (!dilacerou || max <= 0) return false;
+    return (Number(danoFinal) || 0) >= max / 3;
+}
+
+// ---------------------------------------------------------------------
 // Recuperação de PVs (manual, seção "Saúde e PVs").
 //
 // O tempo de recuperação NÃO é fixo por PV perdido — é proporcional à
@@ -1132,6 +1194,24 @@ export const TRATAMENTOS_FERIDA = {
         dificuldadeMax: 20,
         itensSugeridos: "Soro fisiológico, pomada (queimadura), gaze não aderente",
         efeitoSucesso: "tratada"
+    },
+    // Cirurgia de Campo (Emergência) — item 8 do plano de saúde/
+    // complicações: diferente das outras 5 ações, o SUCESSO não tem um
+    // efeito fixo predefinido pro estado da ferida (efeitoSucesso: null
+    // — tratado como caso especial em saude.js, que NÃO sobrescreve
+    // atualizacoesFerida.estado sozinho). O Mestre lê o histórico e, se
+    // fizer sentido na cena, aplica manualmente em Godmode (reverter
+    // coma, estabilizar, etc.). Disponível pra qualquer tipo de ferida
+    // ainda "aberta" (é uma medida de emergência, não amarrada a um
+    // tipo específico de ferimento).
+    cirurgia_de_campo: {
+        label: "Cirurgia de Campo (Emergência)",
+        tiposFerida: ["sangramento", "corte", "projetil", "fratura", "queimadura"],
+        pericias: ["Cirurgia"],
+        dificuldadeMin: 20,
+        dificuldadeMax: 25,
+        itensSugeridos: "Kit Cirúrgico completo, ambiente estéril improvisado",
+        efeitoSucesso: null
     }
 };
 
@@ -1164,9 +1244,114 @@ export function modificadorPorSituacaoItem(situacao) {
     return PENALIDADE_ITEM_TRATAMENTO[situacao] ?? 0;
 }
 
+// ---------------------------------------------------------------------
+// Tratamento em hospital (item 3 do plano de saúde/complicações):
+// reduz em 1/10 o tempo de recuperação de PV da FICHA INTEIRA
+// (diasNecessarios), não só o risco de infecção da ferida tratada.
+// Sinal armazenado como flag simples em fichas/{id}/dados/tratamentoHospital
+// (ver tratarFerida em saude.js) — não empilha, um novo tratamento em
+// hospital só sobrescreve o anterior. Aplicado DEPOIS do arredondamento
+// de calcularTempoRecuperacaoPV (é um desconto "em cima" do valor já
+// calculado, não parte da fórmula base como o +50% de infecção).
+// ---------------------------------------------------------------------
+export function aplicarReducaoTratamentoHospital(diasNecessarios, tratadoEmHospital) {
+    const dias = Number(diasNecessarios) || 0;
+    if (!tratadoEmHospital || dias <= 0) return dias;
+    return Math.max(0, Math.floor(dias - dias / 10));
+}
+
+// ---------------------------------------------------------------------
+// Dano por margem de falha em teste de tratamento (manual, "Regras
+// gerais de tratamento"): em QUALQUER falha (não só falha com
+// complicação), o paciente perde 5 PVs para cada ponto que o
+// resultado ficou abaixo da dificuldade. É a perda BASE de toda falha
+// — a falha com complicação (d20 bruto 1-3, ver o teste `bruto <= 3`
+// em tratarFerida, saude.js) soma efeitos adicionais específicos da
+// ação EM CIMA desse valor, não substitui.
+// Exemplo: dificuldade 18, resultado 15 -> 3 pontos abaixo -> 15 PVs.
+// Sucesso (resultado >= dificuldade) não perde nada (retorna 0).
+// ---------------------------------------------------------------------
+export function danoPorMargemFalha(resultado, dificuldade) {
+    const margem = (Number(dificuldade) || 0) - (Number(resultado) || 0);
+    if (margem <= 0) return 0;
+    return margem * 5;
+}
+
 // Uma ferida só é considerada FECHADA (não bloqueia mais recuperação de
 // PV) quando seu estado chega em "tratada" — ver bloqueio no painel de
 // Recuperação de PVs (ficha.js).
 export function feridaEstaFechada(ferida) {
     return !!ferida && ferida.estado === "tratada";
+}
+
+// ---------------------------------------------------------------------
+// Ferida por dano (regra de mesa, independente de Golpe Mirado): todo
+// golpe que causa MAIS QUE 1/10 do PV MÁXIMO do alvo tem uma chance de
+// abrir uma ferida persistente (corte/perfuração vira ferida "corte",
+// contusão vira ferida "fratura" — quem decide o tipo é quem chama
+// essa função, com base no tipo de dano; ver uso em mestre.js/ficha.js).
+// Chance BASE de 20% assim que o dano ultrapassa esse mínimo de 1/10;
+// pra cada 1/10 ADICIONAL de dano além do mínimo requerido, a chance
+// sobe mais 20% (sempre limitada a 100%). Exemplos com PV máximo 100
+// (mínimo = 10):
+//   dano 11-19  -> 0 "décimos extras"  -> 20% de chance
+//   dano 20-29  -> 1 "décimo extra"    -> 40% de chance
+//   dano 30-39  -> 2 "décimos extras"  -> 60% de chance
+//   dano >= 50  -> 4+ "décimos extras" -> 100% de chance (limite)
+// Dano igual ou menor que o mínimo não tem chance nenhuma (retorna 0).
+// ---------------------------------------------------------------------
+export function chanceFeridaPorDano(danoFinal, pvMaximo) {
+    const minimo = (Number(pvMaximo) || 0) / 10;
+    const dano = Number(danoFinal) || 0;
+    if (minimo <= 0 || dano <= minimo) return 0;
+    const decimosExtras = Math.floor(dano / minimo) - 1;
+    return Math.min(100, 20 + Math.max(0, decimosExtras) * 20);
+}
+
+// ---------------------------------------------------------------------
+// Redução do Dano por Colete x Calibre (manual pg. 53, "Proteção
+// Balística" > "Redução do dano") — passo 2 do plano
+// (plano-reducao-dano-colete.txt). Duas funções pequenas, porque o
+// multiplicador entra POR ITEM (cada peça de armadura pode ter sua
+// própria classeProtecao, dentro do loop que soma reducoesDano em
+// mestre.js) e o piso de dano mínimo entra UMA VEZ só, em cima do
+// total já somado — ver Passo 3 (mestre.js/aplicarDano).
+//
+// 1) Multiplicador da redução DE UM ITEM, pela diferença de classe
+//    (ver diferencaClasseCalibreVsColete em dados-manual.js):
+//      diferencaClasse == null -> 1  (sem classe pra comparar; mantém
+//                                      o comportamento de sempre, sem
+//                                      essa regra nova)
+//      diferencaClasse <= 0    -> 1  (calibre igual/inferior à classe)
+//      diferencaClasse == 1    -> 0.5 (calibre uma classe acima)
+//      diferencaClasse >= 2    -> 0  (duas classes acima ou mais —
+//                                      o tiro atravessa liso)
+// ---------------------------------------------------------------------
+export function multiplicadorReducaoPorClasse(diferencaClasse) {
+    if (diferencaClasse === null || diferencaClasse === undefined) return 1;
+    if (diferencaClasse <= 0) return 1;
+    if (diferencaClasse === 1) return 0.5;
+    return 0;
+}
+
+// 2) Piso de dano mínimo contundente, aplicado UMA VEZ sobre o total
+//    já reduzido (soma de todos os itens de armadura que cobrem o
+//    local, cada um já com seu próprio multiplicador aplicado — ver
+//    função acima). Só existe quando ALGUM item efetivamente freou o
+//    tiro, nem que seja em parte (coleteFreouAlgumaParte = alguma
+//    peça teve multiplicador > 0 nesse acerto — ver Passo 3). Se
+//    nenhuma peça freou nada (ou não havia colete no local, ou todas
+//    tiveram multiplicador 0), o dano segue 100% Perfuração Especial,
+//    sem piso — não existe "impacto" pra virar contundente.
+export function aplicarPisoDanoContundenteColete({ danoOriginal, danoAposReducao, coleteFreouAlgumaParte }) {
+    const original = Number(danoOriginal) || 0;
+    const reduzido = Math.max(0, Number(danoAposReducao) || 0);
+    if (!coleteFreouAlgumaParte) {
+        return { danoFinal: original, tipoDanoFinal: "perfuracao_especial", pisoAplicado: false };
+    }
+    const pisoContundente = Math.floor(original / 4);
+    if (pisoContundente > reduzido) {
+        return { danoFinal: pisoContundente, tipoDanoFinal: "contusao", pisoAplicado: true };
+    }
+    return { danoFinal: reduzido, tipoDanoFinal: "perfuracao_especial", pisoAplicado: false };
 }

@@ -58,6 +58,24 @@ export function normalizarFicha(raw) {
             // em ficha.js.
             recuperacaoPV: dados.recuperacaoPV || null,
             infeccao: dados.infeccao || null,
+            // Item 3 do plano de saúde/complicações: flag simples de
+            // tratamento em hospital bem-sucedido, ainda não consumido por
+            // uma recuperação de PV aprovada (ver marcarTratamentoHospital
+            // em saude.js e confirmarAcaoPendente "iniciar_recuperacao_pv"
+            // em mestre.js).
+            tratamentoHospital: dados.tratamentoHospital ?? false,
+            // Item 6 do plano (Coma): coma.ativo = flag de entrada
+            // (confirmarAcaoPendente "confirmar_coma", mestre.js) e
+            // saiuDoComaPendente = flag de saída consumida na PRÓXIMA
+            // recuperação de PV (dobra diasNecessarios — ver
+            // reverterComaGodmode e confirmarAcaoPendente
+            // "iniciar_recuperacao_pv" em mestre.js).
+            coma: dados.coma || null,
+            saiuDoComaPendente: dados.saiuDoComaPendente ?? false,
+            // Item 4 (Desmaio Genérico) — badge/aviso simples, sem efeito
+            // mecânico; "acordar" é sempre manual (ver acordarDesmaioGodmode
+            // em mestre.js).
+            desmaiado: dados.desmaiado ?? false,
             pvMaximoOverride: dados.pvMaximoOverride ?? null,
             energiaMaximoOverride: dados.energiaMaximoOverride ?? null
         },
@@ -372,7 +390,10 @@ export function normalizarInventario(lista) {
             // ver ehArma em itemEhEquipavel, inventario.js), qualquer
             // outro item pode ser marcado como tal no modal do item.
             equipavel: it.equipavel ?? false,
-            arma: it.arma || null,
+            // arma.dilacera/dilaceraEmGolpeNormal (item 7 do plano de
+            // saúde/complicações): default false pra itens/armas
+            // antigos que ainda não têm esses dois campos.
+            arma: it.arma ? { ...it.arma, dilacera: it.arma.dilacera ?? false, dilaceraEmGolpeNormal: it.arma.dilaceraEmGolpeNormal ?? false } : null,
             periciaUso: it.periciaUso || null,
             // Carteira digital (Eletrônico ou Dinheiro físico — ver
             // ehTagQuePodeSerSaldo em dados-manual.js): saldoValor só
@@ -481,6 +502,10 @@ export function fichaVaziaPadrao(nomeExibicao) {
             criacaoConcluida: false,
             recuperacaoPV: null,
             infeccao: null,
+            tratamentoHospital: false,
+            coma: null,
+            saiuDoComaPendente: false,
+            desmaiado: false,
             pvMaximoOverride: null,
             energiaMaximoOverride: null
         },

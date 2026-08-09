@@ -18,9 +18,10 @@ import { caminhoMesa } from "./mesa.js";
 import { normalizarFicha } from "./normalizacao.js";
 import {
     rolarD20, coletarModificadores, calcularDificuldadeDefesaJogador,
-    TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem
+    TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem,
+    danoPorMargemFalha
 } from "./regras.js";
-import { aplicarDano } from "./mestre.js";
+import { aplicarDano, criarAcaoPendente } from "./mestre.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (mesmo helper que já existe, sem exportar, dentro de mestre.js —
@@ -119,6 +120,16 @@ export async function sincronizarFlagInfeccaoAgregada(fichaId) {
     await set(ref(db, caminho), { ativo: true, garantida, origem: origens });
 }
 
+// Item 3 do plano (Tier "Tratamento em hospital"): flag simples na
+// ficha inteira (não conta nem empilha — um novo tratamento em
+// hospital bem-sucedido só sobrescreve/reafirma o anterior). Consumida
+// e limpa em confirmarAcaoPendente "iniciar_recuperacao_pv" (mestre.js)
+// na hora em que o Mestre aprova a recuperação de PV, já com o -1/10
+// aplicado (ver aplicarReducaoTratamentoHospital em regras.js).
+async function marcarTratamentoHospital(fichaId) {
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { tratamentoHospital: true });
+}
+
 // Marca infecção GARANTIDA numa ferida específica, sem rolar teste —
 // caso do manual: falha com complicação em Remover Projétil.
 async function marcarInfeccaoGarantida(fichaId, feridaId) {
@@ -180,10 +191,14 @@ async function registrarHistorico(fichaId, feridaId, { acao, quem, resultado }) 
 // escolhido por quem está tratando conforme a gravidade narrativa.
 // `modificadorExtra`: bônus manual do item específico usado (ex: Kit de
 // Sutura nível 3 = +2), preenchido à mão por quem está tratando.
+// `godmode`: atalho exclusivo do Mestre (checado por quem chama, ver
+// abrirModalTratarFerida em ficha.js — aqui a função só confia no que
+// recebeu) — quando true, pula rolagem, perícia e item por completo e
+// aplica o sucesso da ação direto, sem chance de complicação.
 // ---------------------------------------------------------------------
 export async function tratarFerida(fichaId, feridaId, {
     acao, tratadorPericias, tratadorNome, situacaoItem = "nenhum",
-    dificuldadeEscolhida, modificadorExtra = 0
+    dificuldadeEscolhida, modificadorExtra = 0, godmode = false, emHospital = false
 }) {
     const config = TRATAMENTOS_FERIDA[acao];
     if (!config) throw new Error(`Ação de tratamento desconhecida: ${acao}`);
@@ -195,6 +210,32 @@ export async function tratarFerida(fichaId, feridaId, {
     }
     if (acao === "suturar_ferimento" && !feridaAceitaSutura(ferida)) {
         throw new Error("Esse ferimento ainda não pode ser suturado (projétil precisa ser removido antes).");
+    }
+
+    // Godmode: sucesso automático, sem teste nem item — encerra a
+    // função aqui, antes de rolar dado, calcular perícia ou penalidade
+    // de item (nada disso importa nesse caminho).
+    if (godmode) {
+        // Cirurgia de Campo não tem efeito fixo de sucesso (efeitoSucesso
+        // é null) — mesmo em Godmode, não mexe no estado da ferida.
+        const ehCirurgiaDeCampo = acao === "cirurgia_de_campo";
+        const atualizacoesGodmode = ehCirurgiaDeCampo ? {} : { estado: config.efeitoSucesso };
+        const detalheGodmode = ehCirurgiaDeCampo
+            ? `${config.label}: sucesso automático pelo Mestre (Godmode) — aplique manualmente o que fizer sentido na cena (reverter coma, estabilizar, etc.).`
+            : `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item.`;
+        if (Object.keys(atualizacoesGodmode).length) {
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesGodmode);
+        }
+        await registrarHistorico(fichaId, feridaId, { acao: config.label, quem: tratadorNome, resultado: detalheGodmode });
+        if (emHospital) {
+            await marcarTratamentoHospital(fichaId);
+        }
+        return {
+            acao, dificuldade: null, bruto: null, nivelPericia: null, penalidadeItem: null, modificadorExtra: null,
+            resultado: null, sucesso: true, complicacao: false, danoExtra: null, detalhe: detalheGodmode,
+            novoEstado: atualizacoesGodmode.estado || ferida.estado, godmode: true,
+            tratamentoHospitalRegistrado: emHospital
+        };
     }
 
     // Maior nível entre as perícias aceitas pra essa ação (ex: Suturar
@@ -215,42 +256,88 @@ export async function tratarFerida(fichaId, feridaId, {
     const complicacao = !sucesso && bruto <= 3;
 
     const atualizacoesFerida = {};
+    let danoMargem = 0;
+    let danoComplicacao = 0;
     let danoExtra = null;
     let detalheExtra = "";
+    let comaSinalizado = false;
 
     if (sucesso) {
-        atualizacoesFerida.estado = config.efeitoSucesso;
-    } else if (complicacao) {
-        // Cada ação tem sua própria complicação (manual):
-        if (acao === "estancar_sangramento") {
-            const dano = 10 + Math.floor(Math.random() * 21); // 10-30
-            danoExtra = await aplicarDano("ficha", fichaId, dano, null);
-            detalheExtra = ` O ferimento piorou: ${dano} de dano adicional.`;
-        } else if (acao === "remover_projetil") {
-            const dano = 20 + Math.floor(Math.random() * 21); // 20-40
-            danoExtra = await aplicarDano("ficha", fichaId, dano, null);
-            atualizacoesFerida.infeccaoAtiva = true;
-            atualizacoesFerida.infeccaoGarantida = true;
-            detalheExtra = ` O projétil permanece alojado e causou ${dano} de dano adicional — infecção garantida.`;
+        // Cirurgia de Campo (item 8): efeitoSucesso é null de propósito
+        // — sucesso não muda o estado da ferida sozinho, só fica
+        // registrado no histórico pro Mestre ler e decidir manualmente
+        // via Godmode (reverter coma, estabilizar, etc.).
+        if (acao !== "cirurgia_de_campo") {
+            atualizacoesFerida.estado = config.efeitoSucesso;
+        }
+    } else {
+        // Dano por margem de falha (manual, "Regras gerais de
+        // tratamento"): 5 PVs por ponto abaixo da dificuldade, em
+        // QUALQUER falha — base de toda falha, complicação ou não.
+        danoMargem = danoPorMargemFalha(resultado, dificuldade);
+
+        if (complicacao) {
+            // Cada ação tem sua própria complicação (manual) — esse
+            // dano SOMA em cima do dano por margem acima, não substitui.
+            if (acao === "estancar_sangramento") {
+                danoComplicacao = 10 + Math.floor(Math.random() * 21); // 10-30
+                detalheExtra = ` O ferimento piorou: ${danoComplicacao} de dano adicional por complicação.`;
+            } else if (acao === "remover_projetil") {
+                danoComplicacao = 20 + Math.floor(Math.random() * 21); // 20-40
+                atualizacoesFerida.infeccaoAtiva = true;
+                atualizacoesFerida.infeccaoGarantida = true;
+                detalheExtra = ` O projétil permanece alojado e causou ${danoComplicacao} de dano adicional por complicação — infecção garantida.`;
+            } else if (acao === "cirurgia_de_campo") {
+                // Falha com complicação na Cirurgia de Campo (manual):
+                // "o paciente entra em coma se já não estiver" — dispara
+                // a MESMA Ação Pendente "confirmar_coma" do item 6 (não
+                // uma fila própria da Cirurgia de Campo), pro Mestre
+                // confirmar/rejeitar como qualquer outra pendência.
+                comaSinalizado = true;
+                detalheExtra = " O paciente corre risco de entrar em coma — aviso enviado ao Mestre.";
+            }
+        }
+
+        const danoTotal = danoMargem + danoComplicacao;
+        if (danoTotal > 0) {
+            danoExtra = await aplicarDano("ficha", fichaId, danoTotal, null);
         }
     }
 
+    const detalheMargem = danoMargem > 0 ? ` ${danoMargem} PV(s) perdido(s) pela margem de falha (${dificuldade - resultado} ponto(s) abaixo da dificuldade).` : "";
+    const notaCirurgiaSucesso = (sucesso && acao === "cirurgia_de_campo")
+        ? " Aplique manualmente via Godmode, se fizer sentido na cena (reverter coma, estabilizar, etc.)."
+        : "";
     const detalhe = `${config.label} (dif ${dificuldade}): d20 (${bruto}) + ${nivelPericia} perícia `
         + `${penalidadeItem ? `${penalidadeItem} item ` : ""}${modificadorExtra ? `+${modificadorExtra} item específico ` : ""}`
-        + `= ${resultado} — ${sucesso ? "SUCESSO" : (complicacao ? "FALHOU COM COMPLICAÇÃO" : "FALHOU")}.${detalheExtra}`;
+        + `= ${resultado} — ${sucesso ? "SUCESSO" : (complicacao ? "FALHOU COM COMPLICAÇÃO" : "FALHOU")}.${detalheMargem}${detalheExtra}${notaCirurgiaSucesso}`;
 
     if (Object.keys(atualizacoesFerida).length) {
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesFerida);
     }
     await registrarHistorico(fichaId, feridaId, { acao: config.label, quem: tratadorNome, resultado: detalhe });
+    if (comaSinalizado) {
+        await criarAcaoPendente({
+            tipo: "confirmar_coma",
+            fichaId,
+            nomeJogador: tratadorNome,
+            detalhe: `${tratadorNome}: Cirurgia de Campo falhou com complicação — paciente corre risco de entrar em coma. ${detalhe}`,
+            payload: { fichaId, origem: "cirurgia_de_campo" }
+        });
+    }
     if (atualizacoesFerida.infeccaoAtiva) {
         await sincronizarFlagInfeccaoAgregada(fichaId);
+    }
+    if (emHospital && sucesso) {
+        await marcarTratamentoHospital(fichaId);
     }
 
     return {
         acao, dificuldade, bruto, nivelPericia, penalidadeItem, modificadorExtra,
-        resultado, sucesso, complicacao, danoExtra, detalhe,
-        novoEstado: atualizacoesFerida.estado || ferida.estado
+        resultado, sucesso, complicacao, danoMargem, danoComplicacao, danoExtra, detalhe,
+        novoEstado: atualizacoesFerida.estado || ferida.estado,
+        tratamentoHospitalRegistrado: emHospital && sucesso,
+        comaSinalizado
     };
 }
 

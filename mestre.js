@@ -13,13 +13,15 @@ import {
     calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada,
     calcularEstadoEnergia, dificuldadeSangramento, dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
     calcularDificuldadeDefesaJogador, DIFICULDADE_INFECCAO_MINIMA,
-    calcularPvMaximo, avancarRecuperacaoPV
+    calcularPvMaximo, avancarRecuperacaoPV, chanceFeridaPorDano,
+    aplicarReducaoTratamentoHospital, deveConfirmarDesmaio, limiarAmputacaoPorDano,
+    golpeDilacera, deveTestarSangramentoProfundo, multiplicadorReducaoPorClasse, aplicarPisoDanoContundenteColete
 } from "./regras.js";
 import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } from "./calendario.js";
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete } from "./dados-manual.js";
 import { itemCabeNoContainer } from "./inventario.js";
 import { criarFerida } from "./saude.js";
 
@@ -47,6 +49,9 @@ function normalizarTexto(txt) {
 // (`ativo !== false` — mesma regra usada em coletarModificadores, ver
 // regras.js).
 const MULTIPLICADOR_DANO_FRAGIL = 2; // dobro do dano recebido (manual pg. 18: +100%)
+// Recuperação de PV em andamento (manual, "Saúde e PVs"): "Danos
+// recebidos quando em recuperação são aumentados em 50%".
+const MULTIPLICADOR_DANO_RECUPERACAO = 1.5;
 function temDesvantagemFragil(desvantagens) {
     return Object.values(desvantagens || {}).some(
         (d) => d && d.ativo !== false && normalizarTexto(d.nome) === "fragil"
@@ -57,16 +62,21 @@ function temDesvantagemFragil(desvantagens) {
 // Padrão de vida — valores semanais fixos do manual (pg. 105-106).
 // ---------------------------------------------------------------------
 export const PADROES_DE_VIDA = [
-    { key: "miseravel", label: "Miserável", custoSemanal: 100 },
-    { key: "pobre", label: "Pobre", custoSemanal: 200 },
-    { key: "tranquilo", label: "Tranquilo", custoSemanal: 400 },
-    { key: "playboy", label: "Playboy", custoSemanal: 1000 },
-    { key: "rico", label: "Rico", custoSemanal: 2000 }
+    { key: "miseravel", label: "Miserável", custoSemanal: 100, limiteRecuperacaoSemTratamento: 0 },
+    { key: "pobre", label: "Pobre", custoSemanal: 200, limiteRecuperacaoSemTratamento: 20 },
+    { key: "tranquilo", label: "Tranquilo", custoSemanal: 400, limiteRecuperacaoSemTratamento: 40 },
+    { key: "playboy", label: "Playboy", custoSemanal: 1000, limiteRecuperacaoSemTratamento: 60 },
+    { key: "rico", label: "Rico", custoSemanal: 2000, limiteRecuperacaoSemTratamento: 80 }
 ];
 
 export function custoSemanalPadraoDeVida(key) {
     const p = PADROES_DE_VIDA.find(p => p.key === key);
     return p ? p.custoSemanal : 0;
+}
+
+export function limiteRecuperacaoSemTratamento(key) {
+    const p = PADROES_DE_VIDA.find(p => p.key === key);
+    return p ? p.limiteRecuperacaoSemTratamento : 0;
 }
 
 export function custoSemanalTotal(fichaAtual) {
@@ -145,7 +155,7 @@ export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mes
 // Mestre que não têm noção de golpe mirado). Retorna o resumo completo
 // pro Mestre/automação montarem a mensagem do Log de Dados.
 // ---------------------------------------------------------------------
-export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0) {
+export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0, calibreProjetil = null) {
     const brutoNum = Number(danoBruto) || 0;
     const ignorarArmadura = Math.max(0, Number(ignorarArmaduraPontos) || 0);
 
@@ -181,6 +191,13 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
             pvMaximoRaw = (overrideRaw !== null && overrideRaw !== undefined && overrideRaw !== "") ? (Number(overrideRaw) || 0) : totalCalculadoRaw;
         }
         const pvAtual = (dadosRaw.pvAtual !== null && dadosRaw.pvAtual !== undefined) ? Number(dadosRaw.pvAtual) : pvMaximoRaw;
+        // PV máximo "de verdade" (não só o fallback pvMaximoRaw calculado
+        // acima só pro caso de pvAtual indefinido) — precisamos dele
+        // sempre agora, pra decidir a CHANCE de ferida por dano (ver
+        // chanceFeridaPorDano abaixo): usa a mesma fórmula centralizada
+        // de calcularPvMaximo (regras.js), reaproveitando fichaNormalizada
+        // que já foi montada acima.
+        const pvMaximoFicha = calcularPvMaximo(fichaNormalizada);
         const inventario = raw.inventario || {};
         // Desvantagem Frágil (manual pg. 18): dobra o dano recebido de
         // qualquer tipo de ataque. Aplicada sobre o dano BRUTO do golpe
@@ -190,25 +207,118 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         // embutido em danoBruto (crítico, queima-roupa, etc.).
         const ehFragil = temDesvantagemFragil(raw.desvantagens);
         const brutoComFragil = ehFragil ? brutoNum * MULTIPLICADOR_DANO_FRAGIL : brutoNum;
+        // Recuperação de PV em andamento (manual, "Saúde e PVs"): "Danos
+        // recebidos quando em recuperação são aumentados em 50%".
+        // Mesmo ponto do pipeline que Frágil (multiplica o bruto, ANTES
+        // da redução de armadura) — os dois efeitos empilham em
+        // sequência caso o personagem esteja Frágil E em recuperação ao
+        // mesmo tempo.
+        const emRecuperacao = !!(dadosRaw.recuperacaoPV && dadosRaw.recuperacaoPV.ativa);
+        const brutoComRecuperacao = emRecuperacao ? brutoComFragil * MULTIPLICADOR_DANO_RECUPERACAO : brutoComFragil;
+        let algumColeteFreouOTiro = false;
         const reducaoBruta = tipoDanoKey ? Object.values(inventario)
             .filter(it => it.categoria === "levando" && it.ativo !== false && Array.isArray(it.reducoesDano)
                 && (localArmadura == null || it.localProtegido === localArmadura))
             .reduce((acc, it) => {
                 const entrada = it.reducoesDano.find(r => r.tipo === tipoDanoKey);
-                return acc + (entrada ? Number(entrada.valor) || 0 : 0);
+                if (!entrada) return acc;
+                const valorBase = Number(entrada.valor) || 0;
+                // Redução do Dano por Colete x Calibre (manual pg. 53) —
+                // só entra em jogo quando SABEMOS o calibre do tiro
+                // (calibreProjetil informado) E esse item tem uma
+                // classeProtecao cadastrada (colete de verdade, não
+                // placa genérica/upgrade sem calibre associado). Sem
+                // isso, mantém o comportamento de sempre (multiplicador
+                // 1, redução cheia) — ver multiplicadorReducaoPorClasse
+                // em regras.js.
+                if (calibreProjetil && it.classeProtecao) {
+                    const diferenca = diferencaClasseCalibreVsColete(calibreProjetil, it.classeProtecao);
+                    const multiplicador = multiplicadorReducaoPorClasse(diferenca);
+                    if (multiplicador > 0) algumColeteFreouOTiro = true;
+                    return acc + Math.floor(valorBase * multiplicador);
+                }
+                return acc + valorBase;
             }, 0) : 0;
         // Força Bruta nível 2/4 (manual pg. 22): "golpes ignoram armadura
         // em pontos igual [ao dobro de] sua Força" — subtrai da redução
         // de armadura do alvo ANTES de aplicar no dano (nunca deixa a
         // redução negativa).
         const reducao = Math.max(0, reducaoBruta - ignorarArmadura) + bonusDefesaGenerica;
-        const brutoComFragilArredondado = Math.round(brutoComFragil);
-        const danoFinal = Math.max(0, brutoComFragilArredondado - reducao);
+        const brutoComFragilArredondado = Math.round(brutoComRecuperacao);
+        let danoFinal = Math.max(0, brutoComFragilArredondado - reducao);
+        // Piso de dano mínimo contundente (manual pg. 53): só entra
+        // quando sabemos o calibre do tiro E pelo menos um colete no
+        // local acertado efetivamente freou o impacto (nem que seja em
+        // parte — ver algumColeteFreouOTiro acima). Ignora a redução
+        // (compara com o danoFinal já reduzido) e, se vencer, troca o
+        // tipo de dano final pra contundente — devolvido em
+        // tipoDanoFinalAjustado pra quem chamou usar no log e nas
+        // regras que dependem de tipo de dano (ex.: contundente na
+        // cabeça = aviso de Desmaio).
+        let tipoDanoFinalAjustado = tipoDanoKey;
+        if (calibreProjetil) {
+            const resultadoPiso = aplicarPisoDanoContundenteColete({
+                danoOriginal: brutoComFragilArredondado,
+                danoAposReducao: danoFinal,
+                coleteFreouAlgumaParte: algumColeteFreouOTiro
+            });
+            danoFinal = resultadoPiso.danoFinal;
+            if (resultadoPiso.pisoAplicado) tipoDanoFinalAjustado = "contusao";
+        }
         const novoPv = pvAtual - danoFinal;
         await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
-        // danoBruto exibido já inclui o +50% de Frágil (quando aplicável),
-        // pra bater com a conta "bruto - redução = final" mostrada no Log.
-        return { nomeAlvo, danoBruto: brutoComFragilArredondado, fragil: ehFragil, reducao, danoFinal, novoPv };
+        // Coma (item 6 do plano de saúde/complicações): gatilho
+        // automático quando o PV cai abaixo de 1/10 do total. Não cria
+        // Ação Pendente de novo se a ficha já estiver em coma (evita
+        // spam a cada novo golpe recebido enquanto ela seguir lá
+        // embaixo) — o Mestre confirma/rejeita como qualquer outra
+        // pendência (ver confirmarAcaoPendente "confirmar_coma" abaixo).
+        const jaEmComa = !!(dadosRaw.coma && dadosRaw.coma.ativo);
+        if (pvMaximoFicha > 0 && novoPv < pvMaximoFicha / 10 && !jaEmComa) {
+            await criarAcaoPendente({
+                tipo: "confirmar_coma",
+                fichaId: alvoId,
+                nomeJogador: nomeAlvo,
+                detalhe: `${nomeAlvo} caiu pra ${novoPv}/${pvMaximoFicha} PV (menos de 1/10 do total) — risco de coma.`,
+                payload: { fichaId: alvoId, origem: "pv_abaixo_de_um_decimo" }
+            });
+        }
+        // Desmaio Genérico (item 4 do plano de saúde/complicações):
+        // dano ÚNICO ≥ 1/5 do PV total, estando a ficha já "Machucado"
+        // ou "Muito Machucado" DEPOIS de levar o golpe (ver
+        // deveConfirmarDesmaio em regras.js). Vira Ação Pendente de
+        // verdade — mesmo padrão de "iniciar_recuperacao_pv" — não uma
+        // nota automática de log.
+        const temToleranciaAlvo = temPericiaTreinada(fichaNormalizada.pericias, "Tolerância");
+        if (deveConfirmarDesmaio(danoFinal, novoPv, pvMaximoFicha, temToleranciaAlvo)) {
+            await criarAcaoPendente({
+                tipo: "confirmar_desmaio",
+                fichaId: alvoId,
+                nomeJogador: nomeAlvo,
+                detalhe: `${nomeAlvo} levou ${danoFinal} de dano num golpe só (≥ 1/5 do PV total) e está em ${novoPv}/${pvMaximoFicha} PV — teste de Constituição dif 18 contra desmaio.`,
+                payload: { fichaId: alvoId, dano: danoFinal, pvAtual: novoPv, pvMaximo: pvMaximoFicha }
+            });
+        }
+        // Amputação por Limiar de Dano (item 5 do plano de saúde/
+        // complicações): dois limiares de dano ÚNICO (ver
+        // limiarAmputacaoPorDano em regras.js) — não empilha estado
+        // nenhum (diferente de coma/desmaio), é por golpe: cada hit que
+        // bater o limiar vira uma nova Ação Pendente pro Mestre validar.
+        const limiteAmputacao = limiarAmputacaoPorDano(danoFinal, pvMaximoFicha);
+        if (limiteAmputacao) {
+            const rotuloLimite = limiteAmputacao === "membro" ? "membro (≥ 1/5 do PV total)" : "dedo ou orelha (≥ 1/10 do PV total)";
+            await criarAcaoPendente({
+                tipo: "confirmar_amputacao",
+                fichaId: alvoId,
+                nomeJogador: nomeAlvo,
+                detalhe: `${nomeAlvo} levou ${danoFinal} de dano num golpe só — bateu o limiar de amputação de ${rotuloLimite}.`,
+                payload: { fichaId: alvoId, dano: danoFinal, limiteBatido: limiteAmputacao }
+            });
+        }
+        // danoBruto exibido já inclui o +50% de Frágil e/ou o +50% de
+        // recuperação (quando aplicáveis), pra bater com a conta
+        // "bruto - redução = final" mostrada no Log.
+        return { nomeAlvo, danoBruto: brutoComFragilArredondado, fragil: ehFragil, emRecuperacao, reducao, danoFinal, novoPv, pvMaximo: pvMaximoFicha, tipoDanoFinalAjustado };
     }
 
     const snap = await get(ref(db, caminhoMesa(`npcs/${alvoId}`)));
@@ -220,7 +330,11 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : (Number(npc.pvs) || 0);
     // NPCs não têm armadura detalhada por parte do corpo — reducoesDano
     // deles continua valendo pra qualquer local mirado (simplificação;
-    // só a ficha de jogador tem localProtegido por item).
+    // só a ficha de jogador tem localProtegido por item). Pelo mesmo
+    // motivo, a Redução do Dano por Colete x Calibre (manual pg. 53)
+    // também não se aplica aqui — reducoesDano de NPC não tem
+    // classeProtecao por entrada, então calibreProjetil é ignorado
+    // nesse ramo (tipoDanoFinalAjustado sempre igual a tipoDanoKey).
     const reducoesNpc = (npc.reducoesDano && npc.reducoesDano.length)
         ? npc.reducoesDano
         : (npc.protecaoTipo ? [{ tipo: npc.protecaoTipo, valor: npc.protecaoValor || 0 }] : []);
@@ -234,7 +348,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     const danoFinal = Math.max(0, brutoNum - reducao);
     const novoPv = pvAtual - danoFinal;
     await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
-    return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv };
+    return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv, tipoDanoFinalAjustado: tipoDanoKey };
 }
 
 // Mantidas por compatibilidade com qualquer chamada antiga — agora só
@@ -331,6 +445,37 @@ export async function testarSangramento(participanteId, constituicaoAlvo, nivelA
         detalhe: sucesso
             ? `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — RESISTIU, não sangrou.`
             : `Teste de Constituição vs. Sangramento (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR${detalheDano} (${sangramento.danoPorTurno} de dano fixo por turno, por ${sangramento.turnos} turnos).`
+    };
+}
+
+// Teste de Constituição contra Sangramento PROFUNDO (item 7 do plano de
+// saúde/complicações, Dilaceração — ver golpeDilacera/
+// deveTestarSangramentoProfundo em regras.js): dificuldade FIXA 20
+// (não usa a fórmula por nível de arma do Sangramento comum — manual
+// não prevê agravante de local nem de arma aqui), dano fixo = metade
+// do dano dilacerante que causou (arredondado pra baixo), por 3 turnos
+// (mesma duração já usada pro Sangramento de tiro de arma de fogo — o
+// manual não dá uma duração própria separada pra esse caso).
+// Reaproveita aplicarSangramento (mesma infraestrutura de status por
+// turno do Sangramento comum) — as duas entradas empilham normalmente
+// se acontecerem juntas (ex.: tiro perfurante que também dilacerou).
+export async function testarSangramentoProfundo(participanteId, constituicaoAlvo, danoDilacerante) {
+    if (!participanteId) return null;
+    const dificuldade = 20;
+    const bruto = rolarD20();
+    const modConstituicao = Number(constituicaoAlvo) || 0;
+    const resultado = bruto + modConstituicao;
+    const sucesso = resultado >= dificuldade;
+    let sangramento = null;
+    if (!sucesso) {
+        const danoPorTurno = Math.max(0, Math.floor((Number(danoDilacerante) || 0) / 2));
+        sangramento = await aplicarSangramento(participanteId, danoPorTurno, 3, "Dilaceração (Sangramento Profundo)");
+    }
+    return {
+        dificuldade, bruto, modConstituicao, resultado, sucesso, sangramento,
+        detalhe: sucesso
+            ? `Teste de Constituição vs. Sangramento Profundo (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — RESISTIU, não sangrou.`
+            : `Teste de Constituição vs. Sangramento Profundo (dif ${dificuldade}): d20 (${bruto}) ${modConstituicao >= 0 ? "+" : ""}${modConstituicao} = ${resultado} — FALHOU, começou a SANGRAR PROFUNDAMENTE (${sangramento.danoPorTurno} de dano fixo por turno, por ${sangramento.turnos} turnos).`
     };
 }
 
@@ -1771,12 +1916,57 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
         }
         if (ehDanoCortante(r.tipoDanoKey)) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${r.localMiraLabel || "local específico"}: aplica-se a regra de Amputação (resolva com o Mestre).`;
-            if (criaFeridaHabilitado) {
-                await criarFerida(r.alvoRefId, { tipo: "corte", local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
-            }
         }
         if (ehDanoContundente(r.tipoDanoKey) && r.localMiraKey === "cabeca") {
             notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;
+        }
+    }
+
+    // Dilaceração (item 7 do plano de saúde/complicações) — ver
+    // golpeDilacera/deveTestarSangramentoProfundo em regras.js. Roda em
+    // cima do dano JÁ aplicado (danoParaAplicar), independente de
+    // Golpe Mirado (dilaceração não depende de mira nenhuma).
+    let notaDilaceracao = "";
+    if (danoParaAplicar > 0) {
+        const dilacerou = golpeDilacera({
+            ehExplosao: r.tipoDanoKey === "explosao",
+            danoFinal: danoParaAplicar,
+            pvMaximo: resultadoDano.pvMaximo,
+            dilacera: !!r.dilacera,
+            dilaceraEmGolpeNormal: !!r.dilaceraEmGolpeNormal,
+            criticoPositivo: !!r.criticoPositivo,
+            ehArmaBranca: !!r.ataqueArmaBranca
+        });
+        if (dilacerou) {
+            notaDilaceracao = " 🩸 DILACEROU!";
+            if (deveTestarSangramentoProfundo(dilacerou, danoParaAplicar, resultadoDano.pvMaximo)) {
+                const resultadoSangramentoProfundo = await testarSangramentoProfundo(r.participanteId, r.constituicaoAlvo, danoParaAplicar);
+                if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
+            }
+        }
+    }
+
+    // Ferida por dano acima de 1/10 do PV MÁXIMO — regra nova, roda em
+    // TODO golpe que causou dano de verdade numa ficha de jogador,
+    // mirado ou não (diferente do bloco de Golpe Mirado acima, que
+    // continua exclusivo de golpe mirado por regra própria do manual).
+    // Corte e Perfuração abrem ferida tipo "corte"; Contusão abre
+    // ferida tipo "fratura". Chance base de 20% assim que o dano
+    // ultrapassa 1/10 do PV máximo do alvo; a cada 1/10 ADICIONAL de
+    // dano além desse mínimo, +20% de chance (limite 100%) — ver
+    // chanceFeridaPorDano em regras.js.
+    if (criaFeridaHabilitado && (ehDanoPerfurante(r.tipoDanoKey) || ehDanoCortante(r.tipoDanoKey) || ehDanoContundente(r.tipoDanoKey))) {
+        const chance = chanceFeridaPorDano(danoParaAplicar, resultadoDano.pvMaximo);
+        if (chance > 0) {
+            const tipoFerida = ehDanoContundente(r.tipoDanoKey) ? "fratura" : "corte";
+            const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
+            const sucessoFerida = (Math.random() * 100) < chance;
+            notaEfeitoLocal += sucessoFerida
+                ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
+                : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
+            if (sucessoFerida) {
+                await criarFerida(r.alvoRefId, { tipo: tipoFerida, local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+            }
         }
     }
 
@@ -1798,8 +1988,8 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     const notaLocalMira = r.notaLocalMira || "";
     const detalheRolagemTexto = r.detalheRolagem ? `\n${r.detalheRolagem}` : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}${detalheRolagemTexto}`
-        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}${detalheRolagemTexto}`;
+        ? `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${r.tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}${detalheRolagemTexto}`
+        : `${r.nomeAtacante} atacou ${r.nomeAlvo} com ${r.nomeArma}. ACERTO! vs. dificuldade ${r.dificuldade}.${notaLocalMira} ${notaEscolha} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${r.tipoDanoLabel}) aplicado.${notaCritico} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}${detalheRolagemTexto}`;
 
     await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: r.criticoPositivo ? "acerto" : null });
     await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
@@ -2014,6 +2204,29 @@ export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, p
 
 export async function rejeitarAcaoPendente(acaoId) {
     await remove(ref(db, caminhoMesa(`acoesPendentes/${acaoId}`)));
+}
+
+// Reversão do coma (item 6 do plano de saúde/complicações) — SEMPRE
+// manual, chamada só pelo Mestre em Godmode, pelos dois caminhos
+// documentados no plano: tratamento em hospital (item 3) OU Cirurgia de
+// Campo (item 8) bem-sucedidos numa ferida relevante. O sistema não
+// reverte sozinho só porque um teste passou — os dois tratamentos só
+// SINALIZAM (histórico/badge) que a condição foi atendida; quem desliga
+// de fato é o Mestre, aqui. Ao desligar, marca `saiuDoComaPendente` —
+// consumida na PRÓXIMA recuperação de PV iniciada (dobra diasNecessarios,
+// ver confirmarAcaoPendente "iniciar_recuperacao_pv" acima).
+export async function reverterComaGodmode(fichaId) {
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), {
+        coma: null,
+        saiuDoComaPendente: true
+    });
+}
+
+// "Acordar" do Desmaio Genérico (item 4) — sempre manual, resolvido pela
+// mesa (teste de Constituição narrado, não rolado pelo sistema). Só
+// desliga o badge/aviso; não há efeito mecânico pra reverter.
+export async function acordarDesmaioGodmode(fichaId) {
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { desmaiado: false });
 }
 
 // Executa de fato a ação pendente no banco e remove da fila. Só deve
@@ -2380,14 +2593,78 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         // "Solicitar recuperação de PVs" em ficha.js). A partir daqui a
         // recuperação fica "ativa" e passa a avançar sozinha a cada
         // Timeskip (ver passarVariosDias acima), até completar.
+        //
+        // payload.diasNecessarios chega SEM o desconto de tratamento em
+        // hospital (item 3) nem o dobro por saída de coma (item 6) — só
+        // com o +50% de infecção já embutido, igual sempre foi. As duas
+        // flags são reaplicadas AQUI, em cima do que estiver valendo
+        // NESTE momento (podem ter mudado desde o pedido), pra não
+        // confiar num valor congelado no instante em que o jogador
+        // clicou. Ordem: dobra por coma primeiro, desconto de hospital
+        // depois (por cima do valor já dobrado) — as duas flags são
+        // consumidas (zeradas) depois de usadas, não empilham entre
+        // recuperações.
+        const snapFichaDados = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)));
+        const dadosFicha = snapFichaDados.exists() ? snapFichaDados.val() : {};
+        const tratamentoHospitalAtivo = !!dadosFicha.tratamentoHospital;
+        const saiuDoComaAtivo = !!dadosFicha.saiuDoComaPendente;
+        const diasBase = Number(payload.diasNecessarios) || 0;
+        const diasComComa = saiuDoComaAtivo ? diasBase * 2 : diasBase;
+        const diasFinal = aplicarReducaoTratamentoHospital(diasComComa, tratamentoHospitalAtivo);
         await set(ref(db, caminhoMesa(`fichas/${fichaId}/dados/recuperacaoPV`)), {
             ativa: true,
             pvPerdidosInicial: Number(payload.pvPerdidos) || 0,
-            diasNecessarios: Number(payload.diasNecessarios) || 0,
+            diasNecessarios: diasFinal,
             diasDecorridos: 0,
             infectadoNoPedido: !!payload.infectado,
+            tratamentoHospitalNoPedido: tratamentoHospitalAtivo,
+            veioDoComaEm: saiuDoComaAtivo ? Date.now() : null,
             iniciadoEm: Date.now()
         });
+        const limpezaFlags = {};
+        if (tratamentoHospitalAtivo) limpezaFlags.tratamentoHospital = false;
+        if (saiuDoComaAtivo) limpezaFlags.saiuDoComaPendente = false;
+        if (Object.keys(limpezaFlags).length) {
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), limpezaFlags);
+        }
+
+    } else if (tipo === "confirmar_coma") {
+        // Confirmação do Mestre pra ENTRAR em coma (item 6 do plano de
+        // saúde/complicações) — disparado pelo gatilho automático de PV
+        // < 1/10 do total (aplicarDano acima) ou pela complicação da
+        // Cirurgia de Campo (item 8, ver saude.js). A SAÍDA é sempre
+        // manual (reverterComaGodmode abaixo, chamada só pelo Mestre em
+        // Godmode).
+        await set(ref(db, caminhoMesa(`fichas/${fichaId}/dados/coma`)), {
+            ativo: true,
+            entrouEm: Date.now()
+        });
+
+    } else if (tipo === "confirmar_desmaio") {
+        // Confirmação do Mestre pro Desmaio Genérico (item 4 do plano
+        // de saúde/complicações) — só um badge/aviso visual na ficha
+        // (ver renderizarDesmaioBadge em ficha.js), sem travar nenhuma
+        // ação automaticamente. "Acordar" é sempre manual, resolvido
+        // pela mesa (botão do Mestre — ver acordarDesmaioGodmode
+        // abaixo), nunca um teste rolado pelo sistema.
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { desmaiado: true });
+
+    } else if (tipo === "confirmar_amputacao") {
+        // Confirmação do Mestre pra Amputação por Limiar de Dano (item
+        // 5 do plano de saúde/complicações) — não mexe em NADA da
+        // ficha (não existe sistema de "membros" hoje); só registra no
+        // Log de Dados geral que a amputação foi validada pela mesa,
+        // texto livre — o efeito mecânico exato (qual membro, que
+        // penalidade) é decisão narrativa, resolvida fora do sistema.
+        {
+            const rotuloLimite = payload.limiteBatido === "membro" ? "membro" : "dedo ou orelha";
+            await registrarRolagem({
+                quem: "Mestre",
+                modificador: 0,
+                resultado: "Amputação validada",
+                detalhe: `Amputação (${rotuloLimite}) validada pelo Mestre — ${Number(payload.dano) || 0} de dano num golpe só.`
+            });
+        }
 
     } else if (tipo === "guardar_acao_combate") {
         // Confirma o pedido criado em avancarTurnoCombate: converte as

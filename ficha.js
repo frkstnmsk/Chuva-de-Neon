@@ -16,10 +16,11 @@ import {
     calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
     dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
     DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
-    calcularTempoRecuperacaoPV, calcularAbstinenciaVicio,
+    calcularTempoRecuperacaoPV, aplicarReducaoTratamentoHospital, calcularAbstinenciaVicio,
     extrairDuracaoHorasDaDescricao, horasTotaisCalendario,
     calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel,
-    TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada
+    TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, chanceFeridaPorDano,
+    golpeDilacera, deveTestarSangramentoProfundo
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -30,7 +31,7 @@ import {
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
     ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, todosOsSaldos,
     CLASSES_PROTECAO, rotuloClasseProtecao, ehArmaDeFogo, tagExigeClasseProtecao,
-    CALIBRES, calibresPorClasse, rotuloCalibre, tagUsaCalibreEspecifico,
+    CALIBRES, calibresPorClasse, rotuloCalibre, calibreSugereDilacera, tagUsaCalibreEspecifico,
     ehCalibreEscopeta,
     tagExigeCapacidadeCarregador, tagExigeQuantidadeProjetil,
     tagPodeReduzirDano,
@@ -88,10 +89,10 @@ import {
     ouvirAvisoCustoVida
 } from "./calendario.js";
 import {
-    PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal,
+    PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal, limiteRecuperacaoSemTratamento,
     ouvirTodasAsFichas, darXp, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
-    mestreRolarDado, aplicarDano, testarSangramento,
+    mestreRolarDado, aplicarDano, testarSangramento, testarSangramentoProfundo,
     ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
@@ -106,6 +107,7 @@ import {
     definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
     definirAlcanceLimitado, soltarAlcanceLimitado,
     definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados,
+    reverterComaGodmode, acordarDesmaioGodmode,
     ouvirCenarios, criarCenario, renomearCenario, excluirCenario,
     adicionarParticipanteCenario, removerParticipanteCenario,
     adicionarItemCenario, removerItemCenario,
@@ -338,6 +340,8 @@ const el = {
     gridAtributosSecundarios: document.getElementById("grid-atributos-secundarios"),
     gridRecursos: document.getElementById("grid-recursos"),
     estadoSaudeBadge: document.getElementById("estado-saude-badge"),
+    comaBadge: document.getElementById("coma-badge"),
+    desmaioBadge: document.getElementById("desmaio-badge"),
     estadoEnergiaBadge: document.getElementById("estado-energia-badge"),
     vitalPvFill: document.getElementById("vital-pv-fill"),
     vitalPvNumero: document.getElementById("vital-pv-numero"),
@@ -394,6 +398,8 @@ const el = {
     btnAddVeiculo: document.getElementById("btn-add-veiculo"),
     cenarioLista: document.getElementById("cenario-lista"),
     saudeLista: document.getElementById("saude-lista"),
+    mestreComaPainel: document.getElementById("mestre-coma-painel"),
+    mestreDesmaioPainel: document.getElementById("mestre-desmaio-painel"),
     btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
     modalCampoTipoVeiculo: document.getElementById("modal-campo-tipo-veiculo"),
     modalTipoVeiculo: document.getElementById("modal-tipo-veiculo"),
@@ -488,6 +494,10 @@ const el = {
     modalArmaTipoDano: document.getElementById("modal-arma-tipo-dano"),
     modalCampoTipoDanoExtra: document.getElementById("modal-campo-tipo-dano-extra"),
     modalArmaTipoDanoExtra: document.getElementById("modal-arma-tipo-dano-extra"),
+    modalCampoDilacera: document.getElementById("modal-campo-dilacera"),
+    modalArmaDilacera: document.getElementById("modal-arma-dilacera"),
+    modalCampoDilaceraGolpeNormal: document.getElementById("modal-campo-dilacera-golpe-normal"),
+    modalArmaDilaceraGolpeNormal: document.getElementById("modal-arma-dilacera-golpe-normal"),
     modalCampoEscala: document.getElementById("modal-campo-escala"),
     modalArmaEscala: document.getElementById("modal-arma-escala"),
     modalConfigExplosivo: document.getElementById("modal-config-explosivo"),
@@ -2086,6 +2096,8 @@ function renderizarAtributos(modificadoresPlanos) {
     renderizarEstadoEnergia(estadoEnergia);
 
     renderizarBarrasVitaisTopo(d.pvAtual, pvMaximoTotal, estadoSaude, d.energiaAtual, energiaMaximoTotal, estadoEnergia);
+    renderizarComaBadge(d);
+    renderizarDesmaioBadge(d);
     ultimoContextoRecuperacaoPV = { d, pvMaximoTotal };
     renderizarRecuperacaoPV(d, pvMaximoTotal);
 
@@ -2318,8 +2330,10 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
         const diasDecorridos = Math.min(diasNecessarios, Number(rec.diasDecorridos) || 0);
         const diasFaltando = Math.max(0, diasNecessarios - diasDecorridos);
         const notaInfeccao = rec.infectadoNoPedido ? " (+50% pela infecção ativa no momento do pedido)" : "";
+        const notaHospital = rec.tratamentoHospitalNoPedido ? " (-1/10 pelo tratamento em hospital aprovado)" : "";
+        const notaComa = rec.veioDoComaEm ? " (dobro pela saída de coma recente)" : "";
         el.recuperacaoPvPainel.style.display = "";
-        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
+        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
         if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
@@ -2349,16 +2363,63 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
         return;
     }
 
+    // Padrão de Vida (manual, pg. 106-107): sem tratamento médico
+    // especializado, a recuperação "natural" só cobre até um certo teto
+    // de PV, conforme o Padrão de Vida do personagem (ver
+    // limiteRecuperacaoSemTratamento em mestre.js). A fórmula de tempo
+    // (perdidos/total × 30) continua igual — só muda o que entra como
+    // "perdidos": em vez do total de PV perdido, usamos o quanto desse
+    // total o Padrão de Vida cobre. O restante (pvSemRecuperar) fica de
+    // fora do pedido e não é recuperado por esse caminho — só com
+    // tratamento médico de verdade.
+    const limite = limiteRecuperacaoSemTratamento(d.padraoDeVida);
+    const pvRecuperavel = Math.min(pvPerdidos, limite);
+    const pvSemRecuperar = pvPerdidos - pvRecuperavel;
+
     // Infecção (manual, "Complicações de ferimentos"): aumenta em 50% o
     // tempo de repouso necessário. A flag é persistente na própria ficha
     // (fichas/{id}/dados/infeccao — ver aplicarInfeccao/curarInfeccao em
     // mestre.js), não só durante o combate em que foi aplicada.
     const infectado = !!(d.infeccao && d.infeccao.ativo);
-    const diasNecessarios = calcularTempoRecuperacaoPV(pvPerdidos, pvMaximoTotal, infectado);
-    pvRecuperacaoContexto = { pvPerdidos, pvMaximoTotal, diasNecessarios, infectado };
+    const diasBase = calcularTempoRecuperacaoPV(pvRecuperavel, pvMaximoTotal, infectado);
+    // Item 6 do plano (Coma): saída de coma dobra o tempo da PRÓXIMA
+    // recuperação de PV (flag em dados.saiuDoComaPendente, setada só
+    // manualmente pelo Mestre em Godmode — ver reverterComaGodmode em
+    // mestre.js). Aplicado ANTES do desconto de hospital abaixo.
+    const saiuDoComa = !!d.saiuDoComaPendente;
+    const diasComComa = saiuDoComa ? diasBase * 2 : diasBase;
+    // Item 3 do plano de saúde/complicações: tratamento em hospital
+    // bem-sucedido (flag em dados.tratamentoHospital, ver saude.js)
+    // reduz em 1/10 o tempo de recuperação da FICHA INTEIRA — aplicado
+    // por cima do valor já calculado acima, não dentro da fórmula base.
+    const tratadoEmHospital = !!d.tratamentoHospital;
+    const diasNecessarios = aplicarReducaoTratamentoHospital(diasComComa, tratadoEmHospital);
+    // diasBase (sem desconto de hospital nem dobro por coma) também é
+    // guardado no contexto — é o que vai no payload da Ação Pendente,
+    // pra confirmarAcaoPendente em mestre.js poder reaplicar as duas
+    // flags em cima do que estiver VALENDO na hora em que o Mestre
+    // aprovar (pode ter mudado entre o pedido e a aprovação), em vez de
+    // confiar só no valor já calculado aqui no momento do pedido.
+    pvRecuperacaoContexto = { pvPerdidos, pvRecuperavel, pvSemRecuperar, pvMaximoTotal, diasNecessarios, diasBase, infectado, tratadoEmHospital, saiuDoComa };
     el.recuperacaoPvPainel.style.display = "";
     const notaInfeccao = infectado ? " — infecção ativa: +50% no tempo de recuperação" : "";
-    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Tempo estimado de recuperação: ${diasNecessarios} dia(s)${notaInfeccao} (precisa de autorização do Mestre pra começar a contar).`;
+    const notaHospital = tratadoEmHospital ? " — tratamento em hospital: -1/10 no tempo de recuperação" : "";
+    const notaComa = saiuDoComa ? " — saiu do coma recentemente: dobro no tempo de recuperação" : "";
+
+    if (pvRecuperavel <= 0) {
+        // Padrão de Vida atual não cobre nada sem tratamento médico
+        // especializado (ex.: Miserável, limite 0).
+        el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Seu Padrão de Vida atual não cobre recuperação sem tratamento médico especializado — procure um médico.`;
+        if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
+        return;
+    }
+
+    const padrao = PADROES_DE_VIDA.find(p => p.key === d.padraoDeVida);
+    const labelPadrao = padrao ? padrao.label : "seu Padrão de Vida";
+    const notaSemRecuperar = pvSemRecuperar > 0
+        ? ` ${pvSemRecuperar} PV vão ficar sem recuperar por esse caminho.`
+        : "";
+    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Seu Padrão de Vida (${labelPadrao}) cobre até ${limite} sem tratamento médico especializado — vai recuperar ${pvRecuperavel} em ${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa}.${notaSemRecuperar}`;
     if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "";
 }
 
@@ -2372,16 +2433,21 @@ function configurarRecuperacaoPV() {
     if (!el.btnSolicitarRecuperacaoPv) return;
     el.btnSolicitarRecuperacaoPv.addEventListener("click", async () => {
         if (!fichaAtual || !idAtivo() || !pvRecuperacaoContexto) return;
-        const { pvPerdidos, diasNecessarios, infectado } = pvRecuperacaoContexto;
+        const { pvRecuperavel, pvSemRecuperar, diasNecessarios, diasBase, infectado, tratadoEmHospital, saiuDoComa } = pvRecuperacaoContexto;
         const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
         const notaInfeccao = infectado ? " (já inclui +50% por infecção ativa)" : "";
+        const notaHospital = tratadoEmHospital ? " (inclui -1/10 por tratamento em hospital, se ainda valer na hora da aprovação)" : "";
+        const notaComa = saiuDoComa ? " (inclui dobro por saída de coma, se ainda valer na hora da aprovação)" : "";
+        const notaSemRecuperar = pvSemRecuperar > 0
+            ? ` (${pvSemRecuperar} PV fora do pedido — acima do que o Padrão de Vida cobre sem tratamento médico especializado)`
+            : "";
         try {
             await criarAcaoPendente({
                 tipo: "iniciar_recuperacao_pv",
                 fichaId: fichaAtualId,
                 nomeJogador,
-                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvPerdidos} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}.`,
-                payload: { pvPerdidos, diasNecessarios, infectado }
+                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvRecuperavel} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa}.${notaSemRecuperar}`,
+                payload: { pvPerdidos: pvRecuperavel, diasNecessarios: diasBase, infectado }
             });
             toast("Pedido de recuperação de PVs enviado ao Mestre.");
         } catch (err) {
@@ -2420,6 +2486,40 @@ function renderizarEstadoSaude(estadoSaude) {
     el.estadoSaudeBadge.classList.toggle("muito-machucado", estadoSaude.estado === "muito_machucado");
     const efeitoVelocidade = estadoSaude.metadeVelocidade ? "Velocidade cai pela metade" : `Velocidade ${estadoSaude.penalidadeVelocidade}`;
     el.estadoSaudeBadge.innerHTML = `<strong>${escapeHtml(estadoSaude.label)}</strong> — ${efeitoVelocidade} · ${estadoSaude.penalidadeTestes} em todos os testes`;
+}
+
+// Badge "Em coma" (item 6 do plano de saúde/complicações) — some sozinho
+// quando dados.coma.ativo não está setado. A entrada em coma só acontece
+// via Ação Pendente "confirmar_coma" (aplicarDano em mestre.js, quando
+// PV cai abaixo de 1/10 do total, ou complicação da Cirurgia de Campo —
+// ver saude.js); a SAÍDA é sempre manual, feita pelo Mestre em Godmode
+// (botão "Reverter coma" no painel do Mestre — ver renderizarSaude e
+// reverterComaGodmode em mestre.js), então esse badge é só leitura.
+function renderizarComaBadge(d) {
+    if (!el.comaBadge) return;
+    if (!d.coma || !d.coma.ativo) {
+        el.comaBadge.style.display = "none";
+        el.comaBadge.innerHTML = "";
+        return;
+    }
+    el.comaBadge.style.display = "block";
+    el.comaBadge.innerHTML = `<strong>💤 Em coma</strong> — a saída só acontece manualmente, pelo Mestre (tratamento em hospital ou Cirurgia de Campo bem-sucedidos sinalizam a reversão).`;
+}
+
+// Badge "Desmaiado" (item 4 do plano de saúde/complicações) — só um
+// aviso visual, sem nenhum efeito mecânico automático. Some sozinho
+// quando dados.desmaiado não está setado; "acordar" é sempre manual,
+// resolvido pela mesa (botão do Mestre — ver acordarDesmaioGodmode em
+// mestre.js).
+function renderizarDesmaioBadge(d) {
+    if (!el.desmaioBadge) return;
+    if (!d.desmaiado) {
+        el.desmaioBadge.style.display = "none";
+        el.desmaioBadge.innerHTML = "";
+        return;
+    }
+    el.desmaioBadge.style.display = "block";
+    el.desmaioBadge.innerHTML = `<strong>😵 Desmaiado</strong> — acordar é resolvido pela mesa (teste de Constituição narrado), o Mestre desliga o aviso quando fizer sentido na cena.`;
 }
 
 // Penalidade de todos os testes por causa do estado de saúde atual
@@ -4552,6 +4652,11 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             nomeAtacante, nomeAlvo, nomeArma: it.nome,
             danoTotal, tipoDanoKey, tipoDanoLabel, danoDadoTexto,
             criticoPositivo, notaCritico,
+            // Dilaceração (item 7 do plano de saúde/complicações) — ver
+            // golpeDilacera em regras.js, aplicado em
+            // resolverReacaoPendente (mestre.js).
+            dilacera: !!armaConfig.dilacera,
+            dilaceraEmGolpeNormal: !!armaConfig.dilaceraEmGolpeNormal,
             alvoTipo: participante.tipo, alvoRefId: participante.refId,
             resultadoAtaque, dificuldade, modAtaque,
             // Sempre false neste ponto (golpe de arma de fogo já retornou
@@ -4601,7 +4706,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         // Golpes Mirados: a redução de armadura do alvo só conta itens
         // de Proteção cujo localProtegido bate com o local mirado (ver
         // LOCAIS_MIRA em dados-manual.js e aplicarDano em mestre.js).
-        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos);
+        // Redução do Dano por Colete x Calibre (manual pg. 53): só faz
+        // sentido pra tiro de arma de fogo (it.calibre só existe pra
+        // arma de fogo — arma branca/contundente manda null, e
+        // aplicarDano já ignora a regra nova quando calibreProjetil é
+        // null).
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos, it.calibre || null);
     } catch (err) {
         console.error(err);
         toast("Ataque acertou, mas falhou ao aplicar o dano no alvo.", "erro");
@@ -4659,14 +4769,58 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     if (danoTotal > 0 && localMira.key !== "padrao") {
         if (ehDanoCortante(tipoDanoKey)) {
             notaEfeitoLocal += ` ⚠️ Golpe cortante mirado em ${localMira.label}: aplica-se a regra de Amputação (resolva com o Mestre).`;
-            // Corte sempre abre ferida precisando de sutura, além da
-            // regra de Amputação (que continua manual/narrativa).
-            if (criaFeridaHabilitado) {
-                await criarFerida(participante.refId, { tipo: "corte", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
-            }
         }
         if (ehDanoContundente(tipoDanoKey) && localMira.key === "cabeca") {
             notaEfeitoLocal += ` ⚠️ Golpe contundente na Cabeça: +4 na dificuldade do teste de Desmaio do alvo — teste de Constituição, dificuldade ${dificuldadeDesmaio(4)} (base ${DIFICULDADE_BASE_DESMAIO} +4 da Cabeça), pra acordar (resolva com o Mestre).`;
+        }
+    }
+
+    // Dilaceração (item 7 do plano de saúde/complicações) — ver
+    // golpeDilacera/deveTestarSangramentoProfundo em regras.js. Roda em
+    // cima do dano JÁ aplicado (danoTotal), independente de Golpe
+    // Mirado. Sangramento Profundo só entra dentro de combate com
+    // iniciativa (é lá que existe "turno" pra decrementar), igual ao
+    // Sangramento comum.
+    let notaDilaceracao = "";
+    if (danoTotal > 0) {
+        const dilacerou = golpeDilacera({
+            ehExplosao: tipoDanoKey === "explosao",
+            danoFinal: danoTotal,
+            pvMaximo: resultadoDano.pvMaximo,
+            dilacera: !!armaConfig.dilacera,
+            dilaceraEmGolpeNormal: !!armaConfig.dilaceraEmGolpeNormal,
+            criticoPositivo,
+            ehArmaBranca: PERICIAS_ARMA_BRANCA.includes(nomePericia)
+        });
+        if (dilacerou) {
+            notaDilaceracao = " 🩸 DILACEROU!";
+            if (participante._pid && combateComIniciativaAtivo() && deveTestarSangramentoProfundo(dilacerou, danoTotal, resultadoDano.pvMaximo)) {
+                const resultadoSangramentoProfundo = await testarSangramentoProfundo(participante._pid, constituicaoAlvo, danoTotal);
+                if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
+            }
+        }
+    }
+
+    // Ferida por dano acima de 1/10 do PV MÁXIMO — regra nova, roda em
+    // TODO golpe que causou dano de verdade numa ficha de jogador,
+    // mirado ou não (o bloco de Golpe Mirado acima continua exclusivo
+    // de golpe mirado, por regra própria do manual). Corte e Perfuração
+    // abrem ferida tipo "corte"; Contusão abre ferida tipo "fratura".
+    // Chance base de 20% assim que o dano ultrapassa 1/10 do PV máximo
+    // do alvo; a cada 1/10 ADICIONAL de dano além desse mínimo, +20% de
+    // chance (limite 100%) — ver chanceFeridaPorDano em regras.js.
+    if (criaFeridaHabilitado && (ehFogo || ehDanoPerfurante(tipoDanoKey) || ehDanoCortante(tipoDanoKey) || ehDanoContundente(tipoDanoKey))) {
+        const chance = chanceFeridaPorDano(danoTotal, resultadoDano.pvMaximo);
+        if (chance > 0) {
+            const tipoFerida = ehDanoContundente(tipoDanoKey) ? "fratura" : "corte";
+            const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
+            const sucessoFerida = (Math.random() * 100) < chance;
+            notaEfeitoLocal += sucessoFerida
+                ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
+                : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
+            if (sucessoFerida) {
+                await criarFerida(participante.refId, { tipo: tipoFerida, local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+            }
         }
     }
 
@@ -4679,11 +4833,24 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // aplicarDano (mestre.js) sobre o dano bruto, antes da redução de
     // armadura — aqui só sinaliza no Log que o multiplicador entrou.
     const notaFragil = resultadoDano.fragil ? ` 🩹 ${nomeAlvo} é FRÁGIL — dano recebido dobrado!` : "";
+    // Recuperação de PV em andamento (manual, "Saúde e PVs"): já
+    // aplicada dentro de aplicarDano (mestre.js) sobre o dano bruto,
+    // mesmo ponto que Frágil — aqui só sinaliza no Log.
+    const notaRecuperacao = resultadoDano.emRecuperacao ? ` ⏳ ${nomeAlvo} está em recuperação de PV — dano recebido aumentado em 50%!` : "";
 
     const efeitoTexto = (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "";
+    // Redução do Dano por Colete x Calibre (manual pg. 53): quando o
+    // piso de dano mínimo contundente vence a redução normal do
+    // colete, aplicarDano (mestre.js) já embutiu isso no danoFinal e
+    // devolveu tipoDanoFinalAjustado diferente do tipoDanoKey original
+    // — aqui só avisa no Log qual foi o tipo de dano que realmente
+    // valeu.
+    const notaColete = (resultadoDano.tipoDanoFinalAjustado && resultadoDano.tipoDanoFinalAjustado !== tipoDanoKey)
+        ? ` 🦺 O colete freou o tiro, mas o impacto ainda causou dano CONTUNDENTE (${TIPOS_DANO.find(t => t.key === resultadoDano.tipoDanoFinalAjustado)?.label || resultadoDano.tipoDanoFinalAjustado}), ignorando o resto da redução.`
+        : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaFragil}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaFragil}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaSangramento}${notaEfeitoLocal}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
@@ -9636,6 +9803,13 @@ document.getElementById("modal-classe-protecao")?.addEventListener("change", () 
 document.getElementById("modal-calibre")?.addEventListener("change", () => {
     if (el.modalConfigArmaFogo.style.display === "none") return;
     if (el.modalCampoArmaCarregador && el.modalCampoArmaCarregador.style.display !== "none") popularCarregadorAnexado(null);
+    // Sugestão de default do checkbox "Dilacera" (item 7 do plano de
+    // saúde/complicações) — só reaplica a sugestão quando o calibre
+    // muda DE VERDADE nesta sessão do modal; a checkbox continua
+    // 100% editável na sequência.
+    if (el.modalArmaDilacera && el.modalCampoDilacera.style.display !== "none") {
+        el.modalArmaDilacera.checked = calibreSugereDilacera(el.modalCalibre.value);
+    }
 });
 
 // Monta a lista de checkboxes "Tipos de dano reduzidos" + valor de
@@ -9937,6 +10111,23 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     el.modalCampoTipoDanoExtra.style.display = ehArmaBranca ? "flex" : "none";
     if (ehArmaBranca) el.modalArmaTipoDanoExtra.value = (armaConfig && armaConfig.tipoDanoExtra) || "";
 
+    // Dilaceração (item 7 do plano de saúde/complicações) — só faz
+    // sentido em arma de verdade (fogo ou branca); explosão dilacera
+    // automaticamente por tipo de dano, sem checkbox (ver mestre.js).
+    // Checkbox sempre editável — só nasce PRÉ-marcada (sugestão, não
+    // trava nada) quando o item ainda não tem esse campo salvo E o
+    // calibre escolhido for Classe V. "Dilacera em golpe normal" só
+    // aparece em arma branca.
+    el.modalCampoDilacera.style.display = arma ? "flex" : "none";
+    if (arma) {
+        const dilaceraSalvo = armaConfig ? armaConfig.dilacera : undefined;
+        el.modalArmaDilacera.checked = (dilaceraSalvo !== undefined && dilaceraSalvo !== null)
+            ? !!dilaceraSalvo
+            : calibreSugereDilacera(calibreAtual);
+    }
+    el.modalCampoDilaceraGolpeNormal.style.display = ehArmaBranca ? "flex" : "none";
+    if (ehArmaBranca) el.modalArmaDilaceraGolpeNormal.checked = !!(armaConfig && armaConfig.dilaceraEmGolpeNormal);
+
     // Redução de dano — só pra tags do tipo "colete/placa".
     const reduzDano = tagPodeReduzirDano(tagKey);
     el.modalConfigReducaoDano.style.display = reduzDano ? "block" : "none";
@@ -10066,6 +10257,12 @@ document.getElementById("modal-pericia-uso")?.addEventListener("change", (e) => 
     const ehArmaBrancaAgora = ehArma(el.modalTag.value) && !ehArmaDeFogo(e.target.value);
     el.modalCampoTipoDanoExtra.style.display = ehArmaBrancaAgora ? "flex" : "none";
     if (!ehArmaBrancaAgora) el.modalArmaTipoDanoExtra.value = "";
+    // "Dilacera em golpe normal" segue a mesma regra (só arma branca) —
+    // ver atualizarCamposPorTag.
+    if (el.modalCampoDilaceraGolpeNormal) {
+        el.modalCampoDilaceraGolpeNormal.style.display = ehArmaBrancaAgora ? "flex" : "none";
+        if (!ehArmaBrancaAgora) el.modalArmaDilaceraGolpeNormal.checked = false;
+    }
 });
 
 // ---------------------------------------------------------------------
@@ -10391,6 +10588,7 @@ async function salvarPericiaDoModal(id) {
 // na câmara), não um campo que o modal deixa o jogador escolher direto.
 function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     const ehFogo = ehArmaDeFogo(periciaUso);
+    const armaTag = ehArma(tag);
     // "Usa carregador?" é escolha explícita (checkbox) desde que deixou
     // de ser automática por calibre — ver armaUsaCarregador. Sem
     // carregador, nunca grava carregadorId, mesmo que o select escondido
@@ -10406,6 +10604,11 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
         // resolverAtaque e em abrirModalArremessar/resolverArremessar.
         tipoDanoExtra: (!ehFogo && el.modalArmaTipoDanoExtra.value) ? el.modalArmaTipoDanoExtra.value : null,
         escala: ehFogo ? null : (el.modalArmaEscala.value || null),
+        // Dilaceração (item 7 do plano de saúde/complicações) — só se
+        // aplica a arma de verdade (fogo ou branca), nunca a explosivo
+        // (que dilacera automaticamente por dano, sem checkbox).
+        dilacera: armaTag ? !!el.modalArmaDilacera.checked : false,
+        dilaceraEmGolpeNormal: (armaTag && !ehFogo) ? !!el.modalArmaDilaceraGolpeNormal.checked : false,
         modificacoesArma: lerModificacoesArmaDoModal(),
         capacidade: ehFogo ? (Number(el.modalArmaCapacidade.value) || 0) : null,
         disparosPorTurno: ehFogo ? (Number(el.modalArmaDisparosTurno.value) || 1) : null,
@@ -11453,6 +11656,61 @@ function acoesDeTratamentoParaFerida(ferida) {
 function renderizarSaude() {
     if (!el.saudeLista) return;
 
+    // Painel do Mestre pra reverter coma (item 6 do plano de saúde/
+    // complicações) — sempre manual, nunca automático (ver
+    // reverterComaGodmode em mestre.js). Fica visível só quando o
+    // Mestre está com uma ficha aberta que está atualmente em coma.
+    if (el.mestreComaPainel) {
+        const emComa = isMestre && !modoNpc && fichaAtual?.dados?.coma?.ativo;
+        if (emComa) {
+            el.mestreComaPainel.style.display = "";
+            el.mestreComaPainel.innerHTML = `<p class="hint">💤 Esta ficha está em coma. A saída é sempre manual — confirme só se o tratamento em hospital ou a Cirurgia de Campo (bem-sucedidos) justificarem, na cena.</p>
+                <button type="button" class="btn-lime" id="btn-reverter-coma">Reverter coma</button>`;
+            const btnReverterComa = document.getElementById("btn-reverter-coma");
+            if (btnReverterComa) {
+                btnReverterComa.addEventListener("click", async () => {
+                    try {
+                        await reverterComaGodmode(fichaAtualId);
+                        toast("Coma revertido — a próxima recuperação de PV dessa ficha vai levar o dobro do tempo.");
+                    } catch (err) {
+                        console.error(err);
+                        toast("Falha ao reverter o coma.", "erro");
+                    }
+                });
+            }
+        } else {
+            el.mestreComaPainel.style.display = "none";
+            el.mestreComaPainel.innerHTML = "";
+        }
+    }
+
+    // Painel do Mestre pra "acordar" o Desmaio Genérico (item 4) — só
+    // desliga o badge/aviso; sem efeito mecânico (ver
+    // acordarDesmaioGodmode em mestre.js).
+    if (el.mestreDesmaioPainel) {
+        const desmaiado = isMestre && !modoNpc && fichaAtual?.dados?.desmaiado;
+        if (desmaiado) {
+            el.mestreDesmaioPainel.style.display = "";
+            el.mestreDesmaioPainel.innerHTML = `<p class="hint">😵 Esta ficha está com o aviso de Desmaio ativo. "Acordar" é sempre resolvido pela mesa (teste de Constituição narrado).</p>
+                <button type="button" class="btn-lime" id="btn-acordar-desmaio">Acordar (desligar aviso)</button>`;
+            const btnAcordarDesmaio = document.getElementById("btn-acordar-desmaio");
+            if (btnAcordarDesmaio) {
+                btnAcordarDesmaio.addEventListener("click", async () => {
+                    try {
+                        await acordarDesmaioGodmode(fichaAtualId);
+                        toast("Aviso de Desmaio desligado.");
+                    } catch (err) {
+                        console.error(err);
+                        toast("Falha ao desligar o aviso de Desmaio.", "erro");
+                    }
+                });
+            }
+        } else {
+            el.mestreDesmaioPainel.style.display = "none";
+            el.mestreDesmaioPainel.innerHTML = "";
+        }
+    }
+
     if (modoNpc) {
         el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de feridas.</p>`;
         return;
@@ -11575,6 +11833,10 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
                 <option value="nenhum">Sem item (-2)</option>
             </select>
         </label>
+        <label style="display:block;margin-top:10px;">
+            <input type="checkbox" id="ferida-em-hospital"> Tratamento em hospital
+            <span class="hint" style="display:block;">Se o tratamento tiver sucesso, reduz em 1/10 o tempo da próxima recuperação de PV (ficha inteira, não empilha).</span>
+        </label>
         <label style="display:block;margin-top:10px;">Dificuldade (${config.dificuldadeMin}-${config.dificuldadeMax})
             <input type="number" id="ferida-dificuldade" value="${config.dificuldadeMin}" min="${config.dificuldadeMin}" max="${config.dificuldadeMax}" style="width:100%;">
         </label>
@@ -11582,6 +11844,7 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
             <input type="number" id="ferida-modificador-extra" value="0" style="width:100%;">
         </label>
         <button type="button" class="btn-lime" id="btn-rolar-tratamento-ferida" style="margin-top:14px;width:100%;">Rolar tratamento</button>
+        ${isMestre && godmodeAtivo ? `<button type="button" class="btn-lime" id="btn-tratamento-ferida-godmode" style="margin-top:8px;width:100%;">Tratar automaticamente (Godmode — sem teste nem item)</button>` : ""}
     `;
     const fechar = () => modal.remove();
     modal.querySelector(".combate-fechar").addEventListener("click", fechar);
@@ -11589,23 +11852,50 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
         const situacaoItem = modal.querySelector("#ferida-situacao-item").value;
         const dificuldadeEscolhida = Number(modal.querySelector("#ferida-dificuldade").value) || config.dificuldadeMin;
         const modificadorExtra = Number(modal.querySelector("#ferida-modificador-extra").value) || 0;
+        const emHospital = modal.querySelector("#ferida-em-hospital").checked;
         const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
         try {
             const resultado = await tratarFerida(fichaAlvoId, feridaId, {
                 acao, tratadorPericias: fichaAtual.pericias, tratadorNome: nomeTratador,
-                situacaoItem, dificuldadeEscolhida, modificadorExtra
+                situacaoItem, dificuldadeEscolhida, modificadorExtra, emHospital
             });
             await registrarRolagem({
                 quem: tratandoOutro ? `${nomeTratador} (tratando ${nomeAlvo})` : nomeTratador,
                 modificador: resultado.nivelPericia + resultado.penalidadeItem + resultado.modificadorExtra,
                 resultado: resultado.resultado, detalhe: resultado.detalhe
             });
-            toast(tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe, resultado.sucesso ? undefined : "erro");
+            const notaHospital = resultado.tratamentoHospitalRegistrado
+                ? " (tratamento em hospital registrado — vai descontar 1/10 da próxima recuperação de PV dessa ficha)"
+                : "";
+            toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital, resultado.sucesso ? undefined : "erro");
             fechar();
         } catch (e) {
             toast(e.message || "Falha ao tratar a ferida.", "erro");
         }
     });
+    // Godmode: sucesso automático, sem rolar d20, sem perícia e sem
+    // olhar pro item usado — só o Mestre vê esse botão (checado tanto
+    // aqui quanto na hora de montar o HTML acima), então tratarFerida()
+    // não precisa reconferir a permissão.
+    const btnGodmode = modal.querySelector("#btn-tratamento-ferida-godmode");
+    if (btnGodmode) {
+        btnGodmode.addEventListener("click", async () => {
+            const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
+            const emHospital = modal.querySelector("#ferida-em-hospital").checked;
+            try {
+                const resultado = await tratarFerida(fichaAlvoId, feridaId, {
+                    acao, tratadorNome: `${nomeTratador} (Godmode)`, godmode: true, emHospital
+                });
+                const notaHospital = resultado.tratamentoHospitalRegistrado
+                    ? " (tratamento em hospital registrado — vai descontar 1/10 da próxima recuperação de PV dessa ficha)"
+                    : "";
+                toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital);
+                fechar();
+            } catch (e) {
+                toast(e.message || "Falha ao tratar a ferida.", "erro");
+            }
+        });
+    }
 }
 
 // Modal "Testar Infecção" por ferida (Etapa 5 do plano): substitui o
@@ -12018,6 +12308,46 @@ function npcParticipanteIdCombate() {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     const entrada = Object.entries(participantes).find(([, p]) => p.tipo === "npc" && p.refId === npcAtualId);
     return entrada ? entrada[0] : null;
+}
+
+// Acha o participantId de combate de QUALQUER ficha/npc pelo (tipo,
+// refId) — diferente de meuParticipanteIdCombate/npcParticipanteIdCombate
+// (que só acham "a própria tela"), usado pela ferramenta genérica
+// "Causar dano" do Mestre (que deixa escolher qualquer alvo, dentro ou
+// fora do combate) pra saber se dá pra testar Sangramento (Profundo ou
+// comum), que depende de status por turno — ver Dilaceração (item 7 do
+// plano de saúde/complicações) logo abaixo.
+function participanteIdPorAlvo(tipo, refId) {
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const entrada = Object.entries(participantes).find(([, p]) => p.tipo === tipo && p.refId === refId);
+    return entrada ? entrada[0] : null;
+}
+
+// Busca ao vivo só a Constituição (defesa) de uma ficha/npc pelo
+// (tipo, refId) — mesmo cálculo já usado em resolverArremessar acima,
+// extraído aqui pra reaproveitar na ferramenta genérica "Causar dano"
+// do Mestre (Dilaceração por explosão, item 7 do plano).
+async function buscarConstituicaoAlvo(tipo, refId) {
+    try {
+        if (tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${refId}`)));
+            if (!snap.exists()) return 0;
+            const fichaAlvo = normalizarFicha(snap.val());
+            const modsAlvo = coletarModificadores(fichaAlvo);
+            return calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
+        }
+        const snap = await get(ref(db, caminhoMesa(`npcs/${refId}`)));
+        if (!snap.exists()) return 0;
+        const npc = snap.val();
+        if (npc.modoDetalhado && npc.atributosPrimarios) {
+            const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
+            return calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
+        }
+        return Number(npc.constituicao) || 0;
+    } catch (err) {
+        console.error(err);
+        return 0;
+    }
 }
 
 // Status de Agarrado (manual) de quem está sendo controlado nesta tela
@@ -12818,21 +13148,74 @@ function abrirAcaoMestre(acao) {
         });
         const input = document.createElement("input");
         input.type = "number"; input.placeholder = "Valor de dano"; input.value = 10;
+        // Redução do Dano por Colete x Calibre (manual pg. 53) — só faz
+        // sentido pra Perfuração Especial (tiro de arma de fogo); campo
+        // opcional, some pros outros tipos de dano. Sem calibre
+        // escolhido, aplicarDano cai no comportamento de sempre (soma
+        // reducoesDano cheio, sem multiplicador nem piso contundente).
+        const campoCalibre = document.createElement("div");
+        campoCalibre.style.display = "none";
+        campoCalibre.className = "modal-field";
+        const labelCalibre = document.createElement("label");
+        labelCalibre.innerText = "Calibre do tiro (opcional — aplica a redução por classe de proteção)";
+        const selectCalibre = document.createElement("select");
+        const optCalibrePlaceholder = document.createElement("option");
+        optCalibrePlaceholder.value = ""; optCalibrePlaceholder.innerText = "Sem calibre específico";
+        selectCalibre.appendChild(optCalibrePlaceholder);
+        CALIBRES.forEach(c => {
+            const opt = document.createElement("option");
+            opt.value = c.key; opt.innerText = c.label;
+            selectCalibre.appendChild(opt);
+        });
+        labelCalibre.appendChild(selectCalibre);
+        campoCalibre.appendChild(labelCalibre);
+        selectTipo.addEventListener("change", () => {
+            campoCalibre.style.display = selectTipo.value === "perfuracao_especial" ? "block" : "none";
+            if (selectTipo.value !== "perfuracao_especial") selectCalibre.value = "";
+        });
         const btn = document.createElement("button");
         btn.className = "btn-red"; btn.type = "button"; btn.innerText = "Causar dano";
         btn.addEventListener("click", async () => {
             if (!select.value) { toast("Escolha um alvo.", "erro"); return; }
             if (!selectTipo.value) { toast("Escolha o tipo de dano.", "erro"); return; }
             const [tipo, id] = select.value.split("::");
-            const resultado = await aplicarDano(tipo, id, Number(input.value) || 0, selectTipo.value);
+            const resultado = await aplicarDano(tipo, id, Number(input.value) || 0, selectTipo.value, null, 0, selectCalibre.value || null);
             const tipoLabel = TIPOS_DANO.find(t => t.key === selectTipo.value)?.label || selectTipo.value;
-            const detalhe = resultado.reducao > 0
+            // Redução do Dano por Colete x Calibre (manual pg. 53):
+            // aplicarDano já resolveu o multiplicador e o piso contundente
+            // (quando calibre foi informado) — aqui só avisa no Log
+            // quando o tipo de dano final saiu diferente do escolhido.
+            const notaColete = (resultado.tipoDanoFinalAjustado && resultado.tipoDanoFinalAjustado !== selectTipo.value)
+                ? ` 🦺 O colete freou o tiro, mas o impacto ainda causou dano CONTUNDENTE, ignorando o resto da redução.`
+                : "";
+            // Dilaceração por Explosão (item 7 do plano de saúde/
+            // complicações) — só a fonte (a), automática por tipo de
+            // dano (sem checkbox nenhum): dano de Explosão ≥ metade do
+            // PV total do alvo. As fontes (b)/(c) (arma com checkbox
+            // "Dilacera" + crítico) já são cobertas no fluxo de ataque
+            // normal (resolverAtaque/resolverReacaoPendente), que tem a
+            // arma e o resultado do crítico — esta ferramenta genérica
+            // não tem nem um nem outro.
+            let notaDilaceracao = "";
+            if (selectTipo.value === "explosao") {
+                const dilacerou = golpeDilacera({ ehExplosao: true, danoFinal: resultado.danoFinal, pvMaximo: resultado.pvMaximo });
+                if (dilacerou) {
+                    notaDilaceracao = " 🩸 DILACEROU!";
+                    const pid = participanteIdPorAlvo(tipo, id);
+                    if (pid && combateComIniciativaAtivo() && deveTestarSangramentoProfundo(dilacerou, resultado.danoFinal, resultado.pvMaximo)) {
+                        const constituicaoAlvo = await buscarConstituicaoAlvo(tipo, id);
+                        const resultadoSangramentoProfundo = await testarSangramentoProfundo(pid, constituicaoAlvo, resultado.danoFinal);
+                        if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
+                    }
+                }
+            }
+            const detalhe = (resultado.reducao > 0
                 ? `Mestre causou ${resultado.danoBruto} (${tipoLabel}) em ${resultado.nomeAlvo}. Redução: ${resultado.reducao}. Dano aplicado: ${resultado.danoFinal} (PV: ${resultado.novoPv}).`
-                : `Mestre causou ${resultado.danoFinal} (${tipoLabel}) em ${resultado.nomeAlvo} (PV: ${resultado.novoPv}).`;
+                : `Mestre causou ${resultado.danoFinal} (${tipoLabel}) em ${resultado.nomeAlvo} (PV: ${resultado.novoPv}).`) + notaColete + notaDilaceracao;
             await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: resultado.danoFinal, detalhe });
             toast(detalhe);
         });
-        corpo.append(select, selectTipo, input, btn);
+        corpo.append(select, selectTipo, campoCalibre, input, btn);
 
     } else if (acao === "npcs") {
         montarPainelNpcs(corpo);

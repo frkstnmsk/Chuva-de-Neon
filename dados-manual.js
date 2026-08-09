@@ -623,6 +623,56 @@ export function rotuloCalibre(calibreKey) {
 }
 
 // ---------------------------------------------------------------------
+// Redução do Dano por Colete x Calibre (manual pg. 53, "Proteção
+// Balística" > "Redução do dano") — passo 1 do plano
+// (plano-reducao-dano-colete.txt): ordem fixa entre as Classes de
+// Proteção, pra dar pra comparar "quantas classes acima" o calibre do
+// tiro está em relação à classe do colete que parou (ou não) o
+// impacto. Reaproveita a MESMA ordem já usada em CLASSES_PROTECAO
+// acima, só extraindo as keys — se um dia mudar a lista lá, a ordem
+// daqui muda junto, sem precisar duplicar manualmente.
+// ---------------------------------------------------------------------
+const ORDEM_CLASSES_PROTECAO = CLASSES_PROTECAO.map(c => c.key);
+
+function indiceClasseProtecao(classeKey) {
+    const i = ORDEM_CLASSES_PROTECAO.indexOf(classeKey);
+    return i === -1 ? null : i;
+}
+
+// Diferença de posição entre o calibre do tiro e a classe do colete:
+//   <= 0  -> calibre igual ou inferior à classe do colete
+//   === 1 -> calibre uma classe acima
+//   >= 2  -> calibre duas classes acima ou mais
+// Devolve null quando a comparação não é possível (calibre sem
+// classeProtecao cadastrada, ou colete sem classe setada) — quem
+// consome isso (calcularDanoContraColete, em regras.js) trata null
+// como "sem regra nova, aplica a redução normal do item", pra nunca
+// quebrar um item antigo ou mal configurado.
+export function diferencaClasseCalibreVsColete(calibreKey, classeColeteKey) {
+    const calibre = CALIBRES.find(c => c.key === calibreKey);
+    if (!calibre) return null;
+    const iCalibre = indiceClasseProtecao(calibre.classeProtecao);
+    const iColete = indiceClasseProtecao(classeColeteKey);
+    if (iCalibre === null || iColete === null) return null;
+    return iCalibre - iColete;
+}
+
+// ---------------------------------------------------------------------
+// Dilaceração (item 7 do plano de saúde/complicações) — campo `arma.
+// dilacera` (schema de arma, junto com `dilaceraEmGolpeNormal`) é
+// SEMPRE manual, marcado item a item na criação/edição da arma. Isto
+// aqui só dá o PADRÃO SUGERIDO no formulário (checkbox nasce marcada,
+// continua 100% editável): calibre Classe V (.338 Lapua/.50 BMG) já
+// nasce sugerindo Dilacera — cobre calibres especiais/futuros que
+// também sejam Classe V, sem precisar listar caso a caso. Arma branca
+// nasce sempre com dilacera:false (não tem calibre pra sugerir nada).
+// ---------------------------------------------------------------------
+export function calibreSugereDilacera(calibreKey) {
+    const c = CALIBRES.find(c => c.key === calibreKey);
+    return !!(c && c.classeProtecao === "V");
+}
+
+// ---------------------------------------------------------------------
 // Calibres de escopeta (munição 12 gauge) — regra própria: diferente de
 // qualquer outra arma de fogo do sistema, uma arma nesse calibre NÃO usa
 // carregador. Ela é carregada projétil a projétil, direto do estoque de

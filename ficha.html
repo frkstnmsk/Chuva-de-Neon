@@ -370,6 +370,8 @@
                     <div class="grid-recursos" id="grid-recursos"></div>
                     <div class="estado-saude-badge" id="estado-saude-badge" style="display:none;"></div>
                     <div class="estado-saude-badge estado-energia-badge" id="estado-energia-badge" style="display:none;"></div>
+                    <div class="estado-saude-badge muito-machucado" id="coma-badge" style="display:none;"></div>
+                    <div class="estado-saude-badge" id="desmaio-badge" style="display:none;"></div>
 
                     <!-- Recuperação de PVs (manual): tempo de recuperação proporcional
                          à % de PV perdido (ver calcularTempoRecuperacaoPV em regras.js).
@@ -434,6 +436,8 @@
                     <div class="section-header">Feridas <span class="hint-inline">criadas automaticamente por golpes perfurantes/cortantes mirados e tiros — fraturas e queimaduras são lançadas manualmente pelo Mestre</span></div>
                     <div class="hint">Recuperação de PV fica bloqueada enquanto houver ferida que não esteja no estado "Tratada". Qualquer jogador com a perícia médica necessária pode tratar outro jogador.</div>
                     <button id="btn-tratar-outro-jogador" class="btn-ghost" type="button">🩺 Tratar outro jogador</button>
+                    <div id="mestre-coma-painel" style="display:none;"></div>
+                    <div id="mestre-desmaio-painel" style="display:none;"></div>
                     <div id="saude-lista"></div>
                 </section>
 
@@ -767,6 +771,19 @@
             <div class="modal-field" id="modal-campo-escala" style="display:none;">
                 <label for="modal-arma-escala">Escala (corpo a corpo)</label>
                 <select id="modal-arma-escala"></select>
+            </div>
+
+            <!-- Dilaceração (item 7 do plano de saúde/complicações):
+                 checkbox sempre MANUAL — nunca derivada automaticamente
+                 do calibre, só nasce PRÉ-marcada quando o calibre
+                 escolhido for Classe V (.338 Lapua/.50 BMG), continua
+                 editável depois. "Dilacera em golpe normal" só
+                 aparece/importa em arma branca. -->
+            <div class="modal-field" id="modal-campo-dilacera" style="display:none;">
+                <label><input type="checkbox" id="modal-arma-dilacera"> Dilacera <span class="hint-inline">acerto crítico com essa arma pode causar Sangramento Profundo (dano ≥ 1/3 do PV total do alvo) — vale pra arma de fogo e arma branca</span></label>
+            </div>
+            <div class="modal-field" id="modal-campo-dilacera-golpe-normal" style="display:none;">
+                <label><input type="checkbox" id="modal-arma-dilacera-golpe-normal"> Dilacera em golpe normal <span class="hint-inline">(só arma branca) dilacera em qualquer acerto, não só crítico</span></label>
             </div>
 
             <!-- Só aparece pra tag Explosivo — manual pg. 81-82. "Modelo
