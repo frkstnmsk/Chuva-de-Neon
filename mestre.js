@@ -22,7 +22,7 @@ import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete } from "./dados-manual.js";
-import { itemCabeNoContainer } from "./inventario.js";
+import { itemCabeNoContainer, itemPodeSerLevadoSolto } from "./inventario.js";
 import { criarFerida } from "./saude.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
@@ -2285,17 +2285,49 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
 
     } else if (tipo === "mover_item") {
+        // Busca o estado atual do item — necessário pra saber se ele
+        // está dentroDe algo e pra montar o item hipotético pós-mudança
+        // na validação abaixo (não dá pra confiar só no payload, que
+        // pode estar desatualizado desde que o pedido foi criado).
+        const snapItemAtualMover = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
+        const itemAtualMover = snapItemAtualMover.exists() ? snapItemAtualMover.val() : {};
+
         const dadosMover = { categoria: payload.categoriaNova };
         // Arma que sai de "Levando consigo" não pode continuar equipada
         // (ver itemPodeUsar/itemPodeEquipar em inventario.js).
         if (payload.categoriaNova !== "levando") dadosMover.equipada = false;
+        // Item que muda de categoria não pode continuar "guardado"
+        // dentro de um recipiente que ficou pra trás na categoria
+        // antiga — mesma regra do fluxo direto do Mestre (ver
+        // selectTransferir em ficha.js).
+        if (itemAtualMover.dentroDe) {
+            dadosMover.dentroDe = null;
+            dadosMover.compartimentoId = null;
+        }
+
+        // Trava central de "item não fica solto" (ver
+        // itemPodeSerLevadoSolto em inventario.js, passo 12 do
+        // projeto-slots-porte.txt): só entra em jogo ao MOVER PRA
+        // "levando" — sair de "levando" já é sempre válido (não passa
+        // pela regra). Sem essa checagem aqui, um pedido de jogador
+        // pra mover um item desequipado/sem container de "Em casa"
+        // pra "Levando consigo" deixaria o item num estado sem lugar
+        // físico nenhum. Cancela o pedido em vez de gravar estado
+        // inconsistente, mesmo padrão de "guardar_item" logo abaixo.
+        if (payload.categoriaNova === "levando") {
+            const itemPosMudancaMover = { ...itemAtualMover, ...dadosMover };
+            if (!itemPodeSerLevadoSolto({ inventario: {} }, itemPosMudancaMover)) {
+                await rejeitarAcaoPendente(acao.id);
+                throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" ficaria sem lugar físico válido em "Levando consigo" — equipe-o ou guarde-o num container antes de mover.`);
+            }
+        }
+
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosMover);
 
         // Se o item movido é um recipiente (mochila etc.), o que estava
         // guardado dentro dele vai junto — muda de categoria também,
         // mas continua guardado lá dentro (dentroDe não muda).
-        const snapItemMovido = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}/tag`)));
-        if (snapItemMovido.exists() && ehContainer(snapItemMovido.val())) {
+        if (ehContainer(itemAtualMover.tag)) {
             const snapInventario = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
             if (snapInventario.exists()) {
                 const inventarioAtual = snapInventario.val();
@@ -2401,7 +2433,17 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         if (snapItem.exists()) {
             const item = snapItem.val();
             const novaRefItem = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
-            await set(novaRefItem, { ...item, categoria: "levando" });
+            // Trava central de "item não fica solto" (ver
+            // itemPodeSerLevadoSolto em inventario.js): equipada e
+            // dentroDe são estado físico específico do DONO ANTERIOR
+            // (mão dele, container dele). Herdar esses campos ao
+            // transferir deixaria o item "equipado" sem o novo dono ter
+            // feito nada, ou com dentroDe apontando pra um container
+            // que só existe no inventário de origem (item preso a algo
+            // fantasma, mas passando na checagem porque dentroDe é
+            // truthy). O item sempre chega "solto" pro novo dono, que
+            // precisa equipá-lo ou guardá-lo explicitamente depois.
+            await set(novaRefItem, { ...item, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false });
             await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         }
 
@@ -2420,7 +2462,11 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
         const itemCenario = snapItemCenario.val();
         const novaRefItemCenario = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
-        await set(novaRefItemCenario, { ...itemCenario, categoria: "levando" });
+        // Mesma trava de "item não fica solto" do dar_item acima: zera
+        // dentroDe/compartimentoId/equipada — o item do cenário não tem
+        // mão nem container do personagem que está pegando, então
+        // sempre chega solto, precisando ser equipado/guardado depois.
+        await set(novaRefItemCenario, { ...itemCenario, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false });
         await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
 
     } else if (tipo === "pegar_dinheiro_cenario") {

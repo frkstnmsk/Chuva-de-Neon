@@ -6131,6 +6131,21 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             // antiga (mochila que ficou em casa não segura item que foi
             // "levado" sozinho, por exemplo).
             if (it.dentroDe) dados.dentroDe = null;
+            // Trava central de "item não fica solto" (ver
+            // itemPodeSerLevadoSolto em inventario.js, passo 12 do
+            // projeto-slots-porte.txt): só entra em jogo ao mover PRA
+            // "levando" — sair de "levando" já é sempre válido (não
+            // passa pela regra). Sem essa checagem, mover um item
+            // desequipado/sem container direto de "Em casa" pra
+            // "Levando consigo" deixaria o item sem lugar físico nenhum.
+            if (novaCategoria === "levando") {
+                const itemPosMudanca = { ...it, ...dados };
+                if (!itemPodeSerLevadoSolto(fichaAtual, itemPosMudanca)) {
+                    toast(`"${it.nome}" precisa estar numa mão, vestido/carregado, ou guardado dentro de um compartimento pra ficar em "Levando consigo". Equipe-o ou guarde-o num container antes de mover.`, "erro");
+                    selectTransferir.value = "";
+                    return;
+                }
+            }
             await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
             // Se o item movido é um recipiente, o que está guardado
             // dentro dele muda de categoria junto (continua guardado lá).
