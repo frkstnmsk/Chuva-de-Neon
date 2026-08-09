@@ -5886,8 +5886,12 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     //      equipado — ver itemPodeEquiparContainer. Hoje dá pra vestir
     //      cinto + jaqueta + mochila + colete etc. tudo junto sem trava,
     //      já que a mesa é monitorada pelo Mestre item a item.
-    const podeEquiparCategoria = ehEquipavelItem ? podeEquipar : podeEquiparContainerItem;
-    const ocupaMaoEsteItem = ehContainerItem ? subtipoPorteOcupaMao(it.subtipoPorte) : ehEquipavelItem;
+    // podeEquipar (inventario.js) já cobre QUALQUER item comum
+    // (não-container) — arma, item marcado equipável, ou item comum
+    // qualquer — pra poder ir pra mão; container segue seu próprio
+    // fluxo de vestir/carregar (podeEquiparContainerItem).
+    const podeEquiparCategoria = ehContainerItem ? podeEquiparContainerItem : podeEquipar;
+    const ocupaMaoEsteItem = ehContainerItem ? subtipoPorteOcupaMao(it.subtipoPorte) : true;
     const maosNecessariasItem = Number(it.maosNecessarias) || 1;
     const maosLivresAtuais = maosDisponiveis(fichaAtual);
     const semMaosLivres = !equipadaItem && ocupaMaoEsteItem && maosLivresAtuais < maosNecessariasItem;
@@ -5895,11 +5899,19 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     // Variáveis finais consumidas no template abaixo: container usa seu
     // próprio texto/título por subtipoPorte; item comum/arma mantém o
     // rótulo genérico de sempre (✅ Equipado / ○ Desequipado / 🗡️ Equipada).
-    const mostrarBtnEquipar = ehEquipavelItem || ehContainerItem;
+    // Todo item "levando" precisa de um lugar físico válido (mão ou
+    // vestido/carregado) — então o botão sempre aparece pra qualquer
+    // item que não esteja guardado dentro de outra coisa: equipável
+    // (arma/marcado), container (vestir/carregar), ou item comum
+    // qualquer (segurar/largar da mão — ver itemPodeSerLevadoSolto em
+    // inventario.js).
+    const mostrarBtnEquipar = true;
     const podeEquiparBtn = podeEquiparCategoria && !semMaosLivres && !conflitoExclusividade;
     const textoBtnEquipar = ehEquipavelItem
         ? (equipadaItem ? (ehArmaItem ? "🗡️ Equipada" : (ehExplosivoItem ? "💣 Equipada" : "✅ Equipado")) : "○ Desequipado")
-        : (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.desligar : rotuloContainerAtual.ligar) : "");
+        : (ehContainerItem
+            ? (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.desligar : rotuloContainerAtual.ligar) : "")
+            : (equipadaItem ? "🤚 Na mão" : "○ Solto"));
     const tituloBtnEquipar = !podeEquiparCategoria
         ? "Precisa estar em 'Levando consigo' pra equipar"
         : conflitoExclusividade
@@ -5908,7 +5920,9 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
                 ? `Sem mãos livres (${maosLivresAtuais}/2)`
                 : (ehEquipavelItem
                     ? (equipadaItem ? "Equipado agora — clique pra desequipar" : "Desequipado — clique pra equipar e poder usar")
-                    : (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.tituloDesligar : rotuloContainerAtual.tituloLigar) : ""));
+                    : (ehContainerItem
+                        ? (rotuloContainerAtual ? (equipadaItem ? rotuloContainerAtual.tituloDesligar : rotuloContainerAtual.tituloLigar) : "")
+                        : (equipadaItem ? "Na mão agora — clique pra largar" : "Solto — clique pra segurar na mão")));
 
     // Chave de veículo (ver plano-veiculos.txt, adendo "chave"): mostra
     // qual carro ela destranca, pra não virar uma "Chave" solta sem
@@ -5984,7 +5998,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
                 // como "levando consigo ativo" enquanto a peça-mãe não
                 // estiver equipada nem em "levando".
                 if (!itemPodeSerLevadoSolto(fichaAtual, { ...it, equipada: false })) {
-                    toast(`Pra tirar "${it.nome}" primeiro guarde-o dentro de outro recipiente ou mova-o pra outra categoria — solto em "Levando consigo" ele precisa continuar equipado.`, "erro");
+                    toast(`Pra tirar "${it.nome}" primeiro guarde-o dentro de outro recipiente ou mova-o pra outra categoria — solto em "Levando consigo" ele precisa continuar numa mão (ou equipado/vestido).`, "erro");
                     return;
                 }
             }
@@ -10153,19 +10167,22 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     atualizarCampoJaEquipar();
 }
 
-// Mostra o campo "Já entra equipado" só quando o item sendo montado no
-// modal é de fato algo que se equipa/segura: arma (sempre equipável),
-// item comum marcado "equipável" (checkbox acima), ou recipiente cujo
-// subtipo de porte é vestido/carregado (roupa, cinto, mochila, bolsa de
-// mão — mesma lista aceita por itemPodeSerLevadoSolto em inventario.js).
-// Desmarca o checkbox sempre que o campo some, pra não guardar uma
-// escolha "fantasma" de quando ele ainda estava visível.
+// Mostra o campo "Já entra equipado" quando o item sendo montado no
+// modal tem algum lugar físico válido pra existir solto em "levando":
+// arma/explosivo (sempre equipável), recipiente cujo subtipo de porte
+// é vestido/carregado (roupa, cinto, mochila, bolsa de mão — mesma
+// lista aceita por itemPodeSerLevadoSolto em inventario.js), ou
+// QUALQUER outro item comum — a mão aceita qualquer item solto, marcado
+// "equipável" ou não (ver itemPodeEquipar/itemPodeSerLevadoSolto em
+// inventario.js: "equipável" hoje só trava se o item PRECISA estar
+// equipado pra poder ser usado, não se ele PODE ir pra mão). Desmarca o
+// checkbox sempre que o campo some, pra não guardar uma escolha
+// "fantasma" de quando ele ainda estava visível.
 function atualizarCampoJaEquipar() {
     const tagKey = el.modalTag.value;
     const elegivel = !tagKey ? false
-        : tagKey === "arma" ? true
         : ehContainer(tagKey) ? ["roupa", "cinto", "mochila", "bolsa_mao"].includes(el.modalSubtipoPorte.value)
-        : !!el.modalEquipavel.checked;
+        : true; // arma/explosivo ou qualquer item comum — todos podem ir pra mão
     el.modalCampoJaEquipar.style.display = elegivel ? "flex" : "none";
     if (!elegivel) el.modalJaEquipar.checked = false;
 }

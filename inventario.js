@@ -94,11 +94,19 @@ export function itemPodeUsar(item) {
     return true;
 }
 
-// Só faz sentido equipar/desequipar um item equipável (arma ou
-// qualquer item marcado como tal) que está "levando consigo" (não dá
-// pra equipar algo que ficou em casa).
+// Trava de mão (ver itemPodeSerLevadoSolto/maosDisponiveis abaixo):
+// QUALQUER item comum (não-container) que está "levando consigo" pode
+// ir pra uma mão do personagem — não só arma ou item marcado
+// "equipável". "Equipável" (itemEhEquipavel) é uma trava SEPARADA, só
+// sobre PODER USAR o item (itemPodeUsar exige equipada=true pra isso);
+// um item comum sem essa marcação continua usável direto, mas ainda
+// precisa de um lugar físico (mão) pra existir solto em "levando" —
+// é essa segunda necessidade que esta função resolve, e por isso ela
+// não olha mais pra itemEhEquipavel. Container (mochila/roupa/etc.)
+// não passa por aqui — tem seu próprio fluxo de vestir/carregar (ver
+// itemPodeEquiparContainer).
 export function itemPodeEquipar(item) {
-    return itemEhEquipavel(item) && item.categoria === "levando";
+    return !ehContainer(item.tag) && item.categoria === "levando";
 }
 
 // Um carregador "anexado" (dentro de uma arma) some da lista principal
@@ -284,12 +292,14 @@ export function listaCompartimentos(item) {
 // =====================================================================
 
 // Quantas mãos livres o personagem tem agora. Base sempre 2. Cada item
-// "levando consigo", equipado, SEM estar guardado dentro de outra
-// coisa, que ocupa mão — seja um item comum equipável (arma etc.) ou
-// um container cujo subtipoPorte ocupa mão (só bolsa_mao hoje) —
-// consome item.maosNecessarias (default 1) do total. Nunca deixa
-// negativo (a UI trava ANTES de deixar equipar algo que estouraria —
-// ver itemPodeEquiparContainer/seção 5.2 do doc de projeto).
+// "levando consigo", equipado (item.equipada), SEM estar guardado
+// dentro de outra coisa, que ocupa mão — seja QUALQUER item comum
+// (arma, item marcado equipável, ou item comum qualquer segurado solto
+// — ver itemPodeSerLevadoSolto) ou um container cujo subtipoPorte
+// ocupa mão (só bolsa_mao hoje) — consome item.maosNecessarias
+// (default 1) do total. Nunca deixa negativo (a UI trava ANTES de
+// deixar equipar algo que estouraria — ver
+// itemPodeEquiparContainer/seção 5.2 do doc de projeto).
 export function maosDisponiveis(fichaAtual) {
     const base = 2;
     const itens = Object.values(fichaAtual.inventario || {});
@@ -338,7 +348,14 @@ export function itemPodeEquiparContainer(fichaAtual, item, idItemAtual) {
 //   b) container mochila equipada (carregando nas costas)
 //   c) container bolsa_mao equipada (segurando — consome mão, mas essa
 //      checagem de recurso é feita à parte por maosDisponiveis)
-//   d) item equipável comum (arma etc.) equipada (segurando)
+//   d) QUALQUER item comum (não-container) segurado na mão
+//      (item.equipada) — não precisa mais estar marcado "equipável"
+//      pra isso: essa marcação (itemEhEquipavel) é uma trava separada,
+//      só sobre PODER USAR o item (ver itemPodeUsar), não sobre ter um
+//      lugar físico válido. Um item qualquer (lanterna, garrafa,
+//      celular) pode ficar "na mão" (equipada=true) sem nunca ter sido
+//      marcado equipável — ele só não ganha a exigência extra de
+//      "precisa equipar pra usar" que arma/item equipável tem.
 // Qualquer outra coisa solta nessas condições NÃO é permitida — a UI
 // deve bloquear salvar o item nesse estado (ver seção 5.4 do doc).
 // Item guardado dentro de algo (item.dentroDe) ou fora da categoria
@@ -354,7 +371,7 @@ export function itemPodeSerLevadoSolto(fichaAtual, item) {
         return subtipoValido && !!item.equipada;
     }
 
-    return itemEhEquipavel(item) && !!item.equipada;
+    return !!item.equipada;
 }
 
 export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo };
