@@ -25,7 +25,7 @@ import {
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehExplosivo, ehArmaOuExplosivo, ehModuloDetonacao, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
+    ehArma, ehExplosivo, ehArmaOuExplosivo, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
     ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
@@ -112,7 +112,9 @@ import {
     adicionarParticipanteCenario, removerParticipanteCenario,
     adicionarItemCenario, removerItemCenario,
     adicionarVeiculoCenario, removerVeiculoCenario, editarVeiculoCenario,
-    adicionarDinheiroCenario, removerDinheiroCenario
+    adicionarDinheiroCenario, removerDinheiroCenario,
+    adicionarExplosivoCenario, removerExplosivoCenario,
+    detonarExplosivoCenario
 } from "./mestre.js";
 import {
     criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida
@@ -572,6 +574,9 @@ const el = {
     // mora dentro da gaveta de Ações Pendentes (#drawer-pendentes), que
     // já tem seu próprio botão de fechar (drawerPendentesFechar).
     mestreCorpo: document.getElementById("mestre-corpo"),
+    mestreCorpoTopo: document.getElementById("mestre-corpo-topo"),
+    mestreCorpoTitulo: document.getElementById("mestre-corpo-titulo"),
+    mestreCorpoFechar: document.getElementById("mestre-corpo-fechar"),
     chkGodmode: document.getElementById("chk-godmode"),
     chkGodmodeIgnorarSaude: document.getElementById("chk-godmode-ignorar-saude"),
     modalCustoVida: document.getElementById("modal-custo-vida"),
@@ -2840,7 +2845,15 @@ function renderizarPericias(modificadoresPlanos) {
 // rolou pelo nome da ficha ativa (jogador) ou "Mestre".
 // ehCQC (default false): se esta rolagem usa especificamente a perícia
 // CQC — só importa pro CQC nível 5 (ver checarConsumoDeAcao/extraCQC).
-async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
+// dificuldade (opcional): quando informada, o log e o toast passam a
+// mostrar "✅ Sucesso" ou "❌ Falhou" comparando resultado x dificuldade
+// (resultado >= dificuldade = sucesso), além do que já existia (crítico
+// positivo/negativo). Chamadas antigas que não passam esse parâmetro
+// continuam funcionando exatamente como antes (nenhuma sinalização de
+// sucesso/falha). Retorna { resultado, bruto, criticoPositivo,
+// criticoNegativo, sucesso } pra quem precisar decidir algo com o
+// resultado da rolagem (sucesso é null se dificuldade não foi passada).
+async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false, dificuldade = null) {
     // Trava de ações: com combate com iniciativa ativo, uma rolagem só
     // acontece se for o turno de quem está agindo (jogador OU o NPC que
     // o Mestre estiver controlando) E ainda houver ação sobrando nesse
@@ -2875,13 +2888,16 @@ async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
     const notaCritico = criticoNegativo
         ? " 🔥 FALHA CRÍTICA — Fogo Amigo/Desastre! Resolução rápida pelo Mestre."
         : (criticoPositivo ? " ⚡ ACERTO CRÍTICO!" : "");
+    const temDificuldade = dificuldade !== null && dificuldade !== undefined;
+    const sucesso = temDificuldade ? resultado >= Number(dificuldade) : null;
+    const notaSucesso = temDificuldade ? (sucesso ? " · ✅ Sucesso" : " · ❌ Falhou") : "";
     const quem = isMestre ? `Mestre (${modoNpc ? (fichaAtual?.config?.nomeExibicao || npcAtualId) : (nomeDeFicha(fichaAtualId) || "—")})` : (fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador");
     await registrarRolagem({
         quem, modificador, resultado,
-        detalhe: `${nomeAlvo}: d20 (${bruto}) ${modificador >= 0 ? "+" : ""}${modificador}${notaCritico}`,
+        detalhe: `${nomeAlvo}: d20 (${bruto}) ${modificador >= 0 ? "+" : ""}${modificador}${notaCritico}${notaSucesso}`,
         critico: criticoNegativo ? "falha" : (criticoPositivo ? "acerto" : null)
     });
-    toast(`${nomeAlvo}: ${resultado} (d20: ${bruto} ${modificador >= 0 ? "+" : ""}${modificador})${notaCritico}`, criticoNegativo ? "critico-falha" : (criticoPositivo ? "critico-acerto" : "ok"));
+    toast(`${nomeAlvo}: ${resultado} (d20: ${bruto} ${modificador >= 0 ? "+" : ""}${modificador})${notaCritico}${notaSucesso}`, criticoNegativo ? "critico-falha" : (criticoPositivo ? "critico-acerto" : (temDificuldade && !sucesso ? "erro" : "ok")));
 
     if (participanteIdParaGastarAcao) {
         await criarAcaoPendente({
@@ -2893,6 +2909,7 @@ async function rolarERegistrar(nomeAlvo, modificador, ehCQC = false) {
         });
         toast("Gasto de ação enviado pro Mestre aprovar.");
     }
+    return { resultado, bruto, criticoPositivo, criticoNegativo, sucesso };
 }
 
 // Manobra "Esquivar" usada proativamente no PRÓPRIO turno (diferente da
@@ -3458,6 +3475,14 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
 // não simula área/alcance, então aplicar o dano a quem estiver na área
 // continua manual (ferramentas de combate normais, uma vítima de cada vez).
 function abrirModalArmarExplosivo(it, modificadoresPlanos) {
+    // Armar SEM estar em nenhum cenário ativo é bloqueado (ver
+    // plano-explosivos-cenario.txt, decisão 3) — não tem onde gravar o
+    // explosivo nem quem fica no raio de efeito depois.
+    const cenario = cenarioAtualDoPersonagem();
+    if (!cenario) {
+        toast(`"${it.nome}" só pode ser armado dentro de um cenário — peça ao Mestre pra te colocar em um antes de usar.`, "erro");
+        return;
+    }
     let modal = document.getElementById("modal-armar-explosivo");
     if (!modal) {
         modal = document.createElement("div");
@@ -3489,10 +3514,43 @@ function abrirModalArmarExplosivo(it, modificadoresPlanos) {
         modal.remove();
         const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
         const rotuloDif = cfg.dificuldadeArmar ? ` (dif. armar: ${cfg.dificuldadeArmar})` : "";
-        await rolarERegistrar(`${it.nome} — Armar${rotuloDif}`, modificadorFinal, false);
+        // dificuldadeArmar vai como 4º argumento pra rolarERegistrar
+        // sinalizar Sucesso/Falhou no Log de Dados e no toast — não trava
+        // nada automaticamente (o explosivo continua sendo gravado no
+        // cenário mesmo numa falha, igual antes): quem decide o que
+        // acontece numa falha de armar continua sendo o Mestre, só que
+        // agora com o resultado já comparado contra a dificuldade em vez
+        // de precisar fazer essa conta de cabeça.
+        await rolarERegistrar(`${it.nome} — Armar${rotuloDif}`, modificadorFinal, false, cfg.dificuldadeArmar || null);
+
+        // Grava o explosivo no cenário e tira o item do inventário DIRETO
+        // — diferente de dar/remover item, "Armar" não passa pela fila de
+        // aprovação do Mestre (decisão 4), mesmo sendo o jogador o autor.
+        const nomeAtacanteOuNpc = fichaAtual?.config?.nomeExibicao || sessao?.nome || (modoNpc ? npcAtualId : fichaAtualId);
+        await adicionarExplosivoCenario(cenario.id, {
+            nome: it.nome,
+            dano: cfg.danoBase || 0,
+            raio: cfg.raio || 0,
+            // "explosao" é a chave de TIPOS_DANO (dados-manual.js) que o
+            // painel "Causar Dano" e aplicarDano esperam — não confundir
+            // com a TAG do item "explosivo" (TAGS_ITEM). Bug corrigido:
+            // gravar "explosivo" aqui deixava o select de tipo de dano
+            // vazio ao pré-preencher o painel na Fase 4, e também não
+            // batia com a checagem de Dilaceração por Explosão.
+            tipoDano: "explosao",
+            moduloDetonacaoNome: modulo ? modulo.nome : null,
+            moduloDetonacaoEfeito: modulo ? modulo.efeito : null,
+            armadoPorTipo: modoNpc ? "npc" : "ficha",
+            armadoPorId: modoNpc ? npcAtualId : fichaAtualId,
+            armadoPorNome: nomeAtacanteOuNpc,
+            criadoEm: Date.now()
+        });
+        delete fichaAtual.inventario[it.id];
+        await remove(ref(db, `${caminhoBase()}/inventario/${it.id}`));
+
         toast(modulo
-            ? `💣 Módulo de detonação ativado: ${modulo.nome} — ${modulo.efeito}`
-            : `💣 ${it.nome} armado.`);
+            ? `💣 Módulo de detonação ativado: ${modulo.nome} — ${modulo.efeito}. Armado em "${cenario.titulo}".`
+            : `💣 ${it.nome} armado em "${cenario.titulo}".`);
     });
     document.body.appendChild(modal);
 }
@@ -5931,12 +5989,21 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const veiculoDaChave = it.tag === "chave" && it.veiculoId ? fichaAtual.veiculos?.[it.veiculoId] : null;
     const chaveLabel = veiculoDaChave ? ` · Destranca: ${escapeHtml(veiculoDaChave.nome || "(sem nome)")}` : "";
 
+    // Explosivo fora de qualquer cenário ativo (ver
+    // plano-explosivos-cenario.txt, Fase 5.2 — nice-to-have): avisa aqui
+    // ANTES de clicar "Armar" e esbarrar no toast de bloqueio
+    // (abrirModalArmarExplosivo). Vale tanto pro jogador quanto pro
+    // Mestre atuando como NPC — o bloqueio em si não distingue os dois.
+    const avisoArmarSemCenarioLabel = (ehExplosivoItem && !cenarioAtualDoPersonagem())
+        ? ` · ⚠ precisa estar num cenário pra armar`
+        : "";
+
     if (nivel > 0) li.classList.add("entity-item-aninhado");
 
     li.innerHTML = `
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
-            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}</span>
+            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${avisoArmarSemCenarioLabel}</span>
         </div>
         <div class="entity-badges">
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
@@ -6883,6 +6950,23 @@ function renderizarVeiculos() {
 // adicionar participante/item/veículo) continua só no Gerenciador de
 // Cenário (Fase 6), não aqui.
 // ---------------------------------------------------------------------
+
+// Em qual cenário o personagem/NPC atualmente carregado na tela está
+// participando agora (ficha OU NPC, conforme modoNpc) — usado pelo
+// "Armar" de explosivo (ver plano-explosivos-cenario.txt, Fase 2) pra
+// bloquear armar fora de cenário, e pra saber em qual nó
+// cenarios/{id}/explosivos gravar. Mesmo critério de filtro usado em
+// renderizarCenarios logo abaixo, só que sem depender de isMestre —
+// funciona tanto pro jogador quanto pro Mestre atuando como NPC.
+function cenarioAtualDoPersonagem() {
+    const idAtual = modoNpc ? npcAtualId : fichaAtualId;
+    const tipoAtual = modoNpc ? "npc" : "ficha";
+    if (!idAtual) return null;
+    return cenariosCache.find(c =>
+        Object.values(c.participantes || {}).some(p => p.tipo === tipoAtual && p.refId === idAtual)
+    ) || null;
+}
+
 // Qual linha de dinheiro está com a caixinha de "quanto pegar" aberta
 // no momento (só 1 por vez, pra não poluir a tela) — guarda o id do
 // saldo de dinheiro do cenário (push key, único mesmo entre cenários
@@ -6905,6 +6989,7 @@ function renderizarCenarios() {
         const participantes = Object.values(cenario.participantes || {});
         const itens = Object.entries(cenario.itens || {});
         const veiculos = Object.entries(cenario.veiculos || {});
+        const explosivos = Object.entries(cenario.explosivos || {});
 
         const participantesHtml = participantes.length
             ? participantes.map(p => `<span class="mod-pill">${p.tipo === "ficha" ? "🧑" : "👤"} ${escapeHtml(p.nome)}</span>`).join(" ")
@@ -6925,6 +7010,18 @@ function renderizarCenarios() {
                     ${isMestre ? "" : `<button type="button" class="btn-ghost btn-cenario-arrombar" data-veiculo-nome="${escapeHtml(v.nome || "veículo")}">🔨 Arrombar</button>`}
                 </div>`).join("")
             : `<p class="hint">Nenhum veículo neste cenário.</p>`;
+
+        // Só informativo pro jogador (decisão 5, plano-explosivos-cenario.txt)
+        // — sem botão de Detonar nem Remover aqui, isso é exclusivo do
+        // Mestre (montarDetalheCenario, Gerenciador de Cenário).
+        const explosivosHtml = explosivos.length
+            ? explosivos.map(([explosivoId, exp]) => `
+                <div class="cenario-explosivo-linha" data-cenario-explosivo-id="${explosivoId}">
+                    <span>💣 ${escapeHtml(exp.nome || "(sem nome)")} — dano ${exp.dano}, raio ${exp.raio}m
+                        ${exp.status === "detonado" ? " · <strong>já detonado</strong>" : ""}
+                    </span>
+                </div>`).join("")
+            : `<p class="hint">Nenhum explosivo armado neste cenário.</p>`;
 
         const dinheiro = Object.entries(cenario.dinheiro || {});
         const dinheiroHtml = dinheiro.length
@@ -6957,6 +7054,8 @@ function renderizarCenarios() {
                 ${itensHtml}
                 <div class="section-header" style="margin-top:8px;">Veículos</div>
                 ${veiculosHtml}
+                <div class="section-header" style="margin-top:8px;">Explosivos armados</div>
+                ${explosivosHtml}
                 <div class="section-header" style="margin-top:8px;">Dinheiro</div>
                 ${dinheiroHtml}
             </div>`;
@@ -10412,7 +10511,13 @@ function adicionarLinhaModificador(alvoSelecionado, valorAtual) {
     const input = row.querySelector(".mod-valor");
     const btnRemover = row.querySelector(".mod-remover");
 
-    const pericias = Object.values(fichaAtual.pericias || {});
+    // fichaAtual pode ser null aqui (Mestre criando item direto no Banco
+    // Global sem nenhuma ficha aberta) — sem essa proteção, o acesso a
+    // .pericias quebrava a função inteira. Também não é mais a fonte
+    // principal das perícias oferecidas no seletor: listaAlvosModificador
+    // (regras.js) já usa o catálogo fechado do manual por padrão, isso
+    // aqui só cobre o caso raro de a ficha ter algum nome fora do catálogo.
+    const pericias = Object.values((fichaAtual && fichaAtual.pericias) || {});
     listaAlvosModificador(pericias).forEach(a => {
         const opt = document.createElement("option");
         opt.value = a.value;
@@ -12845,6 +12950,41 @@ function montarPainelAcoesPendentes(corpo) {
         card.className = "pendente-card";
         card.innerHTML = `<span>${escapeHtml(acao.detalhe || `${acao.nomeJogador}: ${acao.tipo}`)}</span>`;
 
+        // "explosao_raio" (ver detonarExplosivoCenario, mestre.js, e
+        // plano-explosivos-cenario.txt Fase 4) não é um pedido pra
+        // Confirmar/Rejeitar como os outros — é uma pergunta binária
+        // "esse participante estava no raio?". "Sim" já abre o painel
+        // "Causar Dano" pré-preenchido (alvo/tipo/valor), pro Mestre só
+        // conferir e clicar "Causar dano"; "Não" só descarta a pendência.
+        // Em ambos os casos usa rejeitarAcaoPendente (só tira da fila —
+        // não é "confirmação" de nada automático, o dano é aplicado à
+        // parte pelo painel de dano).
+        if (acao.tipo === "explosao_raio") {
+            const botoesExp = document.createElement("div");
+            botoesExp.className = "pendente-botoes";
+            const btnSim = document.createElement("button");
+            btnSim.className = "btn-red"; btnSim.type = "button"; btnSim.innerText = "💥 Sim, no raio";
+            btnSim.addEventListener("click", async () => {
+                await rejeitarAcaoPendente(acao.id);
+                abrirAcaoMestre("dano", {
+                    alvoTipo: acao.payload.participanteTipo,
+                    alvoId: acao.payload.participanteRefId,
+                    tipoDano: acao.payload.tipoDano,
+                    valor: acao.payload.dano
+                });
+            });
+            const btnNao = document.createElement("button");
+            btnNao.className = "btn-ghost"; btnNao.type = "button"; btnNao.innerText = "Não, fora do raio";
+            btnNao.addEventListener("click", async () => {
+                await rejeitarAcaoPendente(acao.id);
+                toast(`${acao.payload.participanteNome} fora do raio.`);
+            });
+            botoesExp.append(btnSim, btnNao);
+            card.appendChild(botoesExp);
+            corpo.appendChild(card);
+            return; // pula o bloco genérico de Confirmar/Rejeitar abaixo
+        }
+
         // "pegar_dinheiro_cenario" e "depositar_dinheiro_item" (ver
         // plano-cenario.txt e transformar_dinheiro_item, mestre.js) não
         // depositam mais automaticamente em "Dinheiro limpo": o Mestre
@@ -13040,6 +13180,15 @@ function configurarPainelMestre() {
         btn.addEventListener("click", () => abrirAcaoMestre(btn.dataset.acao));
     });
 
+    // "×" do cabeçalho de #mestre-corpo (ver abrirAcaoMestre) — minimiza
+    // o conteúdo aberto (ex.: Biblioteca de Itens, que pode ficar bem
+    // grande) sem fechar a gaveta inteira, pra Ações Pendentes voltar a
+    // aparecer logo depois da grade de botões em vez de precisar rolar
+    // até o fim.
+    if (el.mestreCorpoFechar) {
+        el.mestreCorpoFechar.addEventListener("click", () => fecharAcaoMestre());
+    }
+
     // Gerenciador de Combate — painel encostado na direita, pra dar pra
     // ver a ficha e o combate ao mesmo tempo (não é mais um modal de tela
     // cheia). Fecha só pelo botão "Fechar" — clicar na ficha atrás não
@@ -13145,10 +13294,42 @@ function nomeDeFicha(fichaId) {
     return f && f.config && f.config.nomeExibicao ? f.config.nomeExibicao : fichaId;
 }
 
-function abrirAcaoMestre(acao) {
+// Rótulos amigáveis pro cabeçalho de #mestre-corpo (ver
+// mestre-corpo-titulo) — mesmo texto dos botões .mestre-acao em
+// ficha.html, só que num lugar só pra não desalinhar se um dia mudar.
+const ROTULOS_ACAO_MESTRE = {
+    xp: "Dar XP",
+    dado: "Rolar Dado",
+    dano: "Causar Dano",
+    npcs: "NPCs",
+    dashboard: "Fichas ativas",
+    biblioteca: "Biblioteca de Itens",
+    "biblioteca-receitas": "Biblioteca de Receitas"
+};
+
+// Limpa e esconde o conteúdo aberto em #mestre-corpo (ver "×" ligado em
+// configurarPainelMestre). Some com dataset.acaoAberta também, senão o
+// listener em tempo real da Biblioteca (ver linha ~754/767 acima)
+// reabriria o painel sozinho na próxima atualização do Banco Global.
+function fecharAcaoMestre() {
+    const corpo = el.mestreCorpo;
+    corpo.innerHTML = "";
+    delete corpo.dataset.acaoAberta;
+    if (el.mestreCorpoTopo) el.mestreCorpoTopo.style.display = "none";
+}
+
+function abrirAcaoMestre(acao, prefill = null) {
     const corpo = el.mestreCorpo;
     corpo.innerHTML = "";
     corpo.dataset.acaoAberta = acao;
+
+    // Cabeçalho com "×" pra minimizar (ver fecharAcaoMestre) — só some
+    // com o conteúdo aberto, não desmarca nada em Firebase, então dá
+    // pra reabrir clicando no mesmo botão de novo.
+    if (el.mestreCorpoTopo) {
+        el.mestreCorpoTitulo.innerText = ROTULOS_ACAO_MESTRE[acao] || "";
+        el.mestreCorpoTopo.style.display = "flex";
+    }
 
     if (acao === "xp") {
         montarPainelXpMultiplo(corpo);
@@ -13167,7 +13348,7 @@ function abrirAcaoMestre(acao) {
         corpo.append(inputFaces, inputMod, btn);
 
     } else if (acao === "dano") {
-        const select = criarSelectFichas(true);
+        const select = criarSelectFichas(true, prefill ? `${prefill.alvoTipo}::${prefill.alvoId}` : null);
         const selectTipo = document.createElement("select");
         const optPlaceholder = document.createElement("option");
         optPlaceholder.value = ""; optPlaceholder.innerText = "Tipo de dano...";
@@ -13249,6 +13430,17 @@ function abrirAcaoMestre(acao) {
         });
         corpo.append(select, selectTipo, campoCalibre, input, btn);
 
+        // Pré-preenchimento vindo da pendência "está no raio?" (Fase 4,
+        // atalho pro painel de dano — ver plano-explosivos-cenario.txt):
+        // alvo já é tratado acima, aqui só falta tipo de dano e valor.
+        // Dispara o "change" manualmente pra campoCalibre reagir igual
+        // reagiria a uma escolha manual do Mestre.
+        if (prefill) {
+            selectTipo.value = prefill.tipoDano;
+            selectTipo.dispatchEvent(new Event("change"));
+            input.value = prefill.valor;
+        }
+
     } else if (acao === "npcs") {
         montarPainelNpcs(corpo);
 
@@ -13313,7 +13505,14 @@ function montarPainelXpMultiplo(corpo) {
     corpo.append(acoesTopo, lista, input, btnEnviar);
 }
 
-function criarSelectFichas(incluirNpcs) {
+// prefillValue (opcional): pré-seleciona um valor (formato "ficha::{id}"
+// ou "npc::{id}", igual às options) assim que ele existir na lista.
+// Necessário pro atalho da pendência "explosao_raio" (Fase 4) — como os
+// NPCs chegam de forma assíncrona via ouvirNpcs, tentar `select.value =`
+// synchronously logo após criar o select podia falhar se o alvo for um
+// NPC ainda não carregado; aqui a seleção é reaplicada de novo assim que
+// a lista de NPCs preencher.
+function criarSelectFichas(incluirNpcs, prefillValue = null) {
     const select = document.createElement("select");
     select.innerHTML = '<option value="">-- escolha --</option>';
     Object.keys(todasAsFichasCache).forEach(id => {
@@ -13322,6 +13521,7 @@ function criarSelectFichas(incluirNpcs) {
         opt.innerText = nomeDeFicha(id);
         select.appendChild(opt);
     });
+    if (prefillValue) select.value = prefillValue;
     if (incluirNpcs) {
         // NPCs carregados de forma assíncrona — popula via listener separado.
         ouvirNpcs((npcs) => {
@@ -13332,6 +13532,7 @@ function criarSelectFichas(incluirNpcs) {
                 opt.innerText = `[NPC] ${npc.nome}`;
                 select.appendChild(opt);
             });
+            if (prefillValue) select.value = prefillValue;
         });
     }
     return select;
@@ -14553,6 +14754,59 @@ function montarDetalheCenario(detalhe, cenario) {
     linhaAddItem.style.display = "flex"; linhaAddItem.style.gap = "6px"; linhaAddItem.style.flexWrap = "wrap";
     linhaAddItem.append(inputNomeItem, inputObsItem, btnAddItem);
     detalhe.appendChild(linhaAddItem);
+
+    // ---- Explosivos armados (ver plano-explosivos-cenario.txt, Fase 3)
+    // — só o Mestre chega aqui. "Detonar" gera uma pendência "está no
+    // raio?" por participante do cenário (jogadores E NPCs); o explosivo
+    // continua listado depois (status "detonado"), pra não sumir do
+    // radar de ninguém no meio da resolução das pendências — remoção
+    // definitiva é sempre manual (decisão 6). Não tem formulário de "+
+    // Add explosivo" aqui: só chega neste nó pelo "Armar" do jogador
+    // (ficha.js, Fase 2). ----
+    const secaoExplosivos = document.createElement("div");
+    secaoExplosivos.className = "section-header";
+    secaoExplosivos.innerText = "Explosivos armados";
+    detalhe.appendChild(secaoExplosivos);
+
+    const explosivos = cenario.explosivos || {};
+    if (!Object.keys(explosivos).length) {
+        const vazio = document.createElement("p");
+        vazio.className = "hint";
+        vazio.innerText = "Nenhum explosivo armado neste cenário.";
+        detalhe.appendChild(vazio);
+    }
+    Object.entries(explosivos).forEach(([explosivoId, exp]) => {
+        const linha = document.createElement("div");
+        linha.style.display = "flex";
+        linha.style.justifyContent = "space-between";
+        linha.style.alignItems = "center";
+        linha.innerHTML = `<span>💣 ${escapeHtml(exp.nome || "(sem nome)")} — dano ${exp.dano}, raio ${exp.raio}m
+            ${exp.status === "detonado" ? " · <strong>já detonado</strong>" : ""}
+            <span class="entity-sub">armado por ${escapeHtml(exp.armadoPorNome || "?")}${exp.moduloDetonacaoNome ? ` · ${escapeHtml(exp.moduloDetonacaoNome)}` : ""}</span></span>`;
+        const botoes = document.createElement("span");
+        botoes.style.display = "flex"; botoes.style.gap = "6px";
+        if (exp.status !== "detonado") {
+            const btnDetonar = document.createElement("button");
+            btnDetonar.className = "btn-red"; btnDetonar.type = "button"; btnDetonar.innerText = "💥 Detonar";
+            btnDetonar.addEventListener("click", async () => {
+                if (!confirm(`Detonar "${exp.nome}"? Isso cria uma pendência "está no raio?" pra cada participante do cenário — a aplicação do dano fica pro painel de Ações Pendentes.`)) return;
+                try {
+                    await detonarExplosivoCenario(cenario.id, explosivoId);
+                    toast("Pendências de raio de efeito criadas — resolva na fila de Ações Pendentes.");
+                } catch (err) {
+                    console.error(err);
+                    toast(err && err.message ? err.message : "Falha ao detonar.", "erro");
+                }
+            });
+            botoes.appendChild(btnDetonar);
+        }
+        const btnRemover = document.createElement("button");
+        btnRemover.className = "btn-ghost"; btnRemover.type = "button"; btnRemover.innerText = "Remover";
+        btnRemover.addEventListener("click", async () => { await removerExplosivoCenario(cenario.id, explosivoId); toast("Explosivo removido do cenário."); });
+        botoes.appendChild(btnRemover);
+        linha.appendChild(botoes);
+        detalhe.appendChild(linha);
+    });
 
     // ---- Dinheiro solto no cenário (jogador pega um valor específico,
     // até o limite do saldo — ver btn-cenario-pegar-dinheiro em

@@ -1177,6 +1177,23 @@ select.select-guardar-dentro {
     letter-spacing: 1px;
     font-size: 0.95rem;
 }
+/* Cabeçalho que aparece só quando alguma ação do Mestre está aberta
+   (Biblioteca de Itens, NPCs etc.) — o "×" limpa #mestre-corpo na hora,
+   sem precisar rolar a gaveta inteira até achar Ações Pendentes lá
+   embaixo quando o conteúdo aberto é grande (ver abrirAcaoMestre e o
+   listener de #mestre-corpo-fechar em ficha.js). */
+.mestre-corpo-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 2px;
+}
+.mestre-corpo-topo span {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 
 /* Metade de baixo: Ações Pendentes. Sobe pra ocupar o resto da gaveta
    assim que a seção do Mestre termina (flex: 1), em vez de ficar

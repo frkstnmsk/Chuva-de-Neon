@@ -4,7 +4,7 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL } from "./dados-manual.js";
 
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
@@ -42,6 +42,17 @@ export function limiteCargaTeorico(constituicao) {
 
 // Todos os "alvos" que um modificador pode afetar — usados pra popular os
 // seletores do modal e pra rotular o efeito de cada modificador na lista.
+// Perícia específica usa PERICIAS_MANUAL (catálogo fechado do livro) como
+// fonte principal — assim o seletor sempre mostra TODAS as perícias
+// possíveis, mesmo sem nenhuma ficha carregada (ex.: Mestre criando item
+// direto no Banco Global, sem personagem aberto) ou quando a ficha aberta
+// ainda não pegou aquela perícia (dá pra deixar um modificador pronto pra
+// uma perícia que o personagem só vai pegar depois). O parâmetro
+// `pericias` (perícias já existentes na ficha aberta, se houver) só entra
+// como reforço extra, cobrindo qualquer nome que por acaso não esteja no
+// catálogo — na prática nunca deveria acontecer, já que uma perícia só se
+// cria escolhendo da lista fechada (ver prepararModalPericia em ficha.js),
+// mas mantém a rede de segurança sem quebrar nada.
 export function listaAlvosModificador(pericias = []) {
     const alvosFixos = [
         ...ATRIBUTOS_PRIMARIOS.map(a => ({ value: `atributo:${a.key}`, label: a.label })),
@@ -55,10 +66,14 @@ export function listaAlvosModificador(pericias = []) {
         { value: "testes_mentais", label: "Testes mentais (geral)" },
         { value: "testes_fisicos", label: "Testes físicos (geral)" }
     ];
-    const alvosPericias = pericias.map((p, i) => ({
-        value: `pericia:${p.nome}`,
-        label: `Perícia: ${p.nome || "(sem nome)"}`
-    }));
+    const nomesCatalogo = new Set(PERICIAS_MANUAL.map(p => p.nome));
+    const nomesExtras = pericias
+        .map(p => p.nome)
+        .filter(nome => nome && !nomesCatalogo.has(nome));
+    const alvosPericias = [
+        ...PERICIAS_MANUAL.map(p => ({ value: `pericia:${p.nome}`, label: `Perícia: ${p.nome}` })),
+        ...nomesExtras.map(nome => ({ value: `pericia:${nome}`, label: `Perícia: ${nome}` }))
+    ];
     return [...alvosFixos, ...alvosPericias];
 }
 

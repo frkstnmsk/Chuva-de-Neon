@@ -332,10 +332,6 @@ export function ehArmaOuExplosivo(tagKey) {
     return ehArma(tagKey) || ehExplosivo(tagKey);
 }
 
-export function ehModuloDetonacao(tagKey) {
-    return tagKey === "modulo_detonacao";
-}
-
 // ---------------------------------------------------------------------
 // Explosivos (manual pg. 82) — os 5 modelos padrão de bomba da perícia
 // Explosivos. Cada um tem DUAS dificuldades (teste e dif "criar e

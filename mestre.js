@@ -709,7 +709,8 @@ export async function criarCenario({ titulo }) {
         participantes: {},
         itens: {},
         veiculos: {},
-        dinheiro: {}
+        dinheiro: {},
+        explosivos: {}
     });
     return novaRef.key;
 }
@@ -780,6 +781,83 @@ export async function removerVeiculoCenario(cenarioId, veiculoId) {
 // trancado:false depois de um "Arrombar" bem-sucedido — Fase 5).
 export async function editarVeiculoCenario(cenarioId, veiculoId, dados) {
     await update(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos/${veiculoId}`)), dados);
+}
+
+// ---- Explosivos armados no cenário (ver plano-explosivos-cenario.txt,
+// Fase 1). Diferente de itens/veículos, este nó NÃO passa pela fila de
+// acoesPendentes ao ser criado — "Armar" (ficha.js, Fase 2) grava aqui
+// direto e já remove o item do inventário na hora (decisão 4). O que
+// passa pela fila são as pendências "está no raio?" geradas ao detonar
+// (Fase 4), uma por participante do cenário.
+//
+// Formato de cada cenarios/{cenarioId}/explosivos/{explosivoId}:
+//   nome:                  string (nome do item)
+//   dano:                  number
+//   raio:                  number
+//   tipoDano:              "explosao" (chave de TIPOS_DANO, dados-manual.js
+//                          — não confundir com a TAG do item "explosivo")
+//   moduloDetonacaoNome:   string | null
+//   moduloDetonacaoEfeito: string | null
+//   armadoPorTipo:         "ficha" | "npc"
+//   armadoPorId:           string
+//   armadoPorNome:         string
+//   status:                "armado" | "detonado"
+//   criadoEm:              timestamp
+export async function adicionarExplosivoCenario(cenarioId, dados) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/explosivos`)));
+    await set(novaRef, { ...dados, status: "armado" });
+    return novaRef.key;
+}
+
+// Remoção definitiva do cenário — sempre manual (decisão 6, botão
+// "Remover" no Gerenciador), mesmo depois de detonado. Diferente de
+// marcarExplosivoDetonado abaixo, que só muda o status e mantém visível.
+export async function removerExplosivoCenario(cenarioId, explosivoId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/explosivos/${explosivoId}`)));
+}
+
+export async function marcarExplosivoDetonado(cenarioId, explosivoId) {
+    await update(ref(db, caminhoMesa(`cenarios/${cenarioId}/explosivos/${explosivoId}`)), { status: "detonado" });
+}
+
+// Detonar: gera uma pendência "está no raio?" (tipo "explosao_raio",
+// ver montarPainelAcoesPendentes em ficha.js, Fase 4) por participante
+// do cenário — jogadores E NPCs —, e só então marca o explosivo como
+// "detonado". Não aplica dano nenhum sozinho: cada pendência, quando
+// respondida "Sim", abre o painel "Causar Dano" já existente
+// pré-preenchido (abrirAcaoMestre("dano", prefill), Fase 4) — quem
+// aplica o dano de fato é sempre esse painel, igual qualquer outro dano.
+export async function detonarExplosivoCenario(cenarioId, explosivoId) {
+    const snap = await get(ref(db, caminhoMesa(`cenarios/${cenarioId}`)));
+    if (!snap.exists()) throw new Error("Cenário não encontrado.");
+    const cenario = snap.val();
+
+    const explosivo = cenario.explosivos && cenario.explosivos[explosivoId];
+    if (!explosivo) throw new Error("Explosivo não encontrado neste cenário.");
+    if (explosivo.status === "detonado") throw new Error("Este explosivo já foi detonado.");
+
+    const participantes = cenario.participantes || {};
+    for (const [participanteId, participante] of Object.entries(participantes)) {
+        await criarAcaoPendente({
+            tipo: "explosao_raio",
+            fichaId: null, // não é pedido de UM jogador — o próprio Mestre gera a checklist
+            nomeJogador: "Mestre",
+            detalhe: `${participante.nome} está no raio de explosão de "${explosivo.nome}" (dano ${explosivo.dano}, raio ${explosivo.raio}m)?`,
+            payload: {
+                cenarioId,
+                explosivoId,
+                participanteId, // chave do participante DENTRO do cenário (push key) — referência, não usada hoje pra resolver a pendência (isso usa participanteTipo/participanteRefId, ver montarPainelAcoesPendentes em ficha.js)
+                participanteTipo: participante.tipo,
+                participanteRefId: participante.refId,
+                participanteNome: participante.nome,
+                dano: explosivo.dano,
+                tipoDano: explosivo.tipoDano,
+                nomeExplosivo: explosivo.nome
+            }
+        });
+    }
+
+    await marcarExplosivoDetonado(cenarioId, explosivoId);
 }
 
 // ---------------------------------------------------------------------
