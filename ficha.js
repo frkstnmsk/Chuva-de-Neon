@@ -8,7 +8,7 @@ import { caminhoMesa } from "./mesa.js";
 import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS,
     listaAlvosModificador, rotuloAlvo, modificadoresQueAfetam, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA,
-    coletarModificadores, calcularDerivados, calcularTotalPericia,
+    coletarModificadores, calcularDerivados, calcularTotalPericia, modificadoresOcasionaisDaPericia,
     rolarD20, rolarDado,
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
     calcularDanoDesarmado, calcularDificuldadeArmaFogo, MAX_ATRIBUTO_JOGO,
@@ -20,7 +20,15 @@ import {
     extrairDuracaoHorasDaDescricao, horasTotaisCalendario,
     calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel,
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, chanceFeridaPorDano,
-    golpeDilacera, deveTestarSangramentoProfundo
+    golpeDilacera, deveTestarSangramentoProfundo,
+    dificuldadeUpgradeVeiculo, custoUpgradeVeiculo, custoReparoVeiculo, precoVeiculoComFator,
+    veiculoTemKitFerramentasSuficiente, zerarDeterioracoesDoAtributoVeiculo,
+    atributoEfetivoVeiculo, aplicarDanoVeiculo, pvMaxVeiculo,
+    veiculoAtendeRequisitosManobra, resolverEfeitoManobra,
+    pontosPorResultadoTesteFuga,
+    slotsAcessoriosVeiculo, slotsAcessoriosUsados, slotsAcessoriosLivres, podeInstalarAcessorio,
+    efeitoOleoVeiculo, efeitoCospePregoVeiculo,
+    itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -53,7 +61,10 @@ import {
     ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO,
     CATALOGO_DROGAS,
     rotuloTipoVeiculo, rotuloAtributoVeiculo, periodicidadeManutencaoVeiculo,
-    ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo
+    ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo,
+    PERICIAS_MECANICO_VEICULO, MANOBRAS_VEICULO, buscarManobraVeiculo,
+    listarBairrosPerseguicao, bairroPerseguicao, tabelaPontuacaoFugaCadastrada, bairroTemDificuldadeRotaFuga,
+    CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -92,7 +103,8 @@ import {
     PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal, limiteRecuperacaoSemTratamento,
     ouvirTodasAsFichas, darXp, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
-    mestreRolarDado, aplicarDano, testarSangramento, testarSangramentoProfundo,
+    ouvirFatorPrecoMateriaisVeiculo, definirFatorPrecoMateriaisVeiculo,
+    mestreRolarDado, aplicarDano, causarDanoVeiculo, testarSangramento, testarSangramentoProfundo,
     ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
@@ -112,9 +124,12 @@ import {
     adicionarParticipanteCenario, removerParticipanteCenario,
     adicionarItemCenario, removerItemCenario,
     adicionarVeiculoCenario, removerVeiculoCenario, editarVeiculoCenario,
+    aparecerVeiculoNoCenario, removerVeiculoDoCenario, definirTrancaVeiculoJogador,
     adicionarDinheiroCenario, removerDinheiroCenario,
     adicionarExplosivoCenario, removerExplosivoCenario,
-    detonarExplosivoCenario
+    detonarExplosivoCenario,
+    ouvirPerseguicaoAtiva, iniciarPerseguicao, removerParticipantePerseguicao, encerrarPerseguicao,
+    registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
 import {
     criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida
@@ -201,6 +216,13 @@ let godmodeAtivo = false;
 // Sub-opção do Godmode: só some a penalidade de Machucado/Muito
 // Machucado quando ESSA também estiver marcada (ver configurarGodmode).
 let ignorarPenalidadeSaudeAtivo = false;
+// Ajuste de preço (%) que a mesa aplica sobre os valores de referência
+// do mecânico de veículos (CN$ de Melhorar/Reparar — Fase 3). 0 = preço
+// padrão do manual. Cacheado aqui via listener em tempo real (mesmo
+// padrão do godmodeAtivo acima), pra qualquer modal já montar com o
+// valor certo sem precisar de leitura extra no banco. Ver
+// configurarFatorPrecoMateriaisVeiculo.
+let fatorPrecoMateriaisVeiculoAtivo = 0;
 let calendarioAtual = null;
 let todasAsFichasCache = {};
 // Guarda { pvPerdidos, diasNecessarios } calculados no último render dos
@@ -219,6 +241,13 @@ let ultimoContextoRecuperacaoPV = null;
 // qualquer ficha, não só na Biblioteca do Painel do Mestre.
 let itensGlobaisCache = [];
 let receitasGlobaisCache = [];
+// Cache local dos NPCs da mesa (Painel de NPCs) — mesmo espírito dos
+// dois acima. Alimentado por um listener próprio (ver "cache de npcs"
+// no init), separado do listener local que montarPainelNpcs já usa pra
+// desenhar a lista em tempo real; existe só pra dar acesso rápido à
+// lista de categorias já usadas ao abrir o formulário de criar/editar
+// NPC (inclusive fora do Painel de NPCs, ver abrirEdicaoNpcDetalhado).
+let npcsCache = [];
 let categoriaInventarioAtiva = "levando";
 // IDs de itens-recipiente atualmente "abertos" (expandidos) na lista do
 // Inventário — só existe em memória local, não é salvo na ficha; some
@@ -231,6 +260,7 @@ let painelIniciativaJogadorAberto = false; // controla se o modal "Gerenciador d
 let pendentesCache = []; // fila de Ações Pendentes (compartilhada)
 let contadorPendentesAnterior = 0; // pra detectar chegada de pedido novo e disparar alerta
 let cenariosCache = []; // lista de Cenários (compartilhada — ver ouvirCenarios em mestre.js)
+let perseguicaoAtivaCache = { ativo: false, participantes: {} }; // Gerenciador de Perseguição (Fase 7a — compartilhada)
 
 // Feridas da ficha atualmente aberta (ver saude.js / aba "Saúde").
 // Diferente de cenariosCache, não é compartilhado entre todo mundo — é
@@ -240,6 +270,24 @@ let cenariosCache = []; // lista de Cenários (compartilhada — ver ouvirCenari
 let feridasCache = [];
 let unsubFeridas = null;
 let feridasFichaIdOuvida = null;
+
+// Limpeza do listener local "ao vivo" de qualquer painel do Mestre que
+// tenha um (Painel de NPCs, Biblioteca de Itens, Biblioteca de Receitas
+// — ver plano-busca-categorias.txt, Fase B): cada um desses painéis
+// assina seu próprio onValue pra atualizar a lista sem perder o que o
+// Mestre digitou na busca/categoria (mesmo espírito de unsubFeridas
+// acima). Como o corpo do Painel do Mestre é reaproveitado por várias
+// telas diferentes (abrirAcaoMestre, fecharAcaoMestre e a navegação
+// direta de abrirEdicaoNpcDetalhado), guardamos aqui só a função de
+// desinscrição do painel ATUALMENTE montado — chamar
+// definirLimpezaPainelMestre desliga a anterior antes de guardar a
+// nova, então nunca ficam dois listeners do mesmo tipo de painel vivos
+// ao mesmo tempo.
+let limpezaPainelMestreAtual = null;
+function definirLimpezaPainelMestre(funcaoLimpeza) {
+    if (limpezaPainelMestreAtual) limpezaPainelMestreAtual();
+    limpezaPainelMestreAtual = funcaoLimpeza || null;
+}
 
 // Semáforo: quando > 0, o listener onValue de ativarSincronizacao ignora
 // os snapshots recebidos, pra evitar que o Firebase re-entregue um estado
@@ -438,6 +486,8 @@ const el = {
     modalMaosNecessarias: document.getElementById("modal-maos-necessarias"),
     modalCampoNivelTag: document.getElementById("modal-campo-nivel-tag"),
     modalNivelTag: document.getElementById("modal-nivel-tag"),
+    modalCampoInstalarVeiculo: document.getElementById("modal-campo-instalar-veiculo"),
+    modalInstalarVeiculo: document.getElementById("modal-instalar-veiculo"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
     hintFerramentaCriacaoGeral: document.getElementById("hint-ferramenta-criacao-geral"),
     modalLabelPericiaUso: document.getElementById("modal-label-pericia-uso"),
@@ -487,6 +537,9 @@ const el = {
     modalQuantidadeVolumeTotal: document.getElementById("modal-quantidade-volume-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
+    modalCampoCategoriaBanco: document.getElementById("modal-campo-categoria-banco"),
+    modalCategoriaBanco: document.getElementById("modal-categoria-banco"),
+    modalCategoriaBancoDatalist: document.getElementById("modal-categoria-banco-datalist"),
     modalCampoJaEquipar: document.getElementById("modal-campo-ja-equipar"),
     modalJaEquipar: document.getElementById("modal-ja-equipar"),
     modalCampoGuardarDentro: document.getElementById("modal-campo-guardar-dentro"),
@@ -579,6 +632,7 @@ const el = {
     mestreCorpoFechar: document.getElementById("mestre-corpo-fechar"),
     chkGodmode: document.getElementById("chk-godmode"),
     chkGodmodeIgnorarSaude: document.getElementById("chk-godmode-ignorar-saude"),
+    inputFatorPrecoMateriaisVeiculo: document.getElementById("input-fator-preco-materiais-veiculo"),
     modalCustoVida: document.getElementById("modal-custo-vida"),
     custoVidaResumo: document.getElementById("custo-vida-resumo"),
     custoVidaOrigem: document.getElementById("custo-vida-origem"),
@@ -737,8 +791,10 @@ async function init() {
     tentarOuAvisar("aviso de custo de vida", configurarAvisoCustoVida);
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
     tentarOuAvisar("godmode", configurarGodmode);
+    tentarOuAvisar("fator de preço de materiais (veículos)", configurarFatorPrecoMateriaisVeiculo);
     tentarOuAvisar("gerenciador de combate", configurarCombateAtivo);
     tentarOuAvisar("cenários", configurarCenarios);
+    tentarOuAvisar("gerenciador de perseguição", configurarPerseguicaoAtiva);
     tentarOuAvisar("modal de alvo", configurarModalSelecionarAlvo);
     tentarOuAvisar("finanças", configurarFinancas);
     tentarOuAvisar("ações pendentes", configurarAcoesPendentes);
@@ -748,29 +804,36 @@ async function init() {
     tentarOuAvisar("cache de fichas", () => {
         ouvirTodasAsFichas((todas) => { todasAsFichasCache = todas || {}; });
     });
+    // Alimenta só o cache global (autocompletar do modal de item em
+    // qualquer ficha, categoriasDistintas etc.) — a "Biblioteca de
+    // Itens" do Painel do Mestre, quando aberta, tem seu próprio
+    // listener local (ver montarPainelBibliotecaItens) que atualiza a
+    // lista em tempo real sem depender deste aqui, pra não perder o que
+    // o Mestre digitou na busca/categoria a cada mudança no banco.
     tentarOuAvisar("banco global de itens", () => {
-        ouvirItensGlobais((itens) => {
-            itensGlobaisCache = itens || [];
-            // Se a aba "Biblioteca de Itens" do Painel do Mestre estiver
-            // aberta, atualiza a lista em tempo real (mesmo padrão usado
-            // pelo Gerenciador de Combate e Ações Pendentes).
-            if (isMestre && el.mestreCorpo && el.mestreCorpo.dataset.acaoAberta === "biblioteca") {
-                abrirAcaoMestre("biblioteca");
-            }
-        });
+        ouvirItensGlobais((itens) => { itensGlobaisCache = itens || []; });
     });
 
     // Banco Global de Receitas (receitas-globais.js) — mesma ideia do de
-    // itens acima, só que pra receitas de criação. Alimenta tanto a aba
-    // "Receitas" da ficha quanto a "Biblioteca de Receitas" do Mestre.
+    // itens acima, só que pra receitas de criação. Alimenta a aba
+    // "Receitas" da ficha; a "Biblioteca de Receitas" do Mestre tem seu
+    // próprio listener local (ver montarPainelBibliotecaReceitas), pelo
+    // mesmo motivo.
     tentarOuAvisar("banco global de receitas", () => {
         ouvirReceitasGlobais((receitas) => {
             receitasGlobaisCache = receitas || [];
             if (fichaAtual) renderizarReceitas();
-            if (isMestre && el.mestreCorpo && el.mestreCorpo.dataset.acaoAberta === "biblioteca-receitas") {
-                abrirAcaoMestre("biblioteca-receitas");
-            }
         });
+    });
+
+    // Cache dos NPCs da mesa — só pra alimentar a sugestão (datalist) de
+    // categoria já usada ao criar/editar um NPC (ver categoriasDistintas
+    // acima), tanto de dentro do Painel de NPCs quanto ao reabrir a
+    // edição de uma mini-ficha. Não redesenha nenhuma lista sozinho — o
+    // Painel de NPCs continua com seu próprio listener local (ouvirNpcs
+    // em montarPainelNpcs) pra desenhar a lista de cards em tempo real.
+    tentarOuAvisar("cache de npcs", () => {
+        ouvirNpcs((npcs) => { npcsCache = npcs || []; });
     });
 
     tentarOuAvisar("botões de adicionar", configurarBotoesAdicionar);
@@ -1922,6 +1985,23 @@ async function alternarAtivoEntidade(lista, id, novoValor) {
     }
 }
 
+// Liga/desliga um único modificador de Ocasião Especial (checkbox que
+// aparece direto na linha da perícia — ver renderizarPericias), sem
+// precisar abrir o cadastro da especialização/vantagem/item de origem.
+// `o` vem de modificadoresOcasionaisDaPericia (regras.js): já traz
+// `lista`/`entidadeId`/`modIndex` apontando pro modificador exato dentro
+// do array `modificadores` daquela entidade. Mesma lógica de
+// alternarAtivoEntidade — grava e deixa a sincronização em tempo real
+// re-renderizar sozinha.
+async function alternarModificadorOcasional(o, novoValor) {
+    if (!idAtivo() || !o) return;
+    try {
+        await update(ref(db, `${caminhoBase()}/${caminhoLista(o.lista)}/${o.entidadeId}/modificadores/${o.modIndex}`), { ativoOcasional: novoValor });
+    } catch (e) {
+        toast("Não foi possível atualizar o modificador de ocasião especial. Tente de novo.", "erro");
+    }
+}
+
 // Equipar/desequipar um item do inventário — só item equipado pode ser
 // usado (ver itemPodeUsar em inventario.js); pra armas, também é o que
 // a manobra "Desarmar" de fato retira do alvo (ver resolverDesarmar).
@@ -2822,6 +2902,21 @@ function renderizarPericias(modificadoresPlanos) {
             ? [...calc.ajustes, { valor: calc.penalidadeSaude, origem: "Estado de saúde" }]
             : calc.ajustes;
         li.title = textoDetalhamento(p.nome, calc.nivel, "Nível da perícia", ajustesPericia, calc.total);
+        // Ocasião Especial (ver regras.js): modificadores de especialização/
+        // vantagem marcados como situacionais viram um checkbox aqui, em
+        // vez de valerem sempre — o jogador liga só quando a situação
+        // narrativa descrita realmente se aplica àquela rolagem.
+        const ocasionais = modificadoresOcasionaisDaPericia(fichaAtual, p.nome);
+        const ocasionaisHtml = ocasionais.length ? `
+            <div class="pericia-ocasionais">
+                ${ocasionais.map((o, idx) => `
+                    <label class="checkbox-inline pericia-ocasional-item" title="${escapeHtml(o.origem)} — só conta enquanto marcado">
+                        <input type="checkbox" class="pericia-ocasional-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                        ${escapeHtml(o.origem)} (${o.valor >= 0 ? "+" : ""}${o.valor})
+                    </label>
+                `).join("")}
+            </div>
+        ` : "";
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
@@ -2831,10 +2926,19 @@ function renderizarPericias(modificadoresPlanos) {
                 <button type="button" class="btn-rolar btn-blue" title="Rolar d20 + ${calc.total}">🎲 ${calc.total >= 0 ? "+" : ""}${calc.total}</button>
                 <span class="total-rolagem">${calc.total}</span>
             </div>
+            ${ocasionaisHtml}
         `;
         li.querySelector(".btn-rolar").addEventListener("click", async (e) => {
             e.stopPropagation();
             await rolarERegistrar(p.nome, calc.total, p.nome === "CQC");
+        });
+        li.querySelectorAll(".pericia-ocasional-check").forEach(chk => {
+            chk.addEventListener("click", (e) => e.stopPropagation());
+            chk.addEventListener("change", (e) => {
+                e.stopPropagation();
+                const o = ocasionais[Number(chk.dataset.idx)];
+                alternarModificadorOcasional(o, chk.checked);
+            });
         });
         li.addEventListener("click", () => abrirModalEdicao("pericias", id));
         el.listaPericias.appendChild(li);
@@ -3272,6 +3376,67 @@ async function carregarCamaraArma(armaId, armaItem) {
     toast(`${armaItem.nome}: bala colocada na agulha.`);
 }
 
+// ---------------------------------------------------------------------
+// Ocasião Especial (ver regras.js/modificadoresOcasionaisDaPericia):
+// helpers reaproveitados por QUALQUER fluxo que role uma perícia vinda
+// de "Usar" um item — item comum (rolarComPericiaDoItem), Explosivo
+// (abrirModalArmarExplosivo) e, por tabela (já que os dois chamam
+// rolarComPericiaDoItem por baixo), Kit de Ferramentas de Criação geral,
+// Eletrônico multi-perícia e Destrave/Arrombar também ganham o checkbox
+// de graça, sem precisar mexer neles.
+// ---------------------------------------------------------------------
+function htmlCheckboxesOcasionais(ocasionais, nomePericia) {
+    if (!ocasionais.length) return "";
+    return `
+        <div class="pericia-ocasionais" style="margin-top:10px;">
+            ${ocasionais.map((o, idx) => `
+                <label class="checkbox-inline" style="margin-top:4px;">
+                    <input type="checkbox" class="ocasional-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                    ${escapeHtml(o.origem)} (${o.valor >= 0 ? "+" : ""}${o.valor} em ${escapeHtml(nomePericia)})
+                </label>
+            `).join("")}
+        </div>
+    `;
+}
+
+// Lê o estado das checkboxes ".ocasional-check" DENTRO de `container`
+// (escopado — não usa document.querySelectorAll — porque a aba
+// Perícias pode ter suas próprias checkboxes de ocasião especial na
+// tela ao mesmo tempo que um modal como este está aberto). Devolve o
+// delta a somar na rolagem de agora e já dispara a persistência de
+// cada modificador que mudou de estado (mesmo padrão fire-and-forget
+// de alternarAtivoEntidade — a sincronização em tempo real cuida do
+// resto, inclusive de refletir na aba Perícias depois).
+function lerDeltaOcasionais(container, ocasionais) {
+    let delta = 0;
+    if (!container) return delta;
+    container.querySelectorAll(".ocasional-check").forEach(chk => {
+        const o = ocasionais[Number(chk.dataset.idx)];
+        if (!o) return;
+        if (chk.checked !== o.ativo) {
+            delta += (chk.checked ? o.valor : -o.valor);
+            alternarModificadorOcasional(o, chk.checked);
+        }
+    });
+    return delta;
+}
+
+// Anexa os checkboxes de Ocasião Especial da perícia usada numa manobra
+// de combate (Agarrar, Desarmar, Derrubar, Delimitar, Retomar,
+// Imobilizar, Imobilizar Jiu Jitsu) dentro de el.alvoCampoExtra — SOMA
+// ao conteúdo que a manobra já monte ali (ex.: o checkbox de CQC nível
+// 2 em Derrubar), nunca sobrescreve. Devolve a lista de ocasionais
+// (pode vir vazia) pra guardar no contexto da manobra e reaproveitar
+// depois, em alvoConfirmar, na hora de ler o delta.
+function anexarOcasionaisNoCampoExtra(nomePericia) {
+    const ocasionais = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
+    if (ocasionais.length) {
+        el.alvoCampoExtra.style.display = "block";
+        el.alvoCampoExtra.innerHTML += htmlCheckboxesOcasionais(ocasionais, nomePericia);
+    }
+    return ocasionais;
+}
+
 // "Usar" um item/arma do inventário: rola d20 + o total da perícia
 // vinculada a ele (nível + modificadores estruturados que apontam pra
 // essa perícia). Regra global: por ser um teste de perícia, se o
@@ -3281,9 +3446,49 @@ async function carregarCamaraArma(armaId, armaItem) {
 // rolarUsoItem pra poder ser chamado tanto direto (item com periciaUso
 // fixo) quanto depois de escolher qual perícia usar (Kit de Ferramentas
 // de Criação geral — ver abrirModalEscolherPericiaItem).
+//
+// Se a perícia usada tem algum modificador de Ocasião Especial (ver
+// bloco acima), abre um passo extra de confirmação com os checkboxes
+// antes de rolar — item comum sem nenhuma especialização vinculada
+// continua rolando direto, sem esse passo a mais no meio.
 async function rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos) {
-    const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
-    await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+    const ocasionais = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
+    if (!ocasionais.length) {
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+        await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+        return;
+    }
+    abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, ocasionais);
+}
+
+function abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, ocasionais) {
+    let modal = document.getElementById("modal-ocasionais-uso-item");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-ocasionais-uso-item";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Usar ${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>${escapeHtml(nomePericia)}</h4>
+        <p class="hint">Marque as Ocasiões Especiais que se aplicam a este uso antes de rolar.</p>
+        <div id="ocasionais-uso-item-lista">${htmlCheckboxesOcasionais(ocasionais, nomePericia)}</div>
+        <div class="modal-btns">
+            <button type="button" class="btn-lime" id="btn-confirmar-ocasionais-uso">Rolar ${escapeHtml(nomePericia)}</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-ocasionais-uso").addEventListener("click", async () => {
+        const delta = lerDeltaOcasionais(modal.querySelector("#ocasionais-uso-item-lista"), ocasionais);
+        modal.remove();
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual()) + delta;
+        await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+    });
+    document.body.appendChild(modal);
 }
 
 async function rolarUsoItem(it, modificadoresPlanos) {
@@ -3493,6 +3698,7 @@ function abrirModalArmarExplosivo(it, modificadoresPlanos) {
     const cfg = it.arma || {};
     const modulo = MODULOS_DETONACAO.find(m => m.nome === cfg.moduloDetonacao);
     const nomePericia = it.periciaUso || "Explosivos";
+    const ocasionaisExplosivo = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Armar ${escapeHtml(it.nome)}</span>
@@ -3505,14 +3711,16 @@ function abrirModalArmarExplosivo(it, modificadoresPlanos) {
                 ? `Módulo de detonação: <strong>${escapeHtml(modulo.nome)}</strong> — ${escapeHtml(modulo.efeito)}`
                 : "Nenhum módulo de detonação cadastrado neste item — o Mestre decide como ele detona."}
         </p>
+        <div id="explosivo-ocasionais-lista">${htmlCheckboxesOcasionais(ocasionaisExplosivo, nomePericia)}</div>
         <div class="modal-btns">
             <button type="button" class="btn-lime" id="btn-confirmar-armar-explosivo">Armar (rolar ${escapeHtml(nomePericia)})</button>
         </div>
     `;
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-confirmar-armar-explosivo").addEventListener("click", async () => {
+        const deltaOcasional = lerDeltaOcasionais(modal.querySelector("#explosivo-ocasionais-lista"), ocasionaisExplosivo);
         modal.remove();
-        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual()) + deltaOcasional;
         const rotuloDif = cfg.dificuldadeArmar ? ` (dif. armar: ${cfg.dificuldadeArmar})` : "";
         // dificuldadeArmar vai como 4º argumento pra rolarERegistrar
         // sinalizar Sucesso/Falhou no Log de Dados e no toast — não trava
@@ -3575,7 +3783,7 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     );
     if (!opcoes.length) { toast("Não há outros participantes no combate pra atacar.", "erro"); return; }
 
-    contextoAtaque = { item: it, modificadoresPlanos };
+    contextoAtaque = { item: it, modificadoresPlanos, ocasionaisPericia: modificadoresOcasionaisDaPericia(fichaAtual, it.periciaUso) };
     el.alvoTitulo.innerText = `Atacar com ${it.nome}`;
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
@@ -3602,6 +3810,24 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
             <option value="padrao">${escapeHtml(TIPOS_DANO.find(t => t.key === it.arma.tipoDano)?.label || it.arma.tipoDano)} (padrão)</option>
             <option value="extra">${escapeHtml(TIPOS_DANO.find(t => t.key === tipoDanoExtraItem)?.label || tipoDanoExtraItem)}</option>
         </select>
+    ` : "";
+    // Ocasião Especial da perícia usada neste golpe (ver regras.js —
+    // ex.: especialização em Boxe com +1 situacional): oferece o checkbox
+    // aqui mesmo, na hora de atacar, em vez de obrigar o jogador a ir na
+    // aba Perícias marcar antes. Vem pré-marcado com o estado atual
+    // (`o.ativo`) só pra refletir o que já está ligado; o estado final
+    // de cada um (ligado ou não nesta rolagem) é lido e aplicado direto
+    // no ataque em alvoConfirmar, além de persistido pra ficar
+    // consistente com a aba Perícias depois.
+    const ocasionaisHtml = contextoAtaque.ocasionaisPericia.length ? `
+        <div class="pericia-ocasionais" style="margin-top:10px;">
+            ${contextoAtaque.ocasionaisPericia.map((o, idx) => `
+                <label class="checkbox-inline" style="margin-top:4px;">
+                    <input type="checkbox" class="alvo-ocasional-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                    ${escapeHtml(o.origem)} (${o.valor >= 0 ? "+" : ""}${o.valor} em ${escapeHtml(it.periciaUso)})
+                </label>
+            `).join("")}
+        </div>
     ` : "";
     el.alvoCampoExtra.style.display = "block";
     el.alvoCampoExtra.innerHTML = `
@@ -3630,6 +3856,7 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
         <label for="alvo-combatentes-input" style="margin-top:10px;">Combatentes adicionais na linha de tiro (+1 dificuldade cada)</label>
         <input type="number" id="alvo-combatentes-input" min="0" step="1" value="0">
         ` : ""}
+        ${ocasionaisHtml}
     `;
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -3655,10 +3882,11 @@ function preencherOpcoesDeAlvo() {
 // Mesma modal de seleção de alvo, reaproveitada pra manobra "Agarrar"
 // (contexto separado de contextoAtaque, já que não usa item de arma).
 function abrirModalSelecionarAlvoAgarrar(nomePericia, modificador) {
-    contextoAgarrar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Agarrar com ${nomePericia}`;
     el.alvoCampoExtra.style.display = "none";
     el.alvoCampoExtra.innerHTML = "";
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoAgarrar = { nomePericia, modificador, ocasionais };
     if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra agarrar.", "erro"); contextoAgarrar = null; return; }
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -3666,10 +3894,11 @@ function abrirModalSelecionarAlvoAgarrar(nomePericia, modificador) {
 // Mesma modal de seleção de alvo, reaproveitada pra manobra "Desarmar"
 // (contexto separado, igual Agarrar — sem campo extra, só escolhe o alvo).
 function abrirModalSelecionarAlvoDesarmar(nomePericia, modificador) {
-    contextoDesarmar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Desarmar com ${nomePericia}`;
     el.alvoCampoExtra.style.display = "none";
     el.alvoCampoExtra.innerHTML = "";
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoDesarmar = { nomePericia, modificador, ocasionais };
     if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra desarmar.", "erro"); contextoDesarmar = null; return; }
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -3682,7 +3911,6 @@ function abrirModalSelecionarAlvoDesarmar(nomePericia, modificador) {
 // extra da modal (mesma ideia de abrirModalBonusIniciativaCQC pra
 // iniciativa), só quando o personagem TEM o nível.
 function abrirModalSelecionarAlvoDerrubar(nomePericia, modificador, nivelCQC = 0) {
-    contextoDerrubar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Derrubar com ${nomePericia}`;
     if (nivelCQC >= 2) {
         el.alvoCampoExtra.style.display = "block";
@@ -3696,6 +3924,8 @@ function abrirModalSelecionarAlvoDerrubar(nomePericia, modificador, nivelCQC = 0
         el.alvoCampoExtra.style.display = "none";
         el.alvoCampoExtra.innerHTML = "";
     }
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoDerrubar = { nomePericia, modificador, ocasionais };
     if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra derrubar.", "erro"); contextoDerrubar = null; return; }
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -3710,10 +3940,11 @@ function abrirModalSelecionarAlvoImobilizar(nomePericia, modificador) {
     const opcoes = Object.entries(participantes).filter(([, p]) => p.derrubado && p.derrubado.ativo);
     if (!opcoes.length) { toast("Ninguém no combate está Derrubado agora — Imobilizar só funciona depois de Derrubar o alvo.", "erro"); return; }
 
-    contextoImobilizar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Imobilizar com ${nomePericia}`;
     el.alvoCampoExtra.style.display = "none";
     el.alvoCampoExtra.innerHTML = "";
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoImobilizar = { nomePericia, modificador, ocasionais };
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -3734,7 +3965,6 @@ function abrirModalSelecionarAlvoImobilizarJJ(nomeBase, modificador, nivelJJ) {
     const opcoes = Object.entries(participantes).filter(([, p]) => p.derrubado && p.derrubado.ativo);
     if (!opcoes.length) { toast("Ninguém no combate está Derrubado agora — Imobilizar só funciona depois de Derrubar o alvo.", "erro"); return; }
 
-    contextoImobilizarJJ = { nomeBase, modificador, nivelJJ };
     el.alvoTitulo.innerText = `Imobilizar (Jiu Jitsu) com ${nomeBase}`;
     if (Number(nivelJJ) >= 3) {
         el.alvoCampoExtra.style.display = "block";
@@ -3748,6 +3978,8 @@ function abrirModalSelecionarAlvoImobilizarJJ(nomeBase, modificador, nivelJJ) {
         el.alvoCampoExtra.style.display = "none";
         el.alvoCampoExtra.innerHTML = "";
     }
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomeBase);
+    contextoImobilizarJJ = { nomeBase, modificador, nivelJJ, ocasionais };
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -3996,7 +4228,6 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
 // ficar disponível pra vítima (Curto/Médio/Longo) — usa o campo extra
 // do modal compartilhado pra isso.
 function abrirModalSelecionarAlvoDelimitar(nomePericia, modificador) {
-    contextoDelimitar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Delimitar alcance com ${nomePericia}`;
     if (!preencherOpcoesDeAlvo()) { toast("Não há outros participantes no combate pra delimitar o alcance.", "erro"); contextoDelimitar = null; return; }
     el.alvoCampoExtra.style.display = "block";
@@ -4008,6 +4239,8 @@ function abrirModalSelecionarAlvoDelimitar(nomePericia, modificador) {
             <option value="Longo">Longo</option>
         </select>
     `;
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoDelimitar = { nomePericia, modificador, ocasionais };
     el.modalSelecionarAlvo.classList.add("active");
 }
 
@@ -4022,10 +4255,11 @@ function abrirModalSelecionarAlvoRetomar(nomePericia, modificador) {
     const opcoes = Object.entries(participantes).filter(([, p]) => p.alcanceLimitado && p.alcanceLimitado.ativo);
     if (!opcoes.length) { toast("Ninguém no combate está com o alcance limitado agora.", "erro"); return; }
 
-    contextoRetomar = { nomePericia, modificador };
     el.alvoTitulo.innerText = `Retomar alcance com ${nomePericia}`;
     el.alvoCampoExtra.style.display = "none";
     el.alvoCampoExtra.innerHTML = "";
+    const ocasionais = anexarOcasionaisNoCampoExtra(nomePericia);
+    contextoRetomar = { nomePericia, modificador, ocasionais };
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -4065,7 +4299,7 @@ function configurarModalSelecionarAlvo() {
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
         el.modalSelecionarAlvo.classList.remove("active");
         if (contextoAtaque) {
-            const { item, modificadoresPlanos } = contextoAtaque;
+            const { item, modificadoresPlanos, ocasionaisPericia } = contextoAtaque;
             const tipoDanoSelect = document.getElementById("alvo-tipo-dano-select");
             const tipoDanoEscolhido = tipoDanoSelect ? tipoDanoSelect.value : "padrao";
             const localMiraSelect = document.getElementById("alvo-local-mira-select");
@@ -4084,42 +4318,72 @@ function configurarModalSelecionarAlvo() {
                 queimaRoupa: queimaRoupaCheck ? queimaRoupaCheck.checked : false,
                 combatentesAdicionais: combatentesInput ? Math.max(0, Number(combatentesInput.value) || 0) : 0
             };
+            // Ocasião Especial (checkboxes montadas em abrirModalSelecionarAlvo
+            // a partir de ocasionaisPericia): aplica o delta na hora — não dá
+            // pra esperar `modificadoresPlanosAtacante` (já calculado ANTES
+            // de abrir este modal) se atualizar sozinho via sincronização em
+            // tempo real, então soma-se aqui em cima o que mudou desde então.
+            // Cada checkbox também é persistida (alternarModificadorOcasional),
+            // pra ficar consistente com o que aparece depois na aba Perícias.
+            let modificadorOcasionalDelta = 0;
+            const togglesOcasionais = [];
+            document.querySelectorAll(".alvo-ocasional-check").forEach(chk => {
+                const o = ocasionaisPericia[Number(chk.dataset.idx)];
+                if (!o) return;
+                if (chk.checked !== o.ativo) {
+                    modificadorOcasionalDelta += (chk.checked ? o.valor : -o.valor);
+                    togglesOcasionais.push({ o, novoValor: chk.checked });
+                }
+            });
+            for (const { o, novoValor } of togglesOcasionais) {
+                alternarModificadorOcasional(o, novoValor);
+            }
             limparContextos();
-            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, { localMira, situacional, tipoDanoEscolhido });
+            await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, {
+                localMira, situacional, tipoDanoEscolhido,
+                modificadorExtra: modificadorOcasionalDelta
+            });
         } else if (contextoAgarrar) {
-            const { nomePericia, modificador } = contextoAgarrar;
+            const { nomePericia, modificador, ocasionais } = contextoAgarrar;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverAgarrar(nomePericia, modificador, { ...participante, _pid: pid });
+            await resolverAgarrar(nomePericia, modificador + delta, { ...participante, _pid: pid });
         } else if (contextoDesarmar) {
-            const { nomePericia, modificador } = contextoDesarmar;
+            const { nomePericia, modificador, ocasionais } = contextoDesarmar;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverDesarmar(nomePericia, modificador, { ...participante, _pid: pid });
+            await resolverDesarmar(nomePericia, modificador + delta, { ...participante, _pid: pid });
         } else if (contextoDerrubar) {
-            const { nomePericia, modificador } = contextoDerrubar;
+            const { nomePericia, modificador, ocasionais } = contextoDerrubar;
             const cqcCheck = document.getElementById("alvo-cqc-derrubar-check");
             const usarBonusCQCDano = cqcCheck ? cqcCheck.checked : false;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverDerrubar(nomePericia, modificador, { ...participante, _pid: pid }, usarBonusCQCDano);
+            await resolverDerrubar(nomePericia, modificador + delta, { ...participante, _pid: pid }, usarBonusCQCDano);
         } else if (contextoDelimitar) {
-            const { nomePericia, modificador } = contextoDelimitar;
+            const { nomePericia, modificador, ocasionais } = contextoDelimitar;
             const alcanceSelect = document.getElementById("alvo-alcance-select");
             const alcanceEscolhido = alcanceSelect ? alcanceSelect.value : "Curto";
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverDelimitarAlcance(nomePericia, modificador, alcanceEscolhido, { ...participante, _pid: pid });
+            await resolverDelimitarAlcance(nomePericia, modificador + delta, alcanceEscolhido, { ...participante, _pid: pid });
         } else if (contextoRetomar) {
-            const { nomePericia, modificador } = contextoRetomar;
+            const { nomePericia, modificador, ocasionais } = contextoRetomar;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverRetomarAlcance(nomePericia, modificador, { ...participante, _pid: pid });
+            await resolverRetomarAlcance(nomePericia, modificador + delta, { ...participante, _pid: pid });
         } else if (contextoImobilizar) {
-            const { nomePericia, modificador } = contextoImobilizar;
+            const { nomePericia, modificador, ocasionais } = contextoImobilizar;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverImobilizar(nomePericia, modificador, { ...participante, _pid: pid });
+            await resolverImobilizar(nomePericia, modificador + delta, { ...participante, _pid: pid });
         } else if (contextoImobilizarJJ) {
-            const { nomeBase, modificador, nivelJJ } = contextoImobilizarJJ;
+            const { nomeBase, modificador, nivelJJ, ocasionais } = contextoImobilizarJJ;
             const desacordarCheck = document.getElementById("alvo-jj-desacordar-check");
             const desacordar = desacordarCheck ? desacordarCheck.checked : false;
+            const delta = lerDeltaOcasionais(el.alvoCampoExtra, ocasionais);
             limparContextos();
-            await resolverImobilizarJiuJitsu(nomeBase, modificador, nivelJJ, { ...participante, _pid: pid }, desacordar);
+            await resolverImobilizarJiuJitsu(nomeBase, modificador + delta, nivelJJ, { ...participante, _pid: pid }, desacordar);
         } else if (contextoQuebrarOssosJJ) {
             const { nivelJJ } = contextoQuebrarOssosJJ;
             const membroInferiorCheck = document.getElementById("alvo-jj-membro-inferior-check");
@@ -6830,6 +7094,12 @@ function linhasAtributoVeiculo(chave, infoAtributo) {
                 !infoAtributo.podeRealizarManobras ? "incapaz de fazer manobras" : (infoAtributo.bonusDrift ? `+${infoAtributo.bonusDrift} em drift` : "pronto pra drift"),
                 infoAtributo.bonusFugaCorrida ? `+${infoAtributo.bonusFugaCorrida} em fuga/corrida` : null
             ];
+        case "acessorios":
+            // Fase 5a do plano (plano-acessorios-veiculo.txt): só o
+            // total de slots aqui — a lista do que está instalado e o
+            // usado/livre por acessório é da Fase 5b/5d (catálogo ainda
+            // não existe nesta fase).
+            return [`${infoAtributo.slotsDisponiveis} slot(s) disponível(is) para acessórios/armamento`];
         default:
             return [];
     }
@@ -6860,22 +7130,143 @@ function renderizarVeiculos() {
     el.veiculosLista.innerHTML = ids.map(id => {
         const v = veiculos[id];
         const atributos = v.atributos || {};
-        const mods = calcularModificadoresVeiculo(atributos, raciocinioPiloto);
+        // Vida do veículo (Fase 2 do plano — ver plano-veiculos-fase2.txt):
+        // deterioracoes entra aqui pra TODOS os blocos abaixo (PV
+        // máximo, kmh máx., redução de dano etc.) já saírem calculados
+        // com o valor efetivo, não o bruto — ver calcularModificadoresVeiculo
+        // (regras.js).
+        const deterioracoes = v.deterioracoes || [];
+        // Bônus temporário de manobra (Fase 4 — ver plano-veiculos-fase2.txt,
+        // seção "FASE 4"): entra aqui pra TODOS os blocos abaixo (PV
+        // máximo, kmh máx. etc.) já saírem calculados com o bônus
+        // aplicado, mesmo espírito de deterioracoes na Fase 2.
+        const bonusTemporarios = v.bonusTemporarios || [];
+        const mods = calcularModificadoresVeiculo(atributos, raciocinioPiloto, deterioracoes, bonusTemporarios);
         const manutencao = valorManutencaoVeiculo(atributos);
         const periodicidade = periodicidadeManutencaoVeiculo(v.tipo);
 
+        // Deteriorações por atributo, só pra saber quais atributos têm
+        // "Reparar" disponível neste card (Fase 3 do plano — ver
+        // plano-veiculos-fase2.txt).
+        const atributosDeteriorados = new Set((deterioracoes || []).filter(d => d && d.valor > 0).map(d => d.atributo));
+
         const blocosHtml = ATRIBUTOS_VEICULO.map(chave => {
             const linhas = linhasAtributoVeiculo(chave, mods[chave]).filter(Boolean);
+            const nivelAtual = mods[chave].nivel;
+
+            // "Melhorar" (upgrade — Fase 3): só pro jogador (Mestre edita
+            // nível direto no modal de edição do veículo), só se ainda
+            // não estiver no nível 5. Desabilita com tooltip explicando o
+            // que falta (custo não cadastrado, kit insuficiente, material
+            // faltando) — mesmo padrão de outros botões de craft "cinza
+            // com motivo" já usados no resto do sistema.
+            let melhorarHtml = "";
+            if (!isMestre) {
+                if (nivelAtual >= 5) {
+                    melhorarHtml = `<button type="button" class="btn-ghost veiculo-mecanico-btn" disabled title="Atributo já no nível máximo.">🔧⬆️ Melhorar</button>`;
+                } else {
+                    const nivelAlvo = nivelAtual + 1;
+                    const custoUp = custoUpgradeVeiculo(chave, nivelAlvo);
+                    const motivo = motivoMecanicoVeiculoIndisponivel(custoUp, Math.max(1, nivelAlvo), fichaAtual);
+                    melhorarHtml = `<button type="button" class="btn-ghost veiculo-mecanico-btn" data-veiculo-upgrade-btn data-atributo="${chave}" ${motivo ? "disabled" : ""} title="${escapeHtml(motivo || `Subir para nível ${nivelAlvo}` + (custoUp ? ` — CN$ ${custoUp.preco}` : ""))}">🔧⬆️ Melhorar</button>`;
+                }
+            }
+
+            // "Reparar" (Fase 3): só aparece se ESTE atributo específico
+            // tiver deterioração acumulada (ver atributosDeteriorados
+            // acima) — cada atributo deteriorado é reparado separadamente
+            // (manual pg. 39, "some quando o veículo é consertado").
+            let repararHtml = "";
+            if (!isMestre && atributosDeteriorados.has(chave)) {
+                const custoRep = custoReparoVeiculo(chave, nivelAtual);
+                const motivo = motivoMecanicoVeiculoIndisponivel(custoRep, Math.max(1, nivelAtual), fichaAtual);
+                repararHtml = `<button type="button" class="btn-ghost veiculo-mecanico-btn" data-veiculo-reparo-btn data-atributo="${chave}" ${motivo ? "disabled" : ""} title="${escapeHtml(motivo || `Remove o dano acumulado deste atributo` + (custoRep ? ` — CN$ ${custoRep.preco}` : ""))}">🛠 Reparar</button>`;
+            }
+
             return `
                 <div class="veiculo-atributo-item">
                     <div class="veiculo-atributo-label">
                         <span>${escapeHtml(rotuloAtributoVeiculo(chave))}</span>
-                        <span class="veiculo-atributo-nivel">${mods[chave].nivel}</span>
+                        <span class="veiculo-atributo-nivel">${nivelAtual}</span>
                     </div>
                     ${linhas.map(l => `<div class="veiculo-atributo-linha">${escapeHtml(l)}</div>`).join("")}
+                    ${(melhorarHtml || repararHtml) ? `<div class="veiculo-atributo-acoes" data-veiculo-atributo-acoes>${melhorarHtml}${repararHtml}</div>` : ""}
                 </div>
             `;
         }).join("");
+
+        // Barra de PV do veículo (Fase 2) — mesmo espírito da barra de
+        // PV do personagem (renderizarBarrasVitaisTopo): pvAtual null =
+        // "cheio" (equivale ao pvMaximo já calculado com deteriorações
+        // em cima, ver mods.protecao.pvMaximo acima). Cor crítica
+        // quando cai dentro do último quinto — o mesmo limiar que
+        // dispara a próxima deterioração automática (aplicarDanoVeiculo,
+        // regras.js), então a barra fica vermelha bem na hora em que
+        // "mais um golpe quebra outro atributo" passa a ser verdade.
+        const pvMaximoVeiculo = mods.protecao.pvMaximo;
+        const pvAtualVeiculo = (v.pvAtual === null || v.pvAtual === undefined) ? pvMaximoVeiculo : Number(v.pvAtual);
+        const pctPvVeiculo = pvMaximoVeiculo > 0 ? Math.max(0, Math.min(100, (pvAtualVeiculo / pvMaximoVeiculo) * 100)) : 0;
+        const pvCriticoVeiculo = pvMaximoVeiculo > 0 && pvAtualVeiculo <= pvMaximoVeiculo / 5;
+        const pvBarraHtml = `
+            <div class="veiculo-pv-wrap">
+                <div class="veiculo-pv-texto${pvCriticoVeiculo ? " veiculo-pv-texto-critica" : ""}">PV: ${Math.round(pvAtualVeiculo)}/${Math.round(pvMaximoVeiculo)}</div>
+                <div class="veiculo-pv-track">
+                    <div class="veiculo-pv-fill${pvCriticoVeiculo ? " veiculo-pv-fill-critica" : ""}" style="width:${pctPvVeiculo}%;"></div>
+                </div>
+            </div>
+        `;
+
+        // Badge de deterioração (manual pg. 39): agrupa as entradas de
+        // deterioracoes por atributo (cada entrada é um -1 isolado, ver
+        // normalizarVeiculos) só pra exibição — o cálculo de verdade já
+        // foi consumido dentro de mods acima.
+        let deterioracaoBadgeHtml = "";
+        if (deterioracoes.length) {
+            const somaPorAtributo = {};
+            deterioracoes.forEach(d => { somaPorAtributo[d.atributo] = (somaPorAtributo[d.atributo] || 0) + (Number(d.valor) || 0); });
+            const partes = Object.entries(somaPorAtributo)
+                .filter(([, valor]) => valor > 0)
+                .map(([attr, valor]) => `-${valor} ${rotuloAtributoVeiculo(attr)}`);
+            if (partes.length) {
+                deterioracaoBadgeHtml = `<div class="mod-pill negativo veiculo-deterioracao-badge">⚠️ ${escapeHtml(partes.join(", "))} (dano acumulado)</div>`;
+            }
+        }
+
+        // Badge de bônus temporário de manobra (Fase 4): mesma ideia da
+        // badge de deterioração acima, só que positiva — soma por
+        // atributo só pra exibição (o cálculo de verdade já foi
+        // consumido dentro de mods acima). Mestre ganha um botão
+        // "Limpar" pra tirar os bônus manualmente ao fim da cena
+        // (manual: "por uma cena" — sem cron job, ver plano).
+        let bonusBadgeHtml = "";
+        if (bonusTemporarios.length) {
+            const somaBonusPorAtributo = {};
+            bonusTemporarios.forEach(b => { somaBonusPorAtributo[b.atributo] = (somaBonusPorAtributo[b.atributo] || 0) + (Number(b.valor) || 0); });
+            const partesBonus = Object.entries(somaBonusPorAtributo)
+                .filter(([, valor]) => valor !== 0)
+                .map(([attr, valor]) => `${valor > 0 ? "+" : ""}${valor} ${rotuloAtributoVeiculo(attr)}`);
+            if (partesBonus.length) {
+                bonusBadgeHtml = `<div class="mod-pill positivo veiculo-bonus-badge">🏁 ${escapeHtml(partesBonus.join(", "))} (bônus de manobra, por uma cena)${isMestre ? ` <button type="button" class="btn-ghost veiculo-bonus-limpar-btn" data-veiculo-bonus-limpar>Limpar</button>` : ""}</div>`;
+            }
+        }
+
+        // Campo do Mestre pra aplicar dano manual (Fase 2 do plano):
+        // mesmo padrão da ferramenta de "Causar dano" do combate
+        // (aplicarDano, mestre.js), só que endereçado por
+        // fichaId+veiculoId em vez de participanteId — veículo ainda
+        // não é participante de combate (isso é Fase 9, fora de
+        // escopo). Escolher o atributo a deteriorar é opcional
+        // (fallback Velocidade, ver aplicarDanoVeiculo em regras.js).
+        const opcoesAtributoDano = ATRIBUTOS_VEICULO.filter(chave => chave !== "protecao")
+            .map(chave => `<option value="${chave}" ${chave === "velocidade" ? "selected" : ""}>${escapeHtml(rotuloAtributoVeiculo(chave))}</option>`)
+            .join("");
+        const danoManualHtml = isMestre ? `
+            <div class="veiculo-dano-manual" data-veiculo-dano-manual>
+                <input type="number" class="veiculo-dano-input" data-veiculo-dano-valor min="0" step="1" placeholder="Dano">
+                <select class="veiculo-dano-atributo" data-veiculo-dano-atributo title="Além de Proteção, qual atributo deteriora junto">${opcoesAtributoDano}</select>
+                <button type="button" class="btn-red veiculo-dano-btn" data-veiculo-dano-btn>Aplicar dano</button>
+            </div>
+        ` : "";
 
         // Pagamento de manutenção: só o jogador pede (regra 4, mesma fila
         // de Ações Pendentes já usada por "Gastar dinheiro" em Finanças —
@@ -6904,6 +7295,130 @@ function renderizarVeiculos() {
             ? `<button type="button" class="btn-ghost veiculo-tranca-btn" data-veiculo-destrancar ${temChave ? "" : "disabled"} title="${temChave ? "" : "Você não tem a chave deste veículo."}">🔒 Destrancar${temChave ? "" : " (sem chave)"}</button>`
             : `<button type="button" class="btn-ghost veiculo-tranca-btn" data-veiculo-trancar>🔓 Trancar</button>`);
 
+        // Manobra (Fase 4 do plano — ver plano-veiculos-fase2.txt): só
+        // pro jogador (piloto), abre abrirModalManobraVeiculo com o
+        // catálogo das 8 manobras do manual.
+        const manobraHtml = isMestre ? "" : `<button type="button" class="btn-ghost veiculo-manobra-btn" data-veiculo-manobra-btn>🏁 Manobra</button>`;
+
+        // Acessórios instalados (Fase 5b do plano — ver
+        // plano-acessorios-veiculo.txt, seção "FASE 5b"): lista o que já
+        // está instalado (v.acessoriosInstalados, já normalizado com
+        // `.nivel` resolvido do catálogo — ver normalizarVeiculos) +
+        // botão "+ Instalar Acessório". Só pro jogador interagir (mesmo
+        // padrão de Melhorar/Reparar/Manobra) — Mestre só vê a lista e
+        // ganha um botão extra pra resetar os usos "uma vez por cena".
+        const acessoriosInstalados = v.acessoriosInstalados || [];
+        // Acessórios-arma (Fase 5c do plano — ver plano-acessorios-veiculo.txt,
+        // seção "FASE 5c"): não vivem em acessoriosInstalados, vivem como
+        // item comum do inventário DESTA MESMA ficha com
+        // item.instaladoEmVeiculoId apontando pra este veículo (ver
+        // itensArmaInstaladosEmVeiculo, regras.js). Entram no cálculo de
+        // slots igual aos passivos.
+        const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, id);
+        const slotsTotal = mods.acessorios.slotsDisponiveis;
+        const slotsUsados = slotsAcessoriosUsados(acessoriosInstalados, itensArmaInstalados);
+        const linhasAcessoriosHtml = acessoriosInstalados.map(inst => {
+            const cat = buscarAcessorioVeiculo(inst.key);
+            if (!cat) return "";
+            let acaoHtml = "";
+            if (!isMestre) {
+                if (cat.mecanica === "teste_dif_fixa") {
+                    acaoHtml = `<button type="button" class="btn-ghost veiculo-acessorio-testar-btn" data-veiculo-acessorio-testar data-key="${cat.key}" title="Rola ${escapeHtml(cat.periciaTeste)} contra dificuldade ${cat.dificuldade}.">🎲 Testar (dif. ${cat.dificuldade})</button>`;
+                } else if (cat.mecanica === "uma_vez_por_cena") {
+                    acaoHtml = inst.usadoNestaCena
+                        ? `<button type="button" class="btn-ghost" disabled title="Já usado nesta cena — o Mestre reseta ao trocar de cena.">Já usado nesta cena</button>`
+                        : `<button type="button" class="btn-ghost veiculo-acessorio-usar-btn" data-veiculo-acessorio-usar data-key="${cat.key}">✅ Usar (1x por cena)</button>`;
+                }
+            }
+            const removerHtml = !isMestre
+                ? `<button type="button" class="btn-ghost veiculo-acessorio-remover-btn" data-veiculo-acessorio-remover data-key="${cat.key}" title="Remove e libera o slot na hora.">🗑️</button>`
+                : "";
+            return `
+                <div class="veiculo-acessorio-linha" data-acessorio-key="${cat.key}">
+                    <div class="veiculo-acessorio-linha-topo">
+                        <strong>${escapeHtml(cat.nome)}</strong>
+                        <span class="hint-inline">${cat.nivel} slot(s)</span>
+                    </div>
+                    <p class="hint">${escapeHtml(cat.descricao)}</p>
+                    <div class="veiculo-acessorio-linha-acoes">${acaoHtml}${removerHtml}</div>
+                </div>
+            `;
+        }).join("");
+        const resetarUsosHtml = isMestre && acessoriosInstalados.some(a => {
+            const cat = buscarAcessorioVeiculo(a.key);
+            return cat && cat.mecanica === "uma_vez_por_cena";
+        })
+            ? `<button type="button" class="btn-ghost veiculo-acessorio-resetar-usos-btn" data-veiculo-acessorio-resetar-usos>🔄 Resetar usos desta cena</button>`
+            : "";
+        const instalarAcessorioHtml = !isMestre
+            ? `<button type="button" class="btn-ghost veiculo-acessorio-instalar-btn" data-veiculo-acessorio-instalar-btn>+ Instalar Acessório</button>`
+            : "";
+
+        // Acessórios-arma instalados (Fase 5c do plano — ver
+        // plano-acessorios-veiculo.txt, seção "FASE 5c"): mesma seção
+        // visual dos acessórios passivos (Fase 5d: "nada de sub-aba
+        // nova"), lista os itens-arma com item.instaladoEmVeiculoId
+        // apontando pra este veículo (itensArmaInstalados, calculado
+        // acima). "🎯 Disparar" reaproveita 100% o fluxo normal de
+        // "Usar" uma arma do inventário (iniciarUsoItem) — já sabe
+        // sozinho se abre seleção de alvo (combate ativo) ou rola
+        // direto (fora de combate), exatamente como o manual pede
+        // ("disparos seguem as regras normais da arma"). Só aparece
+        // habilitado se itemPodeUsar(it) (precisa estar "levando" e
+        // equipada — ver instalarArmaEmVeiculo, que já marca
+        // equipada:true ao montar).
+        const linhasArmasHtml = itensArmaInstalados.map(it => {
+            const podeDisparar = !isMestre && itemPodeUsar(it);
+            const disparoHtml = !isMestre
+                ? `<button type="button" class="btn-ghost veiculo-arma-disparar-btn" data-veiculo-arma-disparar data-item-id="${it.id}" ${podeDisparar ? "" : "disabled"} title="${podeDisparar ? `Rolar d20 + ${periciaUsoComoArray(it.periciaUso)[0] || "perícia"}` : "Item precisa estar equipado/levando pra disparar."}">🎯 Disparar</button>`
+                : "";
+            const removerArmaHtml = !isMestre
+                ? `<button type="button" class="btn-ghost veiculo-arma-remover-btn" data-veiculo-arma-remover data-item-id="${it.id}" title="Remove do veículo e libera o slot — a arma continua no inventário normal.">Remover do veículo</button>`
+                : "";
+            const slotVeiculoLabel = it.slotVeiculo ? ` · ${escapeHtml(it.slotVeiculo)}` : "";
+            return `
+                <div class="veiculo-acessorio-linha" data-item-id="${it.id}">
+                    <div class="veiculo-acessorio-linha-topo">
+                        <strong>🔫 ${escapeHtml(it.nome)}</strong>
+                        <span class="hint-inline">${Number(it.nivelTag) || 0} slot(s)${slotVeiculoLabel}</span>
+                    </div>
+                    <div class="veiculo-acessorio-linha-acoes">${disparoHtml}${removerArmaHtml}</div>
+                </div>
+            `;
+        }).join("");
+        const instalarArmaHtml = !isMestre
+            ? `<button type="button" class="btn-ghost veiculo-arma-instalar-btn" data-veiculo-arma-instalar-btn>+ Instalar Arma do Inventário</button>`
+            : "";
+
+        const acessoriosHtml = `
+            <div class="veiculo-acessorios-secao">
+                <div class="veiculo-atributo-label">
+                    <span>Acessórios</span>
+                    <span class="veiculo-atributo-nivel">${slotsUsados}/${slotsTotal} slots</span>
+                </div>
+                ${linhasAcessoriosHtml}
+                ${linhasArmasHtml}
+                <div class="veiculo-acessorios-acoes">${instalarAcessorioHtml}${instalarArmaHtml}${resetarUsosHtml}</div>
+            </div>
+        `;
+
+        // "Aparecer no Cenário" (Fase 6 do plano — ver
+        // plano-veiculos-fase2.txt, seção "FASE 6"): toggle — se o
+        // veículo já está marcado presente em algum cenário (v.cenarioId),
+        // mostra "Remover do Cenário" (sempre disponível, pra poder
+        // "guardar" o carro mesmo que o personagem já tenha saído
+        // daquele cenário); senão só oferece "Aparecer" se o personagem
+        // estiver participando de algum cenário agora
+        // (cenarioAtualDoPersonagem).
+        let cenarioVeiculoHtml = "";
+        if (!isMestre) {
+            if (v.cenarioId) {
+                cenarioVeiculoHtml = `<button type="button" class="btn-ghost veiculo-cenario-btn" data-veiculo-cenario-btn data-acao="remover">🎬 Remover do Cenário</button>`;
+            } else if (cenarioAtualDoPersonagem()) {
+                cenarioVeiculoHtml = `<button type="button" class="btn-ghost veiculo-cenario-btn" data-veiculo-cenario-btn data-acao="aparecer">🎬 Aparecer no Cenário</button>`;
+            }
+        }
+
         return `
             <div class="veiculo-card${isMestre ? " editavel" : ""}" data-veiculo-id="${id}">
                 <div class="veiculo-header">
@@ -6918,7 +7433,14 @@ function renderizarVeiculos() {
                     </div>
                 </div>
                 <div class="veiculo-atributos">${blocosHtml}</div>
+                ${pvBarraHtml}
+                ${deterioracaoBadgeHtml}
+                ${bonusBadgeHtml}
+                ${danoManualHtml}
+                ${acessoriosHtml}
                 ${trancaHtml}
+                ${manobraHtml}
+                ${cenarioVeiculoHtml}
                 ${manutencaoHtml}
             </div>
         `;
@@ -6927,6 +7449,35 @@ function renderizarVeiculos() {
     if (isMestre) {
         el.veiculosLista.querySelectorAll(".veiculo-card[data-veiculo-id]").forEach(card => {
             card.addEventListener("click", () => abrirModalEdicao("veiculos", card.dataset.veiculoId));
+            // O campo de dano manual fica DENTRO do card (que abre o
+            // modal de edição ao clicar em qualquer outro ponto) — sem
+            // isso, clicar no input/select/botão do dano também abriria
+            // o modal por cima.
+            const blocoDano = card.querySelector("[data-veiculo-dano-manual]");
+            if (blocoDano) {
+                blocoDano.addEventListener("click", (e) => e.stopPropagation());
+                const btnDano = blocoDano.querySelector("[data-veiculo-dano-btn]");
+                if (btnDano) btnDano.addEventListener("click", () => aplicarDanoManualVeiculo(card.dataset.veiculoId, blocoDano));
+            }
+            // "Limpar" bônus temporário de manobra (Fase 4) — mesmo
+            // motivo de stopPropagation acima.
+            const btnLimparBonus = card.querySelector("[data-veiculo-bonus-limpar]");
+            if (btnLimparBonus) {
+                btnLimparBonus.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    limparBonusTemporariosVeiculo(card.dataset.veiculoId);
+                });
+            }
+            // Seção de Acessórios (Fase 5b) — Mestre só tem o botão de
+            // resetar usos "uma vez por cena"; mesmo motivo de
+            // stopPropagation acima (senão qualquer clique ali dentro
+            // também abriria o modal de edição por cima).
+            const blocoAcessorios = card.querySelector(".veiculo-acessorios-secao");
+            if (blocoAcessorios) {
+                blocoAcessorios.addEventListener("click", (e) => e.stopPropagation());
+                const btnResetarUsos = blocoAcessorios.querySelector("[data-veiculo-acessorio-resetar-usos]");
+                if (btnResetarUsos) btnResetarUsos.addEventListener("click", () => resetarUsosAcessoriosVeiculo(card.dataset.veiculoId));
+            }
         });
     } else {
         el.veiculosLista.querySelectorAll(".veiculo-card[data-veiculo-id]").forEach(card => {
@@ -6936,8 +7487,334 @@ function renderizarVeiculos() {
             if (btnDestrancar) btnDestrancar.addEventListener("click", () => alternarTrancaVeiculo(card.dataset.veiculoId, false));
             const btnTrancar = card.querySelector("[data-veiculo-trancar]");
             if (btnTrancar) btnTrancar.addEventListener("click", () => alternarTrancaVeiculo(card.dataset.veiculoId, true));
+            // Reparo e Upgrade de atributo (Fase 3 do plano — ver
+            // plano-veiculos-fase2.txt): um botão por atributo, cada um
+            // abrindo o modal de confirmação (abrirModalMecanicoVeiculo).
+            card.querySelectorAll("[data-veiculo-upgrade-btn]:not([disabled])").forEach(btn => {
+                btn.addEventListener("click", () => abrirModalMecanicoVeiculo(card.dataset.veiculoId, btn.dataset.atributo, "upgrade"));
+            });
+            card.querySelectorAll("[data-veiculo-reparo-btn]:not([disabled])").forEach(btn => {
+                btn.addEventListener("click", () => abrirModalMecanicoVeiculo(card.dataset.veiculoId, btn.dataset.atributo, "reparo"));
+            });
+            // Manobra (Fase 4 do plano).
+            const btnManobra = card.querySelector("[data-veiculo-manobra-btn]");
+            if (btnManobra) btnManobra.addEventListener("click", () => abrirModalManobraVeiculo(card.dataset.veiculoId));
+            // "Aparecer no Cenário" (Fase 6 do plano).
+            const btnCenarioVeiculo = card.querySelector("[data-veiculo-cenario-btn]");
+            if (btnCenarioVeiculo) btnCenarioVeiculo.addEventListener("click", () => alternarVeiculoNoCenario(card.dataset.veiculoId, btnCenarioVeiculo.dataset.acao));
+            // Acessórios instalados (Fase 5b do plano).
+            const btnInstalarAcessorio = card.querySelector("[data-veiculo-acessorio-instalar-btn]");
+            if (btnInstalarAcessorio) btnInstalarAcessorio.addEventListener("click", () => abrirModalInstalarAcessorioVeiculo(card.dataset.veiculoId));
+            card.querySelectorAll("[data-veiculo-acessorio-remover]").forEach(btn => {
+                btn.addEventListener("click", () => removerAcessorioVeiculo(card.dataset.veiculoId, btn.dataset.key));
+            });
+            card.querySelectorAll("[data-veiculo-acessorio-testar]").forEach(btn => {
+                btn.addEventListener("click", () => testarAcessorioVeiculo(card.dataset.veiculoId, btn.dataset.key));
+            });
+            card.querySelectorAll("[data-veiculo-acessorio-usar]").forEach(btn => {
+                btn.addEventListener("click", () => usarAcessorioVeiculo(card.dataset.veiculoId, btn.dataset.key));
+            });
+            // Acessórios-arma (Fase 5c do plano).
+            const btnInstalarArma = card.querySelector("[data-veiculo-arma-instalar-btn]");
+            if (btnInstalarArma) btnInstalarArma.addEventListener("click", () => abrirModalInstalarArmaVeiculo(card.dataset.veiculoId));
+            card.querySelectorAll("[data-veiculo-arma-disparar]:not([disabled])").forEach(btn => {
+                btn.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    const it = fichaAtual.inventario && fichaAtual.inventario[btn.dataset.itemId];
+                    if (!it) return;
+                    await iniciarUsoItem({ id: btn.dataset.itemId, ...it }, modificadoresPlanos);
+                });
+            });
+            card.querySelectorAll("[data-veiculo-arma-remover]").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    removerArmaDoVeiculo(btn.dataset.itemId);
+                });
+            });
         });
     }
+}
+
+// Toggle "Aparecer no Cenário" / "Remover do Cenário" (Fase 6 do plano —
+// ver plano-veiculos-fase2.txt, seção "FASE 6"): grava/apaga o ponteiro
+// em cenarios/{id}/veiculos e o cenarioId/cenarioEntryId espelhado no
+// próprio veículo numa transação simples de update duplo (mesmo espírito
+// de salvarVeiculoDoModal pra chave) — feito em mestre.js
+// (aparecerVeiculoNoCenario/removerVeiculoDoCenario) pra escrever os dois
+// nós juntos.
+async function alternarVeiculoNoCenario(veiculoId, acao) {
+    if (!fichaAtual || !fichaAtualId || isMestre) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    if (acao === "remover") {
+        if (!v.cenarioId) return;
+        await removerVeiculoDoCenario(v.cenarioId, v.cenarioEntryId, fichaAtualId, veiculoId);
+        toast(`"${v.nome || "Veículo"}" removido do cenário.`);
+        return;
+    }
+    const cenario = cenarioAtualDoPersonagem();
+    if (!cenario) { toast("Você não está em nenhum cenário no momento.", "erro"); return; }
+    await aparecerVeiculoNoCenario(cenario.id, fichaAtualId, veiculoId);
+    toast(`"${v.nome || "Veículo"}" agora está presente em "${cenario.titulo}".`);
+}
+
+// ---------------------------------------------------------------------
+// ACESSÓRIOS DE VEÍCULO (manual pg. 37-38) — Fase 5b do plano (ver
+// plano-acessorios-veiculo.txt, seção "FASE 5b").
+// ---------------------------------------------------------------------
+
+// Modal "+ Instalar Acessório": lista o catálogo inteiro
+// (CATALOGO_ACESSORIOS_VEICULO), cinza os que não cabem no slot livre
+// atual (podeInstalarAcessorio, regras.js) e os que já estão instalados
+// (não dá pra instalar o mesmo acessório duas vezes — cada um do
+// catálogo é único no veículo, mesmo espírito de um item físico só
+// existir uma vez). Sem custo em CN$ — ver nota da Fase 5a/5b sobre
+// preço não publicado no manual; o Mestre cobra manualmente se quiser.
+function abrirModalInstalarAcessorioVeiculo(veiculoId) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+
+    let modal = document.getElementById("modal-instalar-acessorio-veiculo");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-instalar-acessorio-veiculo";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    // Fase 5c: armas montadas (item.instaladoEmVeiculoId) também
+    // ocupam slot — precisa entrar aqui, senão o modal deixaria
+    // instalar um acessório passivo por cima de um slot já tomado por
+    // uma Torreta Tática, por exemplo.
+    const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, veiculoId);
+    const jaInstaladas = new Set((v.acessoriosInstalados || []).map(a => a.key));
+    const linhasHtml = CATALOGO_ACESSORIOS_VEICULO.map(cat => {
+        const jaTem = jaInstaladas.has(cat.key);
+        const cabe = !jaTem && podeInstalarAcessorio(v, cat, itensArmaInstalados);
+        const motivo = jaTem ? "Já instalado neste veículo." : (!cabe ? "Não há slots livres suficientes." : "");
+        return `
+            <div class="veiculo-acessorio-linha${cabe ? "" : " desabilitada"}" data-acessorio-key="${cat.key}">
+                <div class="veiculo-acessorio-linha-topo">
+                    <strong>${escapeHtml(cat.nome)}</strong>
+                    <span class="hint-inline">${cat.nivel} slot(s)</span>
+                </div>
+                <p class="hint">${escapeHtml(cat.descricao)}</p>
+                <div class="veiculo-acessorio-linha-acoes">
+                    <button type="button" class="btn-lime veiculo-acessorio-instalar-confirmar-btn" data-instalar-confirmar ${cabe ? "" : "disabled"} title="${escapeHtml(motivo)}">Instalar</button>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Instalar Acessório — ${escapeHtml(v.nome || "veículo")}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Slots livres: ${slotsAcessoriosLivres(v, itensArmaInstalados)}. Sem preço publicado no manual pra nenhum destes — combine o custo com o Mestre.</p>
+        <div class="veiculo-manobra-lista">${linhasHtml}</div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelectorAll("[data-instalar-confirmar]:not([disabled])").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const key = btn.closest("[data-acessorio-key]").dataset.acessorioKey;
+            modal.remove();
+            await instalarAcessorioVeiculo(veiculoId, key);
+        });
+    });
+    document.body.appendChild(modal);
+}
+
+async function instalarAcessorioVeiculo(veiculoId, key) {
+    if (!fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const cat = buscarAcessorioVeiculo(key);
+    if (!cat) return;
+    // Fase 5c: mesma correção acima — considera as armas já montadas
+    // antes de confirmar que o slot cabe.
+    const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, veiculoId);
+    if (!podeInstalarAcessorio(v, cat, itensArmaInstalados)) { toast("Não há slots livres suficientes.", "erro"); return; }
+    const atuais = v.acessoriosInstalados || [];
+    if (atuais.some(a => a.key === key)) { toast("Este acessório já está instalado.", "erro"); return; }
+    const nova = { key, instaladoEm: Date.now(), usadoNestaCena: false };
+    await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { acessoriosInstalados: [...atuais, nova] });
+    toast(`"${cat.nome}" instalado em "${v.nome || "veículo"}".`, "ok");
+}
+
+// Remove e libera o slot na hora — sem custo/aprovação, mesmo espírito
+// livre de Trancar/Destrancar (o item físico só volta a existir "solto"
+// narrativamente, não vira item de inventário — mesma régua de upgrade
+// de atributo, que também não devolve material ao desfazer).
+async function removerAcessorioVeiculo(veiculoId, key) {
+    if (!fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const cat = buscarAcessorioVeiculo(key);
+    const atuais = v.acessoriosInstalados || [];
+    await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { acessoriosInstalados: atuais.filter(a => a.key !== key) });
+    toast(`"${cat ? cat.nome : key}" removido — slot liberado.`, "ok");
+}
+
+// "🎲 Testar" (mecanica === "teste_dif_fixa"): rola a perícia do
+// próprio acessório (periciaTeste) contra a dificuldade fixa dele
+// (dificuldade) — mesmo rolarERegistrar de qualquer outra rolagem de
+// perícia solta. Pra Óleo/Cospe Prego, ESTA rolagem representa "você
+// mesmo testando" (ex.: fugindo de um perseguidor NPC que o Mestre
+// resolve à parte) — quando o alvo é outro personagem jogador, o
+// próprio alvo rola Dirigir Veículos na ficha DELE contra esta mesma
+// dificuldade (mostrada no botão) e o Mestre aplica
+// efeitoOleoVeiculo/efeitoCospePregoVeiculo (regras.js) manualmente
+// sobre o veículo de quem perseguiu — ver comentário dessas funções em
+// regras.js pro motivo de não automatizar isso daqui.
+async function testarAcessorioVeiculo(veiculoId, key) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const cat = buscarAcessorioVeiculo(key);
+    if (!cat || cat.mecanica !== "teste_dif_fixa") return;
+    const modificadoresPlanos = modificadoresAtuais();
+    const modificador = modificadorDePericiaComPenalidade(cat.periciaTeste, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(cat.periciaTeste));
+    const resultado = await rolarERegistrar(`${cat.nome} (${cat.periciaTeste})`, modificador, false, cat.dificuldade);
+    if (!resultado) return;
+
+    if (key === "oleo") {
+        const efeito = efeitoOleoVeiculo(resultado.resultado);
+        toast(efeito.sucesso ? "Sucesso — o Óleo não pegou desta vez." : "Falhou — -2 Controle por 1 turno pra quem tentou passar (aplique manualmente no veículo do perseguidor).", efeito.sucesso ? "ok" : "erro");
+    } else if (key === "cospe-prego") {
+        const efeito = efeitoCospePregoVeiculo(resultado.resultado);
+        if (efeito.sucesso) {
+            toast("Sucesso — passou pelos pregos sem problema.", "ok");
+        } else {
+            toast(`Falhou — -3 Controle por 1 turno${efeito.perseguidorDeixadoParaTras ? " e pode ser considerado deixado pra trás" : ""} (aplique manualmente no veículo do perseguidor).`, "erro");
+        }
+    }
+}
+
+// "✅ Usar" (mecanica === "uma_vez_por_cena", ex.: IA de Bordo, Lança
+// Fumaça): marca usadoNestaCena — sem rolagem, é só um efeito narrativo
+// já descrito no texto do acessório. Mestre reseta ao trocar de cena
+// (ver resetarUsosAcessoriosVeiculo abaixo).
+async function usarAcessorioVeiculo(veiculoId, key) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const cat = buscarAcessorioVeiculo(key);
+    if (!cat) return;
+    const atuais = v.acessoriosInstalados || [];
+    if (!atuais.some(a => a.key === key)) return;
+    const atualizados = atuais.map(a => a.key === key ? { ...a, usadoNestaCena: true } : a);
+    await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { acessoriosInstalados: atualizados });
+    toast(`"${cat.nome}" usado — ${cat.descricao}`, "ok");
+}
+
+// Mestre reseta todos os usos "uma vez por cena" do veículo de uma vez
+// (troca de cena) — mesmo espírito de limparBonusTemporariosVeiculo.
+async function resetarUsosAcessoriosVeiculo(veiculoId) {
+    if (!isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const atuais = v.acessoriosInstalados || [];
+    const atualizados = atuais.map(a => ({ ...a, usadoNestaCena: false }));
+    await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { acessoriosInstalados: atualizados });
+    toast(`Usos "por cena" de "${v.nome || "veículo"}" resetados.`);
+}
+
+// ---------------------------------------------------------------------
+// ACESSÓRIOS-ARMA DE VEÍCULO (Truck Pistol, Metralhadora de Teto,
+// Torreta Tática — manual pg. 37-38) — Fase 5c do plano (ver
+// plano-acessorios-veiculo.txt, seção "FASE 5c"). Nenhuma mecânica nova
+// de disparo aqui — só o ponteiro item→veículo e o controle de slot em
+// cima dele; disparar é o mesmo "🎯 Disparar" que chama iniciarUsoItem,
+// já wired em renderizarVeiculos.
+// ---------------------------------------------------------------------
+
+// Modal "+ Instalar Arma do Inventário": lista as armas (tag "arma") da
+// PRÓPRIA ficha que ainda não estão montadas em nenhum veículo, cinza as
+// que não cabem no slot livre atual deste veículo (instalarArmaNoVeiculo,
+// regras.js — mesma régua de podeInstalarAcessorio que os 9 acessórios
+// passivos já usam). Sem preço (nenhum dos três tem tabela publicada no
+// manual, igual ao resto do catálogo de Fase 5).
+function abrirModalInstalarArmaVeiculo(veiculoId) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+
+    const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, veiculoId);
+    const armasDisponiveis = Object.entries(fichaAtual.inventario || {})
+        .filter(([, it]) => it && ehArma(it.tag) && !it.instaladoEmVeiculoId);
+
+    let modal = document.getElementById("modal-instalar-arma-veiculo");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-instalar-arma-veiculo";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const linhasHtml = armasDisponiveis.length ? armasDisponiveis.map(([id, it]) => {
+        const cabe = instalarArmaNoVeiculo(it, v, itensArmaInstalados);
+        const motivo = cabe ? "" : "Não há slots livres suficientes.";
+        return `
+            <div class="veiculo-acessorio-linha${cabe ? "" : " desabilitada"}" data-item-id="${id}">
+                <div class="veiculo-acessorio-linha-topo">
+                    <strong>🔫 ${escapeHtml(it.nome)}</strong>
+                    <span class="hint-inline">${Number(it.nivelTag) || 0} slot(s)</span>
+                </div>
+                <div class="veiculo-acessorio-linha-acoes">
+                    <button type="button" class="btn-lime veiculo-arma-instalar-confirmar-btn" data-instalar-arma-confirmar ${cabe ? "" : "disabled"} title="${escapeHtml(motivo)}">Instalar</button>
+                </div>
+            </div>
+        `;
+    }).join("") : `<p class="hint">Nenhuma arma disponível no inventário (fora de qualquer veículo) pra instalar.</p>`;
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Instalar Arma — ${escapeHtml(v.nome || "veículo")}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Slots livres: ${slotsAcessoriosLivres(v, itensArmaInstalados)}. Só armas do seu próprio inventário que ainda não estão montadas em outro veículo aparecem aqui.</p>
+        <div class="veiculo-manobra-lista">${linhasHtml}</div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelectorAll("[data-instalar-arma-confirmar]:not([disabled])").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const itemId = btn.closest("[data-item-id]").dataset.itemId;
+            modal.remove();
+            await instalarArmaEmVeiculo(veiculoId, itemId);
+        });
+    });
+    document.body.appendChild(modal);
+}
+
+// Grava o ponteiro no item (item.instaladoEmVeiculoId) — mesmo padrão de
+// referência cruzada que a chave de veículo já usa (item.veiculoId), não
+// uma cópia do item. Monta a arma já EQUIPADA (item.equipada: true): uma
+// arma montada no carro está fisicamente pronta pra disparar, mesmo
+// espírito de "equipada" que qualquer arma na mão já usa — sem isso,
+// itemPodeUsar (inventario.js) bloquearia o botão "🎯 Disparar" por
+// achar que a arma está desequipada/guardada.
+async function instalarArmaEmVeiculo(veiculoId, itemId) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    const it = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    if (!v || !it || !ehArma(it.tag)) return;
+    if (it.instaladoEmVeiculoId) { toast("Esta arma já está montada em outro veículo.", "erro"); return; }
+    const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, veiculoId);
+    if (!instalarArmaNoVeiculo(it, v, itensArmaInstalados)) { toast("Não há slots livres suficientes.", "erro"); return; }
+    await update(ref(db, `${caminhoBase()}/inventario/${itemId}`), { instaladoEmVeiculoId: veiculoId, equipada: true, categoria: "levando" });
+    toast(`"${it.nome}" montada em "${v.nome || "veículo"}".`, "ok");
+}
+
+// Remove o ponteiro — a arma continua existindo normalmente no
+// inventário (categoria "levando", ainda equipada), só solta do carro e
+// devolve o slot na hora. Sem custo/aprovação, mesmo espírito livre de
+// removerAcessorioVeiculo (Fase 5b) e de Trancar/Destrancar.
+async function removerArmaDoVeiculo(itemId) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const it = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    if (!it || !it.instaladoEmVeiculoId) return;
+    await update(ref(db, `${caminhoBase()}/inventario/${itemId}`), { instaladoEmVeiculoId: null, slotVeiculo: null });
+    toast(`"${it.nome}" removida do veículo — slot liberado.`, "ok");
 }
 
 // ---------------------------------------------------------------------
@@ -7003,12 +7880,68 @@ function renderizarCenarios() {
                 </div>`).join("")
             : `<p class="hint">Nenhum item solto neste cenário.</p>`;
 
+        // Veículos (Fase 6 do plano — ver plano-veiculos-fase2.txt, seção
+        // "FASE 6"): entrada pode vir em dois formatos. `origem: "jogador"`
+        // é um PONTEIRO { fichaId, veiculoId } — a fonte de verdade fica
+        // em fichas/{fichaId}/veiculos/{veiculoId} (todasAsFichasCache),
+        // nunca fica desatualizado, então resolve nome/tipo/trancado a
+        // partir de lá em vez dos campos gravados na entry. Sem `origem`
+        // (ou `origem: "cenario"`) é o formato antigo, criado direto pelo
+        // Mestre (adicionarVeiculoCenario) — usa os campos da própria
+        // entry como sempre foi.
         const veiculosHtml = veiculos.length
-            ? veiculos.map(([veiculoId, v]) => `
+            ? veiculos.map(([veiculoId, entry]) => {
+                if (entry.origem === "jogador") {
+                    const fichaDona = todasAsFichasCache[entry.fichaId];
+                    const vReal = fichaDona && fichaDona.veiculos && fichaDona.veiculos[entry.veiculoId];
+                    if (!vReal) {
+                        // Dono apagou o veículo enquanto ele estava
+                        // marcado presente no cenário — mostra um aviso
+                        // mínimo, sem botão nenhum (nada pra fazer com um
+                        // ponteiro morto por aqui; o Mestre limpa pelo
+                        // Gerenciador de Cenário).
+                        return `
+                        <div class="cenario-veiculo-linha" data-cenario-veiculo-id="${veiculoId}">
+                            <span>🚗 <span class="hint">Veículo removido pelo dono.</span></span>
+                        </div>`;
+                    }
+                    const nomeDono = (fichaDona.config && fichaDona.config.nomeExibicao) || entry.fichaId;
+                    const ehMeuVeiculo = !isMestre && !modoNpc && entry.fichaId === fichaAtualId;
+
+                    // Terceiro (não-dono, não-Mestre) ganha Arrombar se
+                    // trancado, ou Reparar/Melhorar se destrancado (manual
+                    // pg. 39, mesmos fluxos da Fase 3, operando no veículo
+                    // do OUTRO jogador — ver abrirModalMecanicoVeiculoTerceiro).
+                    // O dono continua vendo só a informação aqui (as ações
+                    // dele ficam na própria aba Veículos).
+                    let acoesHtml = "";
+                    if (!isMestre && !ehMeuVeiculo) {
+                        acoesHtml = vReal.trancado
+                            ? `<button type="button" class="btn-ghost btn-cenario-arrombar" data-veiculo-nome="${escapeHtml(vReal.nome || "veículo")}">🔨 Arrombar</button>`
+                            : `<span style="display:flex; gap:6px;">
+                                <button type="button" class="btn-ghost btn-cenario-reparar-terceiro" data-ficha-alvo-id="${entry.fichaId}" data-veiculo-id="${entry.veiculoId}" data-veiculo-nome="${escapeHtml(vReal.nome || "veículo")}">🔧 Reparar</button>
+                                <button type="button" class="btn-ghost btn-cenario-melhorar-terceiro" data-ficha-alvo-id="${entry.fichaId}" data-veiculo-id="${entry.veiculoId}" data-veiculo-nome="${escapeHtml(vReal.nome || "veículo")}">⚙️ Melhorar</button>
+                               </span>`;
+                    }
+
+                    return `
+                    <div class="cenario-veiculo-linha" data-cenario-veiculo-id="${veiculoId}">
+                        <span>🚗 ${escapeHtml(vReal.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(vReal.tipo)}, ${vReal.trancado ? "🔒 Trancado" : "🔓 Destrancado"} · ${ehMeuVeiculo ? "seu" : `de ${escapeHtml(nomeDono)}`})</span></span>
+                        ${acoesHtml}
+                    </div>`;
+                }
+
+                // Formato antigo (veículo criado direto pelo Mestre no
+                // cenário) — comportamento inalterado: Arrombar sempre
+                // disponível (mesmo destrancado, serve pra "ligar sem
+                // chave" também — ver comentário de arrombarVeiculoCenario
+                // acima; esses veículos nunca têm chave de verdade).
+                return `
                 <div class="cenario-veiculo-linha" data-cenario-veiculo-id="${veiculoId}">
-                    <span>🚗 ${escapeHtml(v.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(v.tipo)}, ${v.trancado ? "🔒 Trancado" : "🔓 Destrancado"})</span></span>
-                    ${isMestre ? "" : `<button type="button" class="btn-ghost btn-cenario-arrombar" data-veiculo-nome="${escapeHtml(v.nome || "veículo")}">🔨 Arrombar</button>`}
-                </div>`).join("")
+                    <span>🚗 ${escapeHtml(entry.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(entry.tipo)}, ${entry.trancado ? "🔒 Trancado" : "🔓 Destrancado"})</span></span>
+                    ${isMestre ? "" : `<button type="button" class="btn-ghost btn-cenario-arrombar" data-veiculo-nome="${escapeHtml(entry.nome || "veículo")}">🔨 Arrombar</button>`}
+                </div>`;
+            }).join("")
             : `<p class="hint">Nenhum veículo neste cenário.</p>`;
 
         // Só informativo pro jogador (decisão 5, plano-explosivos-cenario.txt)
@@ -7044,6 +7977,72 @@ function renderizarCenarios() {
             }).join("")
             : `<p class="hint">Nenhum dinheiro solto neste cenário.</p>`;
 
+        // Perseguição em andamento (Fase 7a/7b/7c do plano — ver
+        // plano-veiculos-fase2.txt, seção "FASE 7"): status pra todo
+        // mundo + botões "Testar Dirigir Veículos" (Fase 7b) e "Tentar
+        // Rota de Fuga" (Fase 7c) SÓ pro participante dono dessa ficha,
+        // e só se ele ainda não agiu nesta volta. Falta 7d (Manobra como
+        // ação de volta + anunciar vencedor).
+        const perseguicaoDesteCenario = perseguicaoAtivaCache.ativo && perseguicaoAtivaCache.cenarioId === cenario.id;
+        const perseguicaoHtml = perseguicaoDesteCenario
+            ? (() => {
+                const bairro = bairroPerseguicao(perseguicaoAtivaCache.bairro);
+                const voltas = perseguicaoAtivaCache.voltasNecessarias;
+                const rotasFuga = perseguicaoAtivaCache.rotasFuga || { perseguido: 0, perseguidor: 0 };
+                const linhas = Object.values(perseguicaoAtivaCache.participantes || {})
+                    .map(p => `<span class="mod-pill">${p.lado === "perseguidor" ? "🚨" : "🏎️"} ${escapeHtml(p.nome)} (${Number(p.pontos) || 0} pt)${p.agiuNestaVolta ? " ✅" : ""}</span>`)
+                    .join(" ");
+
+                // Meu participante nesta perseguição (se eu for jogador
+                // e estiver marcado nela) — Mestre nunca vê estes botões
+                // aqui (ele age pelos NPCs no Gerenciador de Cenário).
+                let botoesAcaoHtml = "";
+                if (!isMestre) {
+                    const meuPidPerseguicao = Object.entries(perseguicaoAtivaCache.participantes || {})
+                        .find(([, p]) => p.tipo === "ficha" && p.refId === fichaAtualId);
+                    if (meuPidPerseguicao) {
+                        const [pid, p] = meuPidPerseguicao;
+                        if (p.agiuNestaVolta) {
+                            botoesAcaoHtml = `<p class="hint" style="margin-top:6px;">Você já testou nesta volta — aguarde os outros pilotos.</p>`;
+                        } else {
+                            const btnTestarHtml = tabelaPontuacaoFugaCadastrada()
+                                ? `<button type="button" class="btn-lime btn-perseguicao-testar" data-participante-id="${pid}" data-lado="${p.lado}">🎲 Testar Dirigir Veículos</button>`
+                                : `<button type="button" class="btn-ghost" disabled title="Tabela de pontuação da perseguição ainda não cadastrada (dados-manual.js) — sem número pra converter o resultado em pontos.">🎲 Testar Dirigir Veículos</button>`;
+                            const btnRotaFugaHtml = bairroTemDificuldadeRotaFuga(bairro)
+                                ? `<button type="button" class="btn-ghost btn-perseguicao-rota-fuga" data-participante-id="${pid}" data-lado="${p.lado}" title="Abre mão da pontuação da volta pra testar Velocidade contra a dificuldade do bairro.">🏃 Tentar Rota de Fuga</button>`
+                                : `<button type="button" class="btn-ghost" disabled title="Dificuldade de rota de fuga ainda não cadastrada pra esse bairro (dados-manual.js).">🏃 Tentar Rota de Fuga</button>`;
+                            // Manobra como ação da volta (Fase 7d): só
+                            // aparece se este piloto tiver, na ficha, o
+                            // veículo cadastrado como o veículo dele
+                            // nesta perseguição (p.veiculoId).
+                            const veiculoDoPiloto = p.veiculoId ? (fichaAtual.veiculos && fichaAtual.veiculos[p.veiculoId]) : null;
+                            const btnManobraPerseguicaoHtml = veiculoDoPiloto
+                                ? `<button type="button" class="btn-ghost btn-perseguicao-manobra" data-participante-id="${pid}" data-lado="${p.lado}" data-veiculo-id="${p.veiculoId}" title="Rola uma manobra (Fase 4) no lugar de Testar Dirigir Veículos — o resultado também vira pontuação da volta.">🏁 Manobra</button>`
+                                : "";
+                            botoesAcaoHtml = `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">${btnTestarHtml}${btnRotaFugaHtml}${btnManobraPerseguicaoHtml}</div>`;
+                        }
+                    }
+                }
+
+                // Fim da corrida (Fase 7d): resultadoFinal só existe
+                // depois que aplicarAvancoOuFimDeVolta (mestre.js) o
+                // grava — a partir daí some o bloco de botões (a volta
+                // não avança mais) e mostra o vencedor. O Mestre encerra
+                // (zera o nó) no Gerenciador de Cenário quando quiser.
+                const resultadoFinal = perseguicaoAtivaCache.resultadoFinal;
+                const resultadoFinalHtml = resultadoFinal
+                    ? `<div class="hint" style="margin-top:4px;"><strong>🏁 Corrida encerrada</strong> — ${resultadoFinal.vencedor === "empate" ? "empate" : `venceu ${resultadoFinal.vencedor === "perseguido" ? "o(s) perseguido(s)" : "o(s) perseguidor(es)"}`} (${resultadoFinal.pontosPerseguido} perseguido x ${resultadoFinal.pontosPerseguidor} perseguidor). Aguarde o Mestre encerrar.</div>`
+                    : "";
+
+                return `
+                <div class="section-header" style="margin-top:8px;">🏁 Perseguição em andamento</div>
+                <div><strong>${escapeHtml(bairro ? bairro.label : perseguicaoAtivaCache.bairro)}</strong> — volta ${perseguicaoAtivaCache.voltaAtual || 1}${voltas ? ` de ${voltas}` : ""}</div>
+                <div style="margin-top:4px;">${linhas}</div>
+                <div class="hint" style="margin-top:4px;">Rotas de fuga encontradas — 🏎️ Perseguido: ${Number(rotasFuga.perseguido) || 0} · 🚨 Perseguidor: ${Number(rotasFuga.perseguidor) || 0} (cada uma vale -2 pontos pro lado adversário no total final)</div>
+                ${resultadoFinal ? resultadoFinalHtml : botoesAcaoHtml}`;
+            })()
+            : "";
+
         return `
             <div class="veiculo-card" data-cenario-id="${cenario.id}">
                 <div class="veiculo-header">
@@ -7058,6 +8057,7 @@ function renderizarCenarios() {
                 ${explosivosHtml}
                 <div class="section-header" style="margin-top:8px;">Dinheiro</div>
                 ${dinheiroHtml}
+                ${perseguicaoHtml}
             </div>`;
     }).join("");
 
@@ -7067,6 +8067,13 @@ function renderizarCenarios() {
         });
         el.cenarioLista.querySelectorAll(".btn-cenario-arrombar").forEach(btn => {
             btn.addEventListener("click", () => arrombarVeiculoCenario(btn.dataset.veiculoNome));
+        });
+        // Reparo/Melhoria de veículo de OUTRO jogador (Fase 6 do plano).
+        el.cenarioLista.querySelectorAll(".btn-cenario-reparar-terceiro").forEach(btn => {
+            btn.addEventListener("click", () => abrirModalMecanicoVeiculoTerceiro(btn.dataset.fichaAlvoId, btn.dataset.veiculoId, btn.dataset.veiculoNome, "reparo"));
+        });
+        el.cenarioLista.querySelectorAll(".btn-cenario-melhorar-terceiro").forEach(btn => {
+            btn.addEventListener("click", () => abrirModalMecanicoVeiculoTerceiro(btn.dataset.fichaAlvoId, btn.dataset.veiculoId, btn.dataset.veiculoNome, "upgrade"));
         });
         // Abre a caixinha de "quanto pegar" embaixo do botão clicado.
         el.cenarioLista.querySelectorAll(".btn-cenario-pegar-dinheiro").forEach(btn => {
@@ -7088,6 +8095,99 @@ function renderizarCenarios() {
                 pegarDinheiroCenario(btn.dataset.cenarioId, btn.dataset.dinheiroId, btn.dataset.dinheiroNome, Number(btn.dataset.valorMax) || 0, input ? input.value : "");
             });
         });
+        // Testar Dirigir Veículos numa perseguição ativa (Fase 7b).
+        el.cenarioLista.querySelectorAll(".btn-perseguicao-testar").forEach(btn => {
+            btn.addEventListener("click", () => testarDirigirVeiculosPerseguicao(btn.dataset.participanteId, btn.dataset.lado));
+        });
+        // Tentar Rota de Fuga numa perseguição ativa (Fase 7c).
+        el.cenarioLista.querySelectorAll(".btn-perseguicao-rota-fuga").forEach(btn => {
+            btn.addEventListener("click", () => tentarRotaFugaPerseguicao(btn.dataset.participanteId, btn.dataset.lado));
+        });
+        // Manobra como ação da volta numa perseguição ativa (Fase 7d).
+        el.cenarioLista.querySelectorAll(".btn-perseguicao-manobra").forEach(btn => {
+            btn.addEventListener("click", () => abrirModalManobraVeiculo(btn.dataset.veiculoId, { participanteId: btn.dataset.participanteId, lado: btn.dataset.lado }));
+        });
+    }
+}
+
+// Rola Dirigir Veículos (sem dificuldade — o RESULTADO bruto é que
+// converte em pontos, ver pontosPorResultadoTesteFuga em regras.js) pro
+// "Testar Dirigir Veículos" de uma perseguição ativa (Fase 7b do plano
+// — ver plano-veiculos-fase2.txt, seção "FASE 7"). Se o bairro tiver
+// penalidade pro perseguidor (manual: periferia/industrial dão -1),
+// aplica em cima do modificador normal de Dirigir Veículos só quando
+// `lado === "perseguidor"`. registrarPontosPerseguicao (mestre.js) já
+// cuida de somar os pontos, marcar que este piloto agiu na volta e
+// avançar a volta sozinho quando todo mundo já tiver agido.
+async function testarDirigirVeiculosPerseguicao(participanteId, lado) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    if (!tabelaPontuacaoFugaCadastrada()) {
+        toast("Tabela de pontuação da perseguição ainda não cadastrada.", "erro");
+        return;
+    }
+
+    const modificadoresPlanos = modificadoresAtuais();
+    let modificador = modificadorDePericiaComPenalidade("Dirigir Veículos", fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+
+    const bairro = bairroPerseguicao(perseguicaoAtivaCache.bairro);
+    if (bairro && lado === "perseguidor") modificador += Number(bairro.penalidadePerseguidor) || 0;
+
+    const resultado = await rolarERegistrar(`Perseguição — Testar Dirigir Veículos (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, modificador, false, null);
+    if (!resultado) return;
+
+    const pontos = pontosPorResultadoTesteFuga(resultado.resultado);
+    if (pontos === null) {
+        toast(`Resultado ${resultado.resultado}, mas a tabela de pontuação ainda não tem faixas cadastradas — nenhum ponto aplicado.`, "erro");
+        return;
+    }
+
+    try {
+        await registrarPontosPerseguicao(participanteId, pontos, resultado.resultado);
+        toast(`+${pontos} ponto(s) na perseguição (resultado ${resultado.resultado}).`, pontos > 0 ? "ok" : "erro");
+    } catch (err) {
+        console.error(err);
+        toast(err && err.message ? err.message : "Falha ao registrar pontos na perseguição.", "erro");
+    }
+}
+
+// "Tentar Rota de Fuga" (Fase 7c do plano — ver plano-veiculos-fase2.txt,
+// seção "FASE 7"): abre mão da pontuação da volta (diferente de
+// testarDirigirVeiculosPerseguicao acima) — testa Velocidade (atributo
+// secundário do PERSONAGEM, já com o efeito do estado de saúde aplicado
+// via aplicarEstadoSaudeVelocidade, igual ao resto da ficha) contra
+// dificuldadeRotaFuga do bairro. Sucesso soma 1 em
+// perseguicaoAtiva/rotasFuga/{lado} (registrarTentativaRotaFugaPerseguicao,
+// mestre.js), que vencedorPerseguicao (regras.js) usa como -2 pontos pro
+// lado adversário ao fim da corrida (Fase 7d, ainda não implementada).
+// Não soma penalidadeTestesAtual() aqui — o efeito de saúde em Velocidade
+// já é próprio (metade ou -2, ver aplicarEstadoSaudeVelocidade), somar os
+// dois seria penalizar em dobro; a penalidade de Energia física continua
+// se aplicando (teste físico) igual a executarManobraEsquivar.
+async function tentarRotaFugaPerseguicao(participanteId, lado) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const bairro = bairroPerseguicao(perseguicaoAtivaCache.bairro);
+    if (!bairroTemDificuldadeRotaFuga(bairro)) {
+        toast("Dificuldade de rota de fuga ainda não cadastrada pra esse bairro.", "erro");
+        return;
+    }
+
+    const modificadoresPlanos = modificadoresAtuais();
+    const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
+    const velocidadeAjustada = aplicarEstadoSaudeVelocidade(derivados.secundarios.velocidade, window._estadoSaudeAtual);
+    let modificador = velocidadeAjustada.total + penalidadeEnergiaPara("fisica");
+    if (lado === "perseguidor") modificador += Number(bairro.penalidadePerseguidor) || 0;
+
+    const resultado = await rolarERegistrar(`Perseguição — Tentar Rota de Fuga (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, modificador, false, bairro.dificuldadeRotaFuga);
+    if (!resultado) return;
+
+    try {
+        await registrarTentativaRotaFugaPerseguicao(participanteId, resultado.sucesso, resultado.resultado);
+        toast(resultado.sucesso
+            ? "Rota de fuga encontrada! Abriu mão da pontuação da volta — vale -2 pontos pro lado adversário no total final."
+            : "Não encontrou uma rota de fuga desta vez — abriu mão da pontuação da volta mesmo assim.", resultado.sucesso ? "ok" : "erro");
+    } catch (err) {
+        console.error(err);
+        toast(err && err.message ? err.message : "Falha ao registrar tentativa de rota de fuga.", "erro");
     }
 }
 
@@ -7171,6 +8271,34 @@ async function alternarTrancaVeiculo(veiculoId, trancar) {
     toast(trancar ? "Veículo trancado." : "Veículo destrancado.");
 }
 
+// Aplicar dano manual num veículo (Mestre) — Fase 2 do plano (ver
+// plano-veiculos-fase2.txt): mesmo padrão da ferramenta de "Causar
+// dano" do combate, endereçado por fichaId+veiculoId. causarDanoVeiculo
+// (mestre.js) já grava pvAtual e deterioracoes no Firebase — o
+// listener em tempo real (ativarSincronizacao) cuida de re-renderizar
+// o card sozinho, então aqui só falta limpar o input e avisar no toast.
+async function aplicarDanoManualVeiculo(veiculoId, blocoDano) {
+    if (!isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const inputValor = blocoDano.querySelector("[data-veiculo-dano-valor]");
+    const selectAtributo = blocoDano.querySelector("[data-veiculo-dano-atributo]");
+    const dano = Number(inputValor?.value) || 0;
+    if (dano <= 0) { toast("Informe um valor de dano maior que zero.", "erro"); return; }
+    try {
+        const resultado = await causarDanoVeiculo(fichaAtualId, veiculoId, dano, selectAtributo?.value || null);
+        let nota = "";
+        if (resultado.novosQuintosCruzados > 0) {
+            const rotuloOutro = rotuloAtributoVeiculo(resultado.atributoDeteriorado);
+            nota = ` ⚠️ Cruzou ${resultado.novosQuintosCruzados} quinto(s) do PV máximo — -1 Proteção e -1 ${rotuloOutro} aplicados (${resultado.novosQuintosCruzados}x cada).`;
+        }
+        toast(`${resultado.nomeVeiculo}: ${resultado.danoFinal} de dano (${dano} bruto, ${resultado.reducao} reduzido) — ${resultado.pvAtualDepois}/${resultado.pvMaximo} PV.${nota}`);
+        if (inputValor) inputValor.value = "";
+    } catch (e) {
+        toast(e.message || "Erro ao aplicar dano no veículo.", "erro");
+    }
+}
+
 // Pedido de pagamento de manutenção — reaproveita a mesma ação
 // pendente "gastar_dinheiro" já tratada em confirmarAcaoPendente
 // (mestre.js), sem nenhum código novo do lado do Mestre (ver
@@ -7195,6 +8323,586 @@ async function solicitarManutencaoVeiculo(veiculoId) {
         payload: { valor, saldoId }
     });
     toast("Pedido de pagamento de manutenção enviado ao Mestre.");
+}
+
+// =====================================================================
+// REPARO E UPGRADE DE ATRIBUTO DO VEÍCULO — "ir ao mecânico" (manual
+// pg. 38-39) — Fase 3 do plano (ver plano-veiculos-fase2.txt).
+//
+// Reaproveita o mesmo modelo de material do sistema de Receitas
+// (materiaisAgregadosPorQualidade/planejarConsumoMaterial, ambos mais
+// abaixo neste arquivo, na seção de Receitas) — o de veículo só não
+// deixa o jogador escolher qual tier de qualidade usar (a tabela do
+// manual, quando preenchida — ver CUSTOS_UPGRADE_VEICULO em
+// dados-manual.js — só pede uma qualidade MÍNIMA opcional por
+// material, não uma escolha manual): consome sempre o tier mais baixo
+// que já qualifica primeiro, guardando material bom de troco.
+// =====================================================================
+
+// Todos os grupos de material (por qualidade) que QUALIFICAM pra um
+// requisito de qualidade mínima — `qualidadeMinima` null/undefined
+// aceita qualquer tier. Reaproveita materiaisAgregadosPorQualidade e
+// qualidadesDoMaterial (ambas na seção de Receitas, mais abaixo neste
+// arquivo — funções top-level, então já estão disponíveis aqui).
+function gruposMaterialQualificadosVeiculo(materialNome, qualidadeMinima) {
+    const grupos = materiaisAgregadosPorQualidade(materialNome);
+    const qualidades = qualidadesDoMaterial(materialNome);
+    if (!qualidadeMinima || !qualidades) return grupos;
+    const idxMin = qualidades.indexOf(qualidadeMinima);
+    return grupos.filter(g => {
+        const idx = g.qualidade ? qualidades.indexOf(g.qualidade) : 0;
+        return idx >= idxMin;
+    });
+}
+
+function materialDisponivelVeiculo(materialNome, qualidadeMinima) {
+    return gruposMaterialQualificadosVeiculo(materialNome, qualidadeMinima).reduce((soma, g) => soma + g.disponivel, 0);
+}
+
+// Devolve só os ingredientes de `materiais` (ver formato em
+// CUSTOS_UPGRADE_VEICULO, dados-manual.js) que estão em falta no
+// inventário da ficha atual, cada um com quanto falta.
+function materiaisFaltantesVeiculo(materiais) {
+    return (materiais || [])
+        .map(m => ({ ...m, disponivel: materialDisponivelVeiculo(m.material, m.qualidade) }))
+        .filter(m => m.disponivel < (Number(m.quantidade) || 0));
+}
+
+// Desconta de verdade os materiais do inventário (Firebase) — chamado
+// só depois de já ter confirmado que nada falta (materiaisFaltantesVeiculo
+// vazio). Consome o tier mais baixo que qualifica primeiro (troco de
+// tiers melhores fica intacto), mesma mecânica de planejarConsumoMaterial
+// já usada pelas Receitas.
+async function consumirMateriaisVeiculo(materiais) {
+    const atualizacoesInventario = {};
+    (materiais || []).forEach(m => {
+        // materiaisAgregadosPorQualidade devolve do tier mais alto pro
+        // mais baixo — invertido aqui pra gastar o mais baixo primeiro.
+        const grupos = [...gruposMaterialQualificadosVeiculo(m.material, m.qualidade)].reverse();
+        const { atualizacoes } = planejarConsumoMaterial(grupos, Number(m.quantidade) || 0);
+        Object.entries(atualizacoes).forEach(([id, valor]) => {
+            atualizacoesInventario[id] = valor === null ? null : { ...fichaAtual.inventario[id], materialQuantidade: valor };
+        });
+    });
+    if (!Object.keys(atualizacoesInventario).length) return;
+    const payload = {};
+    Object.entries(atualizacoesInventario).forEach(([id, valor]) => {
+        fichaAtual.inventario[id] = valor;
+        if (valor === null) delete fichaAtual.inventario[id];
+        payload[id] = valor;
+    });
+    await update(ref(db, `${caminhoBase()}/inventario`), payload);
+}
+
+// Monta o texto de tooltip explicando por que o botão "Melhorar"/
+// "Reparar" está desabilitado num atributo — usado tanto na renderização
+// do card (renderizarVeiculos) quanto, defensivamente, dentro do modal
+// de confirmação (o estado pode ter mudado entre abrir o card e clicar
+// em confirmar).
+function motivoMecanicoVeiculoIndisponivel(custo, nivelKitNecessario, fichaAtualRef) {
+    if (!custo) return "Custo ainda não cadastrado na tabela do manual (fale com o Mestre) — ver CUSTOS_UPGRADE_VEICULO em dados-manual.js.";
+    if (!veiculoTemKitFerramentasSuficiente(fichaAtualRef, nivelKitNecessario)) {
+        return `Precisa de um Kit de Ferramentas de Criação nível ${nivelKitNecessario}+ no inventário.`;
+    }
+    const faltando = materiaisFaltantesVeiculo(custo.materiais);
+    if (faltando.length) {
+        return `Faltam materiais: ${faltando.map(f => `${Math.max(0, (Number(f.quantidade) || 0) - f.disponivel)}x ${f.material}${f.qualidade ? ` (${f.qualidade}+)` : ""}`).join(", ")}.`;
+    }
+    return null;
+}
+
+// Modal de confirmação — mostra atributo, nível atual → alvo (upgrade)
+// ou "restaura ao normal" (reparo), custo, materiais, dificuldade, e
+// deixa escolher qual perícia rolar (Mecânica Automotiva ou Ofícios
+// Utilitários — manual permite as duas, a critério do narrador, ver
+// PERICIAS_MECANICO_VEICULO em dados-manual.js).
+// Monta o texto de "Custo de referência" dos modais de Melhorar/Reparar
+// veículo, aplicando o ajuste de preço da mesa (fatorPrecoMateriaisVeiculoAtivo
+// — configurarFatorPrecoMateriaisVeiculo) por cima do preço base do
+// manual. Com fator 0 (padrão), mostra só o preço normal, igual sempre
+// mostrou; com fator != 0, mostra o preço já ajustado e, entre
+// parênteses, o base + percentual, pra ficar claro de onde veio o
+// número. `textoMateriais` é a frase final que já existia (varia entre
+// "SEU inventário" e sem isso, dependendo de quem tá consertando).
+function textoCustoReferenciaVeiculo(precoBase, textoMateriais) {
+    const fator = fatorPrecoMateriaisVeiculoAtivo || 0;
+    const precoFinal = precoVeiculoComFator(precoBase, fator);
+    const sufixoAjuste = fator !== 0 ? ` (base CN$ ${precoBase} ${fator > 0 ? "+" : ""}${fator}%)` : "";
+    return `Custo de referência: CN$ ${precoFinal}${sufixoAjuste} (narrador decide se cobra à parte — ${textoMateriais}).`;
+}
+
+function abrirModalMecanicoVeiculo(veiculoId, atributoKey, modo) {
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const atributos = v.atributos || {};
+    const nivelAtual = Number(atributos[atributoKey]) || 0;
+    const nivelAlvo = modo === "upgrade" ? Math.min(5, nivelAtual + 1) : nivelAtual;
+
+    const custo = modo === "upgrade" ? custoUpgradeVeiculo(atributoKey, nivelAlvo) : custoReparoVeiculo(atributoKey, nivelAtual);
+    const nivelKitNecessario = Math.max(1, nivelAlvo);
+    const dificuldade = dificuldadeUpgradeVeiculo(nivelAlvo);
+    const motivoBloqueado = motivoMecanicoVeiculoIndisponivel(custo, nivelKitNecessario, fichaAtual);
+
+    let modal = document.getElementById("modal-mecanico-veiculo");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-mecanico-veiculo";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const materiaisHtml = (custo?.materiais || []).map(m => {
+        const disponivel = materialDisponivelVeiculo(m.material, m.qualidade);
+        const falta = disponivel < m.quantidade;
+        return `<div class="receita-ingrediente-linha${falta ? " material-falta" : ""}">${m.quantidade}x ${escapeHtml(m.material)}${m.qualidade ? ` (${escapeHtml(m.qualidade)}+)` : ""} <span class="hint-inline">(tem ${disponivel})</span></div>`;
+    }).join("") || (custo ? `<p class="hint">Essa entrada não pede materiais.</p>` : "");
+
+    const periciasOpcoes = PERICIAS_MECANICO_VEICULO.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">${modo === "upgrade" ? "Melhorar" : "Reparar"} — ${escapeHtml(v.nome || "veículo")}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>${escapeHtml(rotuloAtributoVeiculo(atributoKey))}${modo === "upgrade" ? ` — nível ${nivelAtual} → ${nivelAlvo}` : " — reparo (remove dano acumulado deste atributo)"}</h4>
+        <p class="hint">Dificuldade do teste: ${dificuldade}. Kit de Ferramentas de Criação exigido: nível ${nivelKitNecessario}+.</p>
+        ${custo ? `<p class="hint">${textoCustoReferenciaVeiculo(custo.preco, "os materiais abaixo são o que de fato é consumido")}</p>` : ""}
+        <div id="mecanico-veiculo-materiais">${materiaisHtml}</div>
+        ${motivoBloqueado ? `<p class="hint" style="color:var(--vermelho,#e05656);">${escapeHtml(motivoBloqueado)}</p>` : ""}
+        <div class="modal-campo" style="margin-top:8px;">
+            <label>Perícia a rolar</label>
+            <select id="mecanico-veiculo-pericia">${periciasOpcoes}</select>
+        </div>
+        <div class="modal-btns">
+            <button type="button" class="btn-lime" id="btn-confirmar-mecanico-veiculo" ${motivoBloqueado ? "disabled" : ""}>🎲 Rolar e ${modo === "upgrade" ? "Melhorar" : "Reparar"}</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    const btnConfirmar = modal.querySelector("#btn-confirmar-mecanico-veiculo");
+    if (btnConfirmar && !motivoBloqueado) {
+        btnConfirmar.addEventListener("click", async () => {
+            const nomePericia = modal.querySelector("#mecanico-veiculo-pericia")?.value || PERICIAS_MECANICO_VEICULO[0];
+            modal.remove();
+            await resolverMecanicoVeiculo(veiculoId, atributoKey, modo, custo, dificuldade, nomePericia);
+        });
+    }
+    document.body.appendChild(modal);
+}
+
+// Confirma o teste: gasta os materiais (sucesso ou falha — mesma regra
+// padrão de craft já usada no resto do sistema, ver resolverCriacaoReceita),
+// rola d20 + perícia contra a dificuldade (rolarERegistrar já cuida do
+// Log de Dados, toast e trava de turno/ação de combate) e só em caso de
+// SUCESSO aplica o efeito mecânico: sobe o nível do atributo (upgrade)
+// ou zera as deteriorações daquele atributo + restaura o PV ao máximo
+// (reparo — manual pg. 39: "some quando o veículo é consertado").
+async function resolverMecanicoVeiculo(veiculoId, atributoKey, modo, custo, dificuldade, nomePericia) {
+    if (!fichaAtual || !fichaAtualId || !custo) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+
+    // Guarda de turno/ação ANTES de gastar qualquer material — se a
+    // ação estiver bloqueada (fora do turno em combate com iniciativa,
+    // por exemplo), não faz sentido já ter torrado o material. A mesma
+    // checagem roda de novo dentro de rolarERegistrar (nada muda entre
+    // as duas chamadas, então o resultado é sempre o mesmo).
+    if (!checarConsumoDeAcao(false, false)) return;
+
+    // Reconfere no exato momento de confirmar — o card pode ter mudado
+    // desde que o modal abriu (outro consumo em paralelo, por exemplo).
+    const faltando = materiaisFaltantesVeiculo(custo.materiais);
+    if (faltando.length) {
+        toast(`Faltam materiais: ${faltando.map(f => `${Math.max(0, (Number(f.quantidade) || 0) - f.disponivel)}x ${f.material}`).join(", ")}`, "erro");
+        return;
+    }
+
+    const modificadoresPlanos = modificadoresAtuais();
+    const modificador = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+
+    // Materiais são gastos ao confirmar, sucesso ou falha — mesma regra
+    // padrão de craft do sistema (ver resolverCriacaoReceita).
+    await consumirMateriaisVeiculo(custo.materiais);
+
+    const rotuloAtributo = rotuloAtributoVeiculo(atributoKey);
+    const nivelAtualBase = Number((v.atributos || {})[atributoKey]) || 0;
+    const rotuloAcao = modo === "upgrade"
+        ? `Melhorar veículo: ${rotuloAtributo} (nível ${Math.min(5, nivelAtualBase + 1)})`
+        : `Reparar veículo: ${rotuloAtributo}`;
+
+    const resultado = await rolarERegistrar(`${rotuloAcao} (${nomePericia})`, modificador, false, dificuldade);
+    if (!resultado) return;
+
+    if (!resultado.sucesso) {
+        toast(`Falhou — os materiais já foram gastos, mas ${modo === "upgrade" ? "o atributo não subiu de nível." : "o veículo continua danificado."}`, "erro");
+        return;
+    }
+
+    if (modo === "upgrade") {
+        const novoNivel = Math.min(5, nivelAtualBase + 1);
+        await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}/atributos`), { [atributoKey]: novoNivel });
+        toast(`✅ ${rotuloAtributo} subiu para o nível ${novoNivel}!`, "critico-acerto");
+    } else {
+        const deterioracoesRestantes = zerarDeterioracoesDoAtributoVeiculo(v.deterioracoes || [], atributoKey);
+        await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), {
+            deterioracoes: deterioracoesRestantes,
+            pvAtual: null
+        });
+        toast(`✅ ${rotuloAtributo} reparado — dano acumulado removido.`, "critico-acerto");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Reparo/Melhoria de veículo de OUTRO jogador (Fase 6 do plano — ver
+// plano-veiculos-fase2.txt, seção "FASE 6"): variante de
+// abrirModalMecanicoVeiculo/resolverMecanicoVeiculo (Fase 3) acima.
+// Diferenças:
+//   - o veículo de outro dono não aparece com o grid de atributos na
+//     aba Cenário, então o próprio modal ganha um seletor de atributo
+//     (Reparar: só os deteriorados; Melhorar: os 5, mostrando o nível
+//     atual de cada um);
+//   - quem gasta material e rola a perícia é sempre a ficha ATUANTE
+//     (fichaAtual, "mão de obra") — os helpers reaproveitados
+//     (materiaisFaltantesVeiculo, consumirMateriaisVeiculo,
+//     motivoMecanicoVeiculoIndisponivel...) já operam sobre fichaAtual
+//     por baixo, então funcionam sem alteração nenhuma aqui;
+//   - em caso de SUCESSO não grava direto (o veículo não é seu): cria
+//     uma acaoPendente ("melhorar_veiculo_terceiro" /
+//     "reparar_veiculo_terceiro") pro Mestre confirmar — ver
+//     criarAcaoPendente/confirmarAcaoPendente em mestre.js, que já sabe
+//     tratar os dois tipos;
+//   - falha: mesmo comportamento de sempre (material já foi gasto,
+//     nada mais acontece, sem pendência).
+// ---------------------------------------------------------------------
+function abrirModalMecanicoVeiculoTerceiro(fichaAlvoId, veiculoId, veiculoNomeFallback, modo) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const fichaAlvo = todasAsFichasCache[fichaAlvoId];
+    const vAlvo = fichaAlvo && fichaAlvo.veiculos && fichaAlvo.veiculos[veiculoId];
+    if (!vAlvo) { toast("Esse veículo não existe mais.", "erro"); return; }
+
+    const atributosAlvo = vAlvo.atributos || {};
+    const deterioracoesAlvo = vAlvo.deterioracoes || [];
+    const atributosDeteriorados = new Set((deterioracoesAlvo || []).filter(d => d && d.valor > 0).map(d => d.atributo));
+    const nomeVeiculo = vAlvo.nome || veiculoNomeFallback || "veículo";
+
+    // Reparar sem nada deteriorado não faz sentido — nem abre o modal.
+    const opcoesAtributo = modo === "upgrade" ? ATRIBUTOS_VEICULO : ATRIBUTOS_VEICULO.filter(chave => atributosDeteriorados.has(chave));
+    if (!opcoesAtributo.length) {
+        toast(`"${nomeVeiculo}" não tem dano acumulado pra reparar.`, "erro");
+        return;
+    }
+
+    let modal = document.getElementById("modal-mecanico-veiculo-terceiro");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-mecanico-veiculo-terceiro";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    // Redesenha o conteúdo do modal quando o atributo escolhido no
+    // seletor muda (custo/dificuldade/materiais são por atributo).
+    const renderizarConteudo = (atributoKey) => {
+        const nivelAtual = Number(atributosAlvo[atributoKey]) || 0;
+        const nivelAlvo = modo === "upgrade" ? Math.min(5, nivelAtual + 1) : nivelAtual;
+        const custo = modo === "upgrade" ? custoUpgradeVeiculo(atributoKey, nivelAlvo) : custoReparoVeiculo(atributoKey, nivelAtual);
+        const nivelKitNecessario = Math.max(1, nivelAlvo);
+        const dificuldade = dificuldadeUpgradeVeiculo(nivelAlvo);
+        const motivoBloqueado = motivoMecanicoVeiculoIndisponivel(custo, nivelKitNecessario, fichaAtual);
+
+        const materiaisHtml = (custo?.materiais || []).map(m => {
+            const disponivel = materialDisponivelVeiculo(m.material, m.qualidade);
+            const falta = disponivel < m.quantidade;
+            return `<div class="receita-ingrediente-linha${falta ? " material-falta" : ""}">${m.quantidade}x ${escapeHtml(m.material)}${m.qualidade ? ` (${escapeHtml(m.qualidade)}+)` : ""} <span class="hint-inline">(tem ${disponivel})</span></div>`;
+        }).join("") || (custo ? `<p class="hint">Essa entrada não pede materiais.</p>` : "");
+
+        const periciasOpcoes = PERICIAS_MECANICO_VEICULO.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+        const atributoOpcoes = opcoesAtributo.map(chave => `<option value="${chave}" ${chave === atributoKey ? "selected" : ""}>${escapeHtml(rotuloAtributoVeiculo(chave))}${modo === "upgrade" ? ` (nível ${Number(atributosAlvo[chave]) || 0})` : ""}</option>`).join("");
+
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">${modo === "upgrade" ? "Melhorar" : "Reparar"} — ${escapeHtml(nomeVeiculo)} <span class="hint-inline">(veículo de terceiro)</span></span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <div class="modal-campo">
+                <label>Atributo</label>
+                <select id="mecanico-veiculo-terceiro-atributo">${atributoOpcoes}</select>
+            </div>
+            <h4>${escapeHtml(rotuloAtributoVeiculo(atributoKey))}${modo === "upgrade" ? ` — nível ${nivelAtual} → ${nivelAlvo}` : " — reparo (remove dano acumulado deste atributo)"}</h4>
+            <p class="hint">Dificuldade do teste: ${dificuldade}. Kit de Ferramentas de Criação exigido: nível ${nivelKitNecessario}+.</p>
+            ${custo ? `<p class="hint">${textoCustoReferenciaVeiculo(custo.preco, "os materiais abaixo são o que de fato é consumido do SEU inventário")}</p>` : ""}
+            <div id="mecanico-veiculo-terceiro-materiais">${materiaisHtml}</div>
+            ${motivoBloqueado ? `<p class="hint" style="color:var(--vermelho,#e05656);">${escapeHtml(motivoBloqueado)}</p>` : ""}
+            <div class="modal-campo" style="margin-top:8px;">
+                <label>Perícia a rolar</label>
+                <select id="mecanico-veiculo-terceiro-pericia">${periciasOpcoes}</select>
+            </div>
+            <p class="hint">O veículo não é seu — em caso de sucesso, o efeito vira um pedido pro Mestre confirmar antes de valer.</p>
+            <div class="modal-btns">
+                <button type="button" class="btn-lime" id="btn-confirmar-mecanico-veiculo-terceiro" ${motivoBloqueado ? "disabled" : ""}>🎲 Rolar e ${modo === "upgrade" ? "Melhorar" : "Reparar"}</button>
+            </div>
+        `;
+        modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+        modal.querySelector("#mecanico-veiculo-terceiro-atributo").addEventListener("change", (e) => renderizarConteudo(e.target.value));
+        const btnConfirmar = modal.querySelector("#btn-confirmar-mecanico-veiculo-terceiro");
+        if (btnConfirmar && !motivoBloqueado) {
+            btnConfirmar.addEventListener("click", async () => {
+                const nomePericia = modal.querySelector("#mecanico-veiculo-terceiro-pericia")?.value || PERICIAS_MECANICO_VEICULO[0];
+                modal.remove();
+                await resolverMecanicoVeiculoTerceiro(fichaAlvoId, veiculoId, nomeVeiculo, atributoKey, modo, custo, dificuldade, nomePericia);
+            });
+        }
+    };
+
+    renderizarConteudo(opcoesAtributo[0]);
+    document.body.appendChild(modal);
+}
+
+// Confirma o teste: mesma regra padrão de craft do sistema (material
+// gasto sempre, sucesso ou falha) e mesma rolagem d20 + perícia contra
+// a dificuldade de resolverMecanicoVeiculo (Fase 3) — a diferença toda
+// está em NÃO aplicar o efeito direto no sucesso, e sim empurrar pra
+// fila do Mestre (ver comentário da seção acima).
+async function resolverMecanicoVeiculoTerceiro(fichaAlvoId, veiculoId, veiculoNome, atributoKey, modo, custo, dificuldade, nomePericia) {
+    if (!fichaAtual || !fichaAtualId || !custo) return;
+
+    if (!checarConsumoDeAcao(false, false)) return;
+
+    const faltando = materiaisFaltantesVeiculo(custo.materiais);
+    if (faltando.length) {
+        toast(`Faltam materiais: ${faltando.map(f => `${Math.max(0, (Number(f.quantidade) || 0) - f.disponivel)}x ${f.material}`).join(", ")}`, "erro");
+        return;
+    }
+
+    const modificadoresPlanos = modificadoresAtuais();
+    const modificador = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+
+    // Materiais são gastos do inventário de quem está atuando
+    // (fichaAtual), sucesso ou falha — mesma regra padrão de craft.
+    await consumirMateriaisVeiculo(custo.materiais);
+
+    const rotuloAtributo = rotuloAtributoVeiculo(atributoKey);
+    const rotuloAcao = modo === "upgrade"
+        ? `Melhorar veículo de terceiro: "${veiculoNome}" — ${rotuloAtributo}`
+        : `Reparar veículo de terceiro: "${veiculoNome}" — ${rotuloAtributo}`;
+
+    const resultado = await rolarERegistrar(`${rotuloAcao} (${nomePericia})`, modificador, false, dificuldade);
+    if (!resultado) return;
+
+    if (!resultado.sucesso) {
+        toast(`Falhou — os materiais já foram gastos, mas "${veiculoNome}" continua como estava.`, "erro");
+        return;
+    }
+
+    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+    await criarAcaoPendente({
+        tipo: modo === "upgrade" ? "melhorar_veiculo_terceiro" : "reparar_veiculo_terceiro",
+        fichaId: fichaAtualId,
+        nomeJogador,
+        detalhe: `${nomeJogador} ${modo === "upgrade" ? "melhorou" : "reparou"} "${veiculoNome}" (${rotuloAtributo}) com sucesso — aguardando confirmação do Mestre.`,
+        payload: { fichaAlvoId, veiculoId, atributoKey, veiculoNome }
+    });
+    toast(`✅ Sucesso! Pedido enviado ao Mestre pra aplicar em "${veiculoNome}".`, "critico-acerto");
+}
+
+// =====================================================================
+// MANOBRAS DE VEÍCULO (manual pg. 41) — Fase 4 do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 4"). Catálogo em
+// MANOBRAS_VEICULO (dados-manual.js); requisitos/efeito automático em
+// veiculoAtendeRequisitosManobra/resolverEfeitoManobra (regras.js).
+// =====================================================================
+
+// Mestre limpa os bônus temporários de manobra ("por uma cena") do
+// veículo — sem cron job, mesmo espírito simples de outros bônus "por
+// uma cena" do sistema (ver comentário em bonusBadgeHtml acima).
+async function limparBonusTemporariosVeiculo(veiculoId) {
+    if (!isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { bonusTemporarios: [] });
+    toast(`Bônus temporários de "${v.nome || "veículo"}" limpos.`);
+}
+
+// Abre o modal com o catálogo das 8 manobras (MANOBRAS_VEICULO),
+// mostrando pra cada uma requisitos/dificuldade e se o veículo atende
+// (cinza + tooltip com o que falta, senão). Manobras com `dificuldade`
+// null (Cavalo de Pau, Drift, Retorno — o manual não fixa um valor)
+// ganham um campo numérico pra digitar a dificuldade combinada na mesa
+// antes de liberar o botão de rolar.
+// `perseguicaoContext` ({ participanteId, lado }), quando informado
+// (Fase 7d — ver botão "🏁 Manobra" dentro do bloco "Perseguição em
+// andamento" em renderizarCenarios), sinaliza que esta rolagem de
+// Manobra está substituindo o "Testar Dirigir Veículos" da volta atual
+// — o resultado vira pontuação da perseguição (registrarPontosPerseguicao)
+// além do efeito mecânico normal da manobra, ver resolverManobraVeiculo.
+function abrirModalManobraVeiculo(veiculoId, perseguicaoContext = null) {
+    if (isMestre || !fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const atributos = v.atributos || {};
+    const deterioracoes = v.deterioracoes || [];
+    const bonusTemporarios = v.bonusTemporarios || [];
+
+    let modal = document.getElementById("modal-manobra-veiculo");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-manobra-veiculo";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const linhasHtml = MANOBRAS_VEICULO.map(m => {
+        const check = veiculoAtendeRequisitosManobra(atributos, deterioracoes, bonusTemporarios, m);
+        const requisitosTexto = Object.entries(m.requisitos || {})
+            .map(([chave, minimo]) => `${rotuloAtributoVeiculo(chave)} ${minimo}`)
+            .join(", ");
+        const faltandoTexto = check.faltando
+            .map(f => `${rotuloAtributoVeiculo(f.atributo)} ${f.atual}/${f.necessario}`)
+            .join(", ");
+        const dificuldadeCampoHtml = m.dificuldade === null
+            ? `<input type="number" class="veiculo-manobra-dificuldade-input" data-manobra-dificuldade min="1" step="1" placeholder="Dificuldade (combine com o Mestre)">`
+            : `<span class="hint-inline">Dificuldade ${m.dificuldade}</span>`;
+        return `
+            <div class="veiculo-manobra-linha${check.atende ? "" : " desabilitada"}" data-manobra-chave="${m.chave}">
+                <div class="veiculo-manobra-linha-topo">
+                    <strong>${escapeHtml(m.nome)}</strong>
+                    <span class="hint-inline">Turnos: ${escapeHtml(m.turnos)}</span>
+                </div>
+                <p class="hint">${escapeHtml(m.descricao)}</p>
+                <p class="hint-inline">Requisitos: ${escapeHtml(requisitosTexto)}${m.requisitoExtra ? ` · ⚠️ ${escapeHtml(m.requisitoExtra)}` : ""}</p>
+                ${!check.atende ? `<p class="hint" style="color:var(--vermelho,#e05656);">Faltando: ${escapeHtml(faltandoTexto)}</p>` : ""}
+                <div class="veiculo-manobra-linha-acoes">
+                    ${dificuldadeCampoHtml}
+                    <button type="button" class="btn-lime veiculo-manobra-rolar-btn" data-manobra-rolar ${check.atende ? "" : "disabled"}>🎲 Rolar Dirigir Veículos</button>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Manobra — ${escapeHtml(v.nome || "veículo")}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">${perseguicaoContext
+            ? "Escolha uma manobra e role Dirigir Veículos contra a dificuldade indicada. Esta rolagem está substituindo o \"Testar Dirigir Veículos\" da volta atual — além do efeito mecânico da manobra, o resultado também vira pontuação na Corrida/Perseguição."
+            : "Escolha uma manobra e role Dirigir Veículos contra a dificuldade indicada. Sem uma Corrida/Perseguição formal em andamento, é uma rolagem livre — o efeito mecânico ainda se aplica, mas não conta pontuação."}</p>
+        <div class="veiculo-manobra-lista">${linhasHtml}</div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelectorAll("[data-manobra-rolar]:not([disabled])").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const linha = btn.closest("[data-manobra-chave]");
+            const chave = linha.dataset.manobraChave;
+            const manobra = buscarManobraVeiculo(chave);
+            let dificuldade = manobra.dificuldade;
+            if (dificuldade === null) {
+                const input = linha.querySelector("[data-manobra-dificuldade]");
+                dificuldade = Number(input?.value);
+                if (!Number.isFinite(dificuldade) || dificuldade <= 0) {
+                    toast("Digite a dificuldade combinada com o Mestre antes de rolar.", "erro");
+                    return;
+                }
+            }
+            modal.remove();
+            await resolverManobraVeiculo(veiculoId, chave, dificuldade, perseguicaoContext);
+        });
+    });
+    document.body.appendChild(modal);
+}
+
+// Rola Dirigir Veículos contra a dificuldade da manobra (rolarERegistrar
+// já cuida do Log de Dados, toast de sucesso/falha e trava de turno/
+// ação de combate) e aplica o efeito mecânico automático, se a manobra
+// tiver um (resolverEfeitoManobra, regras.js — hoje só Cavalo de Pau e
+// Drift): dano vai direto pro veículo do PRÓPRIO piloto (mesma regra
+// "1/10 ou 1/3 do total de PV", sem redução de Proteção por cima — ver
+// comentário de aplicarDanoVeiculo/pularReducao), bônus vira uma nova
+// entrada em bonusTemporarios. As demais manobras só mostram o texto
+// do efeito (Grau, Corredor, Arranque(Comum), Totozinho, Retorno) —
+// ver comentário de MANOBRAS_VEICULO (dados-manual.js) sobre por que
+// elas não têm efeito automatizável.
+//
+// `perseguicaoContext` ({ participanteId, lado }) — Fase 7d: quando
+// informado (manobra rolada de dentro do bloco "Perseguição em
+// andamento"), soma a penalidadePerseguidor do bairro no modificador
+// (mesma regra de testarDirigirVeiculosPerseguicao) e, depois de
+// aplicar o efeito mecânico normal, também converte o resultado bruto
+// em pontos (pontosPorResultadoTesteFuga, igual ao teste padrão) e
+// registra via registrarPontosPerseguicao — a manobra passa a VALER
+// como a ação da volta, no lugar de "Testar Dirigir Veículos".
+async function resolverManobraVeiculo(veiculoId, manobraChave, dificuldade, perseguicaoContext = null) {
+    if (!fichaAtual || !fichaAtualId) return;
+    const v = fichaAtual.veiculos && fichaAtual.veiculos[veiculoId];
+    if (!v) return;
+    const manobra = buscarManobraVeiculo(manobraChave);
+    if (!manobra) return;
+
+    const modificadoresPlanos = modificadoresAtuais();
+    let modificador = modificadorDePericiaComPenalidade("Dirigir Veículos", fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+
+    let bairroPerseguicaoAtual = null;
+    if (perseguicaoContext) {
+        bairroPerseguicaoAtual = bairroPerseguicao(perseguicaoAtivaCache.bairro);
+        if (bairroPerseguicaoAtual && perseguicaoContext.lado === "perseguidor") {
+            modificador += Number(bairroPerseguicaoAtual.penalidadePerseguidor) || 0;
+        }
+    }
+
+    const resultado = await rolarERegistrar(`Manobra: ${manobra.nome} (Dirigir Veículos)${perseguicaoContext ? ` — Perseguição, volta ${perseguicaoAtivaCache.voltaAtual || 1}` : ""}`, modificador, false, dificuldade);
+    if (!resultado) return;
+
+    const textoEfeito = resultado.criticoNegativo && manobra.efeitoFalhaCritica
+        ? manobra.efeitoFalhaCritica
+        : (resultado.sucesso ? manobra.efeitoSucesso : (manobra.efeitoFalha || manobra.efeitoFalhaCritica || ""));
+
+    const efeito = resolverEfeitoManobra(manobra, resultado);
+    if (efeito.tipo === "dano") {
+        const atributosAtuais = v.atributos || {};
+        const deterioracoesAtuais = v.deterioracoes || [];
+        const bonusAtuais = v.bonusTemporarios || [];
+        const protecaoEfetiva = atributoEfetivoVeiculo("protecao", atributosAtuais, deterioracoesAtuais, bonusAtuais);
+        const pvMaximo = pvMaxVeiculo(protecaoEfetiva);
+        const danoValor = Math.floor((Number(efeito.fracaoDano) || 0) * pvMaximo);
+        const resultadoDano = aplicarDanoVeiculo(v, danoValor, null, true);
+        await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), {
+            pvAtual: resultadoDano.pvAtualDepois,
+            deterioracoes: resultadoDano.deterioracoesResultantes
+        });
+        let notaDeterioracao = "";
+        if (resultadoDano.novosQuintosCruzados > 0) {
+            notaDeterioracao = ` ⚠️ Cruzou ${resultadoDano.novosQuintosCruzados} quinto(s) do PV máximo — -1 Proteção e -1 ${rotuloAtributoVeiculo(resultadoDano.atributoDeteriorado)} aplicados.`;
+        }
+        toast(`${textoEfeito} (${danoValor} de dano — ${resultadoDano.pvAtualDepois}/${resultadoDano.pvMaximo} PV).${notaDeterioracao}`, resultado.sucesso ? "ok" : "erro");
+    } else if (efeito.tipo === "bonusTemporario") {
+        const novoBonus = { atributo: efeito.atributo, valor: Number(efeito.valor) || 0, motivo: manobra.nome, criadoEm: Date.now() };
+        const bonusAtuais = v.bonusTemporarios || [];
+        await update(ref(db, `${caminhoBase()}/veiculos/${veiculoId}`), { bonusTemporarios: [...bonusAtuais, novoBonus] });
+        toast(`${textoEfeito}`, "critico-acerto");
+    } else {
+        toast(textoEfeito || `Manobra "${manobra.nome}" resolvida.`, resultado.sucesso ? "ok" : "erro");
+    }
+
+    // Fase 7d: além do efeito mecânico acima, converte o resultado em
+    // pontuação da volta quando a manobra foi rolada dentro de uma
+    // perseguição ativa.
+    if (perseguicaoContext) {
+        if (!tabelaPontuacaoFugaCadastrada()) {
+            toast("Manobra resolvida, mas a tabela de pontuação da perseguição ainda não está cadastrada — nenhum ponto de corrida aplicado.", "erro");
+            return;
+        }
+        const pontos = pontosPorResultadoTesteFuga(resultado.resultado);
+        if (pontos === null) {
+            toast(`Manobra resolvida (resultado ${resultado.resultado}), mas a tabela de pontuação ainda não tem faixas cadastradas — nenhum ponto de corrida aplicado.`, "erro");
+            return;
+        }
+        try {
+            await registrarPontosPerseguicao(perseguicaoContext.participanteId, pontos, resultado.resultado, `Manobra: ${manobra.nome}`);
+            toast(`+${pontos} ponto(s) na perseguição (Manobra: ${manobra.nome}, resultado ${resultado.resultado}).`, pontos > 0 ? "ok" : "erro");
+        } catch (err) {
+            console.error(err);
+            toast(err && err.message ? err.message : "Falha ao registrar pontos da manobra na perseguição.", "erro");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -7285,7 +8993,7 @@ function renderizarAreaBonusDesvantagens() {
 function resumoModificadores(entidade) {
     const mods = entidade.modificadores || [];
     if (!mods.length) return "";
-    return mods.map(m => `${rotuloAlvo(m.alvo)} ${m.valor >= 0 ? "+" : ""}${m.valor}`).join(" · ");
+    return mods.map(m => `${rotuloAlvo(m.alvo)} ${m.valor >= 0 ? "+" : ""}${m.valor}${m.ocasional ? " (ocasião especial)" : ""}`).join(" · ");
 }
 
 // ---------------------------------------------------------------------
@@ -8317,6 +10025,12 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
             <input type="number" id="receita-custo" min="0" step="1" value="${r.custo ?? ""}">
         </div>
         <div class="modal-field">
+            <label for="receita-categoria">Categoria (opcional)</label>
+            <input type="text" id="receita-categoria" list="receita-categoria-datalist" placeholder="Ex.: Armas improvisadas, Químicos..." value="${escapeHtml(r.categoria || "")}">
+            <datalist id="receita-categoria-datalist"></datalist>
+            <p class="hint">Usada pra filtrar a Biblioteca de Receitas depois.</p>
+        </div>
+        <div class="modal-field">
             <label for="receita-descricao">Descrição / efeito (opcional)</label>
             <textarea id="receita-descricao" rows="3">${escapeHtml(r.descricao || "")}</textarea>
         </div>
@@ -8351,6 +10065,16 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
     }
     selectNivel.value = String(opcoesSlot?.nivel || (r.nivel && r.nivel >= 1 && r.nivel <= 5 ? r.nivel : 1));
     selectNivel.disabled = !!opcoesSlot?.nivel;
+
+    // Sugestão (datalist) de categoria já usada noutras receitas —
+    // mesmo padrão do modal de item/NPC (plano-busca-categorias.txt,
+    // Fase A).
+    const datalistCategoriaReceita = modal.querySelector("#receita-categoria-datalist");
+    categoriasDistintas(receitasGlobaisCache).forEach(cat => {
+        const opt = document.createElement("option");
+        opt.value = cat;
+        datalistCategoriaReceita.appendChild(opt);
+    });
 
     // Autocompletar pelo nome, contra o Banco Global de Itens já
     // carregado (itensGlobaisCache) — mesmo padrão usado no modal de
@@ -8498,6 +10222,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
                     };
                 }),
                 custo: modal.querySelector("#receita-custo").value !== "" ? Number(modal.querySelector("#receita-custo").value) || 0 : null,
+                categoria: modal.querySelector("#receita-categoria").value.trim(),
                 descricao: modal.querySelector("#receita-descricao").value.trim(),
                 itemGlobalId: itemGlobalIdVinculado
             }
@@ -8546,6 +10271,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
                 };
             }),
             custo: modal.querySelector("#receita-custo").value !== "" ? Number(modal.querySelector("#receita-custo").value) || 0 : null,
+            categoria: modal.querySelector("#receita-categoria").value.trim(),
             descricao: modal.querySelector("#receita-descricao").value.trim(),
             itemGlobalId: itemGlobalIdVinculado,
             criadoPorNome: nomeCriador,
@@ -9289,6 +11015,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoNivel.style.display = "none";
     el.modalCampoTag.style.display = "none";
     el.modalCampoNivelTag.style.display = "none";
+    el.modalCampoInstalarVeiculo.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
     el.hintFerramentaCriacaoGeral.style.display = "none";
     el.modalCampoClasseProtecao.style.display = "none";
@@ -9300,6 +11027,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoCompartimentos.style.display = "none";
     el.modalCampoQuantidade.style.display = "none";
     el.modalCampoCategoriaItem.style.display = "none";
+    el.modalCampoCategoriaBanco.style.display = "none";
     el.modalCampoGuardarDentro.style.display = "none";
     el.modalCampoMaterialTipo.style.display = "none";
     el.modalCampoMaterialQualidade.style.display = "none";
@@ -9656,6 +11384,10 @@ function prepararModalItem(existente, ehBanco) {
     // dentro de uma ficha.
     el.modalCampoCategoriaItem.style.display = ehBanco ? "none" : "flex";
     el.modalCampoGuardarDentro.style.display = ehBanco ? "none" : "flex";
+    // Categoria do Banco Global (Capangas, Armas de fogo...) — sem
+    // relação nenhuma com a categoria de inventário acima (levando/casa);
+    // só existe pro item-molde do Banco, então só aparece com ehBanco.
+    el.modalCampoCategoriaBanco.style.display = ehBanco ? "flex" : "none";
 
     if (!ehBanco) {
         el.modalCategoriaItem.innerHTML = "";
@@ -9664,6 +11396,13 @@ function prepararModalItem(existente, ehBanco) {
             opt.value = cat.id;
             opt.innerText = cat.nome;
             el.modalCategoriaItem.appendChild(opt);
+        });
+    } else {
+        el.modalCategoriaBancoDatalist.innerHTML = "";
+        categoriasDistintas(itensGlobaisCache, "categoriaBanco").forEach(cat => {
+            const opt = document.createElement("option");
+            opt.value = cat;
+            el.modalCategoriaBancoDatalist.appendChild(opt);
         });
     }
 
@@ -9682,6 +11421,8 @@ function prepararModalItem(existente, ehBanco) {
         if (!ehBanco) {
             el.modalCategoriaItem.value = existente.categoria || "levando";
             popularSelectGuardarDentro(modalContexto ? modalContexto.id : null, existente.dentroDe ? `${existente.dentroDe}::${existente.compartimentoId || "principal"}` : "");
+        } else {
+            el.modalCategoriaBanco.value = existente.categoriaBanco || "";
         }
         atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas);
         el.modalEquipavel.checked = !!existente.equipavel;
@@ -9699,6 +11440,8 @@ function prepararModalItem(existente, ehBanco) {
         if (!ehBanco) {
             el.modalCategoriaItem.value = categoriaInventarioAtiva || "levando";
             popularSelectGuardarDentro(null, "");
+        } else {
+            el.modalCategoriaBanco.value = "";
         }
         atualizarCamposPorTag("", null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
         el.modalEquipavel.checked = false;
@@ -10279,6 +12022,57 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // acima porque depende do mesmo estado (tag, checkbox "equipável",
     // subtipo de porte do recipiente). Ver atualizarCampoJaEquipar.
     atualizarCampoJaEquipar();
+    // "Instalar em veículo" (Fase 5c do plano) — só aparece pra tag
+    // "arma"; depende do mesmo tagKey acima. Ver atualizarCampoInstalarVeiculo.
+    atualizarCampoInstalarVeiculo();
+}
+
+// "Instalar em veículo" (Fase 5c do plano — ver plano-acessorios-veiculo.txt,
+// seção "FASE 5c"): campo opcional no modal de item, só pra tag "arma".
+// Só faz sentido pra um item que JÁ EXISTE de verdade dentro de uma
+// ficha (não no Banco Global — item de banco não pertence a nenhuma
+// ficha/veículo ainda; não pra item sendo CRIADO agora — ainda não tem
+// id gravado pra virar o ponteiro item.instaladoEmVeiculoId). Um item
+// novo continua podendo ser montado depois, tanto reabrindo este modal
+// de edição quanto pelo botão "+ Instalar Arma do Inventário" no card
+// do veículo (mesmo fluxo, caminho alternativo).
+//
+// Lista só os veículos que TÊM slot livre suficiente pro nível atual do
+// select "Nível da tag" acima (mesma régua de instalarArmaNoVeiculo,
+// regras.js) — ou o veículo onde a arma já está montada agora (sempre
+// aparece, mesmo sem folga, pra não "sumir" a opção de deixar como
+// está). Trocar o Nível da tag reavalia a lista (ver listener em
+// modal-nivel-tag, mais abaixo).
+function atualizarCampoInstalarVeiculo() {
+    const tagKey = el.modalTag.value;
+    const ehBancoAtual = !!(modalContexto && modalContexto.lista === "itensGlobais");
+    const itemId = modalContexto ? modalContexto.id : null;
+    const mostrar = tagKey === "arma" && !ehBancoAtual && !!itemId && !!fichaAtual;
+    el.modalCampoInstalarVeiculo.style.display = mostrar ? "flex" : "none";
+    if (!mostrar) {
+        el.modalInstalarVeiculo.innerHTML = '<option value="">-- não montada em nenhum veículo --</option>';
+        return;
+    }
+
+    const itemAtual = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    const instaladoAtualId = itemAtual ? itemAtual.instaladoEmVeiculoId : null;
+    const nivelSelecionado = Number(el.modalNivelTag.value) || 1;
+    const veiculos = fichaAtual.veiculos || {};
+
+    const opcoes = ['<option value="">-- não montada em nenhum veículo --</option>'];
+    Object.entries(veiculos).forEach(([veiculoId, v]) => {
+        const ehVeiculoAtual = veiculoId === instaladoAtualId;
+        // Não conta o próprio item contra si mesmo — senão ele nunca
+        // "caberia de volta" no veículo onde já está montado.
+        const itensArmaInstalados = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, veiculoId)
+            .filter(a => a.id !== itemId);
+        const cabe = ehVeiculoAtual || instalarArmaNoVeiculo({ nivelTag: nivelSelecionado }, v, itensArmaInstalados);
+        if (!cabe) return;
+        const livres = slotsAcessoriosLivres(v, itensArmaInstalados);
+        opcoes.push(`<option value="${veiculoId}">${escapeHtml(v.nome || "(sem nome)")} — ${livres} slot(s) livre(s)</option>`);
+    });
+    el.modalInstalarVeiculo.innerHTML = opcoes.join("");
+    el.modalInstalarVeiculo.value = instaladoAtualId || "";
 }
 
 // Mostra o campo "Já entra equipado" quando o item sendo montado no
@@ -10303,6 +12097,12 @@ function atualizarCampoJaEquipar() {
 
 document.getElementById("modal-tag")?.addEventListener("change", (e) => {
     atualizarCamposPorTag(e.target.value, null, null, null, null, null, null, null, null, null, null, false, 0, null, null, null);
+});
+
+// "Instalar em veículo" (Fase 5c do plano) reavalia quando o Nível da
+// tag muda — o nível é o que decide quantos slots a arma ocupa.
+document.getElementById("modal-nivel-tag")?.addEventListener("change", () => {
+    if (el.modalTag.value === "arma") atualizarCampoInstalarVeiculo();
 });
 
 document.getElementById("modal-equipavel")?.addEventListener("change", atualizarCampoJaEquipar);
@@ -10501,15 +12301,21 @@ async function reporChaveVeiculo(veiculoId) {
 // ---------------------------------------------------------------------
 function montarListaModificadores(mods) {
     el.modalListaModificadores.innerHTML = "";
-    mods.forEach(m => adicionarLinhaModificador(m.alvo, m.valor));
+    mods.forEach(m => adicionarLinhaModificador(m.alvo, m.valor, !!m.ocasional, !!m.ativoOcasional));
 }
 
-function adicionarLinhaModificador(alvoSelecionado, valorAtual) {
+function adicionarLinhaModificador(alvoSelecionado, valorAtual, ocasionalAtual = false, ativoOcasionalAtual = false) {
     const fragmento = el.templateModificador.content.cloneNode(true);
     const row = fragmento.querySelector(".modificador-row");
     const select = row.querySelector(".mod-alvo");
     const input = row.querySelector(".mod-valor");
+    const checkboxOcasional = row.querySelector(".mod-ocasional");
     const btnRemover = row.querySelector(".mod-remover");
+    // Guardado só pra devolver sem perda em lerModificadoresDoModal caso
+    // o jogador reabra o modal (ex.: pra editar a descrição) e salve de
+    // novo sem mexer no checkbox "Ocasião especial" — o estado ligado/
+    // desligado do toggle na perícia não deveria resetar por isso.
+    row.dataset.ativoOcasional = ativoOcasionalAtual ? "1" : "";
 
     // fichaAtual pode ser null aqui (Mestre criando item direto no Banco
     // Global sem nenhuma ficha aberta) — sem essa proteção, o acesso a
@@ -10526,6 +12332,7 @@ function adicionarLinhaModificador(alvoSelecionado, valorAtual) {
     });
     if (alvoSelecionado) select.value = alvoSelecionado;
     input.value = valorAtual ?? 0;
+    checkboxOcasional.checked = !!ocasionalAtual;
     btnRemover.addEventListener("click", () => row.remove());
 
     el.modalListaModificadores.appendChild(row);
@@ -10541,7 +12348,13 @@ function lerModificadoresDoModal() {
     linhas.forEach(row => {
         const alvo = row.querySelector(".mod-alvo").value;
         const valor = Number(row.querySelector(".mod-valor").value) || 0;
-        if (alvo && valor !== 0) lista.push({ alvo, valor });
+        const ocasional = row.querySelector(".mod-ocasional").checked;
+        if (!alvo || valor === 0) return;
+        // `ativoOcasional` (se o checkbox da perícia já estava ligado) só
+        // é preservado quando o modificador continua marcado como
+        // ocasional — largar a marcação "Ocasião especial" no modal deve
+        // voltar o bônus a valer sempre, sem sobra de estado escondido.
+        lista.push(ocasional ? { alvo, valor, ocasional: true, ativoOcasional: !!row.dataset.ativoOcasional } : { alvo, valor });
     });
     return lista;
 }
@@ -10979,6 +12792,20 @@ async function salvarItemDoModal(id) {
         equipadaFinal = true;
     }
 
+    // Instalar em veículo pelo modal de item (Fase 5c — ver
+    // plano-acessorios-veiculo.txt, seção "FASE 5c"): mesmo efeito
+    // colateral que instalarArmaEmVeiculo já aplica quando a montagem
+    // acontece pelo card do veículo — uma arma montada no carro está
+    // fisicamente pronta pra disparar, então força "levando"/equipada
+    // aqui também. Sem isso, escolher um veículo neste dropdown sem
+    // MARCAR "Já equipado" deixava o item com instaladoEmVeiculoId
+    // gravado mas ainda desequipado — o botão "🎯 Disparar" no card do
+    // veículo nascia desabilitado sem nenhuma pista do motivo.
+    if (tag === "arma" && el.modalCampoInstalarVeiculo.style.display !== "none" && el.modalInstalarVeiculo.value) {
+        categoriaFinal = "levando";
+        equipadaFinal = true;
+    }
+
     // Carregador — preserva a munição já carregada (se estiver editando um
     // carregador existente); só a capacidade máxima é editável aqui.
     let carregador = null;
@@ -11062,7 +12889,28 @@ async function salvarItemDoModal(id) {
         // se o item não for tag "material" nesta edição.
         materialTipo: tag === "material" ? el.modalMaterialTipo.value : (existenteItem.materialTipo ?? null),
         materialQualidade: tag === "material" ? (qualidadesDoMaterial(el.modalMaterialTipo.value) ? el.modalMaterialQualidade.value : null) : (existenteItem.materialQualidade ?? null),
-        materialQuantidade: tag === "material" ? Math.max(0, Number(el.modalMaterialQuantidade.value) || 0) : (existenteItem.materialQuantidade ?? null)
+        materialQuantidade: tag === "material" ? Math.max(0, Number(el.modalMaterialQuantidade.value) || 0) : (existenteItem.materialQuantidade ?? null),
+        // Chave de veículo (tag "chave" — ver plano-veiculos.txt): estava
+        // faltando aqui — mesma classe de bug que materialTipo/ehSaldo já
+        // tiveram antes de entrar nesta lista (campo apagado a cada
+        // edição do item pelo modal, mesmo sem o jogador mexer nele).
+        // Simplesmente preserva o valor já salvo; não é editável por
+        // este modal (a chave nasce vinculada junto com o veículo, ver
+        // salvarVeiculoDoModal).
+        veiculoId: existenteItem.veiculoId ?? null,
+        // Acessório-arma montado em veículo (tag "arma" — Fase 5c do
+        // plano, ver plano-acessorios-veiculo.txt, seção "FASE 5c"): só
+        // editável aqui quando o campo "Instalar em veículo" está
+        // visível (tag === "arma" e item já existe — ver
+        // atualizarCampoInstalarVeiculo); fora disso, preserva o valor
+        // já salvo (mesma régua defensiva do veiculoId acima — trocar a
+        // tag de um item de volta pra "arma" não deve inventar um
+        // ponteiro do nada, mas também não deve apagar um que já
+        // existia se a tag nem mudou).
+        instaladoEmVeiculoId: tag === "arma" && el.modalCampoInstalarVeiculo.style.display !== "none"
+            ? (el.modalInstalarVeiculo.value || null)
+            : (existenteItem.instaladoEmVeiculoId ?? null),
+        slotVeiculo: existenteItem.slotVeiculo ?? null
     };
 
     // Trava central de "todo item solto precisa de um lugar físico" (seção
@@ -11203,7 +13051,12 @@ async function salvarItemBancoDoModal(id) {
         // de um molde compartilhado entre todas as mesas.
         materialTipo: tag === "material" ? el.modalMaterialTipo.value : null,
         materialQualidade: tag === "material" ? (qualidadesDoMaterial(el.modalMaterialTipo.value) ? el.modalMaterialQualidade.value : null) : null,
-        materialQuantidade: null
+        materialQuantidade: null,
+        // Categoria do Banco Global (ex.: "Capangas", "Armas de fogo") —
+        // texto livre opcional, usada só pra busca/filtro na Biblioteca
+        // de Itens. Sem relação com `categoria` (levando/casa), que é
+        // exclusivo de item de ficha e nunca existe no molde do Banco.
+        categoriaBanco: el.modalCategoriaBanco.value.trim()
     };
 
     try {
@@ -11307,6 +13160,14 @@ async function salvarVeiculoDoModal(id) {
         nome,
         tipo,
         atributos,
+        // Vida do veículo (Fase 2 — ver plano-veiculos-fase2.txt): salvar
+        // via este modal (nome/tipo/atributos/trava) usa `update()` com o
+        // caminho inteiro do veículo, que SUBSTITUI o nó — sem preservar
+        // esses dois campos aqui, editar qualquer atributo apagaria o
+        // dano/deterioração já acumulados. Veículo novo nasce "cheio"
+        // (pvAtual null) e sem deteriorações, igual antes da Fase 2.
+        pvAtual: ehVeiculoNovo ? null : (existente.pvAtual ?? null),
+        deterioracoes: ehVeiculoNovo ? [] : (existente.deterioracoes || []),
         criadoEm: existente.criadoEm || Date.now(),
         trancado: ehVeiculoNovo ? true : (checkboxTrancado ? checkboxTrancado.checked : (existente.trancado ?? false)),
         chaveItemId
@@ -11396,6 +13257,20 @@ async function excluirEntidadeAtual() {
         for (const itemId of chavesOrfas) {
             delete fichaAtual.inventario[itemId];
             await remove(ref(db, `${caminhoBase()}/inventario/${itemId}`));
+        }
+
+        // Mesmo motivo, pros acessórios-arma montados nele (Fase 5c do
+        // plano — ver plano-acessorios-veiculo.txt, seção "FASE 5c"):
+        // sem isso, a arma ficava com item.instaladoEmVeiculoId apontando
+        // pra um veículo que não existe mais e sem nenhum botão na UI
+        // pra desmontar (o "Remover do veículo" só existe dentro do
+        // card do próprio veículo, que acabou de sumir). A arma em si
+        // NÃO é apagada — só solta de volta pro inventário normal,
+        // mesmo comportamento de removerArmaDoVeiculo.
+        const armasOrfas = itensArmaInstaladosEmVeiculo(fichaAtual.inventario, id);
+        for (const arma of armasOrfas) {
+            fichaAtual.inventario[arma.id] = { ...fichaAtual.inventario[arma.id], instaladoEmVeiculoId: null, slotVeiculo: null };
+            await update(ref(db, `${caminhoBase()}/inventario/${arma.id}`), { instaladoEmVeiculoId: null, slotVeiculo: null });
         }
     }
 
@@ -11682,6 +13557,38 @@ function configurarGodmode() {
 }
 
 // =====================================================================
+// FATOR DE PREÇO DE MATERIAIS (VEÍCULOS) — ajuste por mesa sobre o CN$
+// de referência do mecânico (Fase 3: Melhorar/Reparar). Só afeta o
+// texto informativo de preço — os MATERIAIS consumidos continuam sendo
+// exatamente os da tabela do manual (CUSTOS_UPGRADE_VEICULO), sem
+// ajuste nenhum; é só o valor em dinheiro (que o narrador decide se
+// cobra à parte) que sobe/desce junto com o percentual da mesa.
+// =====================================================================
+
+function configurarFatorPrecoMateriaisVeiculo() {
+    ouvirFatorPrecoMateriaisVeiculo((fator) => {
+        fatorPrecoMateriaisVeiculoAtivo = fator;
+        if (isMestre && el.inputFatorPrecoMateriaisVeiculo && document.activeElement !== el.inputFatorPrecoMateriaisVeiculo) {
+            el.inputFatorPrecoMateriaisVeiculo.value = fator;
+        }
+    });
+
+    if (el.inputFatorPrecoMateriaisVeiculo) {
+        // Só grava ao sair do campo (blur) ou Enter — não a cada tecla,
+        // pra não gerar uma escrita no banco por dígito digitado (mesmo
+        // cuidado que outros campos numéricos do sistema já têm).
+        const salvar = async (e) => {
+            const valor = Number(e.target.value);
+            await definirFatorPrecoMateriaisVeiculo(Number.isFinite(valor) ? valor : 0);
+        };
+        el.inputFatorPrecoMateriaisVeiculo.addEventListener("blur", salvar);
+        el.inputFatorPrecoMateriaisVeiculo.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); e.target.blur(); }
+        });
+    }
+}
+
+// =====================================================================
 // GERENCIADOR DE COMBATE (compartilhado — Mestre monta, jogador consome)
 // =====================================================================
 
@@ -11716,6 +13623,26 @@ function configurarCenarios() {
     ouvirCenarios((lista) => {
         cenariosCache = lista || [];
         // Se o Gerenciador de Cenário estiver aberto, atualiza em tempo real.
+        if (isMestre && el.modalCenarioMestre && el.modalCenarioMestre.classList.contains("active")) {
+            el.cenarioMestreCorpo.innerHTML = "";
+            montarGerenciadorCenario(el.cenarioMestreCorpo);
+        }
+        if (typeof renderizarCenarios === "function") renderizarCenarios();
+    });
+}
+
+// =====================================================================
+// GERENCIADOR DE PERSEGUIÇÃO (compartilhado — Fase 7a do plano, ver
+// plano-veiculos-fase2.txt, seção "FASE 7"). Mestre monta em
+// montarGerenciadorCenario/montarDetalheCenario (botão "Iniciar
+// Corrida/Perseguição" quando há 2+ veículos no cenário); jogador
+// consome em renderizarCenarios (aba "Cenário"), mesmo padrão de
+// configurarCombateAtivo acima. Fase 7 completa (7a status/iniciar/
+// encerrar, 7b/7c ações de volta, 7d Manobra integrada + fim de corrida).
+// =====================================================================
+function configurarPerseguicaoAtiva() {
+    ouvirPerseguicaoAtiva((estado) => {
+        perseguicaoAtivaCache = estado || { ativo: false, participantes: {} };
         if (isMestre && el.modalCenarioMestre && el.modalCenarioMestre.classList.contains("active")) {
             el.cenarioMestreCorpo.innerHTML = "";
             montarGerenciadorCenario(el.cenarioMestreCorpo);
@@ -13312,6 +15239,7 @@ const ROTULOS_ACAO_MESTRE = {
 // listener em tempo real da Biblioteca (ver linha ~754/767 acima)
 // reabriria o painel sozinho na próxima atualização do Banco Global.
 function fecharAcaoMestre() {
+    definirLimpezaPainelMestre(null);
     const corpo = el.mestreCorpo;
     corpo.innerHTML = "";
     delete corpo.dataset.acaoAberta;
@@ -13319,6 +15247,7 @@ function fecharAcaoMestre() {
 }
 
 function abrirAcaoMestre(acao, prefill = null) {
+    definirLimpezaPainelMestre(null);
     const corpo = el.mestreCorpo;
     corpo.innerHTML = "";
     corpo.dataset.acaoAberta = acao;
@@ -13539,52 +15468,92 @@ function criarSelectFichas(incluirNpcs, prefillValue = null) {
 }
 
 function montarPainelNpcs(corpo) {
+    const { busca, selectCategoria, popularSelectCategoria } = montarBarraFiltro(corpo, { placeholderBusca: "Buscar por nome..." });
+
+    const contador = document.createElement("span");
+    contador.className = "hint-inline scroll-infinito-contador";
+    corpo.appendChild(contador);
+
     const lista = document.createElement("div");
     lista.style.display = "flex";
     lista.style.flexDirection = "column";
     lista.style.gap = "8px";
     corpo.appendChild(lista);
 
-    ouvirNpcs((npcs) => {
-        lista.innerHTML = "";
-        if (!npcs.length) {
-            lista.innerHTML = `<p class="hint">Nenhum NPC criado ainda.</p>`;
+    const renderCardNpc = (npc) => {
+        const card = document.createElement("div");
+        card.className = "npc-card";
+        const reducoesParaExibir = (npc.reducoesDano && npc.reducoesDano.length)
+            ? npc.reducoesDano
+            : (npc.protecaoTipo ? [{ tipo: npc.protecaoTipo, valor: npc.protecaoValor || 0 }] : []);
+        const protecaoLabel = reducoesParaExibir.length
+            ? reducoesParaExibir.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")
+            : "nenhuma";
+        card.innerHTML = `
+            <strong>${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}</strong>
+            ${npc.vulgo || npc.funcaoNarrativa ? `<span>${escapeHtml([npc.vulgo, npc.funcaoNarrativa].filter(Boolean).join(" · "))}</span>` : ""}
+            ${npc.categoria ? `<span class="hint-inline">Categoria: ${escapeHtml(npc.categoria)}</span>` : ""}
+            <span>PV: ${npc.pvAtual ?? npc.pvs} / ${npc.pvs}</span>
+            <span>Agilidade: ${npc.agilidade ?? 0} · Constituição: ${npc.constituicao ?? 0} · Proteção: ${escapeHtml(protecaoLabel)}</span>
+            ${npc.atributos ? `<span>Atributos: ${escapeHtml(npc.atributos)}</span>` : ""}
+            ${npc.atributosSecundarios ? `<span>Secundários: ${escapeHtml(npc.atributosSecundarios)}</span>` : ""}
+            ${npc.periciasResumo ? `<span>Perícias: ${escapeHtml(npc.periciasResumo)}</span>` : ""}
+            ${npc.itensEssenciais ? `<span>Itens: ${escapeHtml(npc.itensEssenciais)}</span>` : ""}
+        `;
+        const linhaBtns = document.createElement("div");
+        linhaBtns.className = "modal-btns";
+        if (npc.modoDetalhado) {
+            const btnEditar = document.createElement("button");
+            btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar mini-ficha";
+            btnEditar.addEventListener("click", () => abrirEdicaoNpcDetalhado(npc));
+            linhaBtns.appendChild(btnEditar);
         }
-        npcs.forEach(npc => {
-            const card = document.createElement("div");
-            card.className = "npc-card";
-            const reducoesParaExibir = (npc.reducoesDano && npc.reducoesDano.length)
-                ? npc.reducoesDano
-                : (npc.protecaoTipo ? [{ tipo: npc.protecaoTipo, valor: npc.protecaoValor || 0 }] : []);
-            const protecaoLabel = reducoesParaExibir.length
-                ? reducoesParaExibir.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")
-                : "nenhuma";
-            card.innerHTML = `
-                <strong>${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}</strong>
-                ${npc.vulgo || npc.funcaoNarrativa ? `<span>${escapeHtml([npc.vulgo, npc.funcaoNarrativa].filter(Boolean).join(" · "))}</span>` : ""}
-                <span>PV: ${npc.pvAtual ?? npc.pvs} / ${npc.pvs}</span>
-                <span>Agilidade: ${npc.agilidade ?? 0} · Constituição: ${npc.constituicao ?? 0} · Proteção: ${escapeHtml(protecaoLabel)}</span>
-                ${npc.atributos ? `<span>Atributos: ${escapeHtml(npc.atributos)}</span>` : ""}
-                ${npc.atributosSecundarios ? `<span>Secundários: ${escapeHtml(npc.atributosSecundarios)}</span>` : ""}
-                ${npc.periciasResumo ? `<span>Perícias: ${escapeHtml(npc.periciasResumo)}</span>` : ""}
-                ${npc.itensEssenciais ? `<span>Itens: ${escapeHtml(npc.itensEssenciais)}</span>` : ""}
-            `;
-            const linhaBtns = document.createElement("div");
-            linhaBtns.className = "modal-btns";
-            if (npc.modoDetalhado) {
-                const btnEditar = document.createElement("button");
-                btnEditar.className = "btn-ghost"; btnEditar.type = "button"; btnEditar.innerText = "Editar mini-ficha";
-                btnEditar.addEventListener("click", () => abrirEdicaoNpcDetalhado(npc));
-                linhaBtns.appendChild(btnEditar);
-            }
-            const btnExcluir = document.createElement("button");
-            btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir NPC";
-            btnExcluir.addEventListener("click", async () => { await excluirNpc(npc.id); });
-            linhaBtns.appendChild(btnExcluir);
-            card.appendChild(linhaBtns);
-            lista.appendChild(card);
+        const btnExcluir = document.createElement("button");
+        btnExcluir.className = "btn-red"; btnExcluir.type = "button"; btnExcluir.innerText = "Excluir NPC";
+        btnExcluir.addEventListener("click", async () => { await excluirNpc(npc.id); });
+        linhaBtns.appendChild(btnExcluir);
+        card.appendChild(linhaBtns);
+        return card;
+    };
+
+    // Cache LOCAL da lista (separado de npcsCache, que só alimenta os
+    // datalists de sugestão — ver Fase A): guardado aqui pra busca e
+    // filtro de categoria poderem reconsultar sem esperar o Firebase de
+    // novo a cada tecla digitada.
+    let npcsAtuais = [];
+    const renderLista = () => {
+        const filtro = busca.value.trim().toLowerCase();
+        const npcsFiltrados = npcsAtuais
+            .filter(npc => !filtro || (npc.nome || "").toLowerCase().includes(filtro))
+            .filter(npc => itemPassaFiltroCategoria(npc, selectCategoria, "categoria"))
+            .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+        montarListaComScrollInfinito({
+            container: lista,
+            scrollRoot: el.drawerPendentes,
+            itens: npcsFiltrados,
+            renderItem: renderCardNpc,
+            mensagemVazia: "Nenhum NPC criado ainda.",
+            contadorEl: contador
         });
-    });
+    };
+    busca.addEventListener("input", renderLista);
+    selectCategoria.addEventListener("change", renderLista);
+
+    // Listener local (não o npcsCache do topo do arquivo): só isso aqui
+    // — busca, filtro e a lista de cards — atualiza em tempo real. O
+    // formulário de criar NPC logo abaixo é montado UMA VEZ, fora deste
+    // callback, pra uma atualização em tempo real vinda de outro
+    // jogador/aba nunca apagar o que o Mestre está digitando ali no meio
+    // do preenchimento.
+    // Registra a desinscrição (ver definirLimpezaPainelMestre): sem
+    // isso, reabrir este painel (inclusive voltando de editar uma
+    // mini-ficha) empilhava um listener novo a cada vez, sem nunca
+    // desligar os antigos.
+    definirLimpezaPainelMestre(ouvirNpcs((npcs) => {
+        npcsAtuais = npcs || [];
+        popularSelectCategoria(npcsAtuais, "categoria");
+        renderLista();
+    }));
 
     const formArea = document.createElement("div");
     corpo.appendChild(formArea);
@@ -13607,6 +15576,7 @@ function montarPainelNpcs(corpo) {
 // mestre-corpo, que já está visível dentro da gaveta de Ações Pendentes —
 // só troca o conteúdo pelo formulário de edição).
 function abrirEdicaoNpcDetalhado(npc) {
+    definirLimpezaPainelMestre(null);
     const corpo = el.mestreCorpo;
     corpo.innerHTML = "";
     corpo.dataset.acaoAberta = "npcs";
@@ -13664,6 +15634,27 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
     inputFuncaoNarrativa.value = npcDet.funcaoNarrativa;
     gridBasico.append(inputNome, inputVulgo, inputIdade, inputFuncaoNarrativa);
     container.appendChild(gridBasico);
+
+    // ---- Categoria (opcional) — texto livre com sugestão das
+    // categorias já usadas noutros NPCs (plano-busca-categorias.txt,
+    // Fase A). Fica de fora do gridBasico (2 colunas) de propósito, pra
+    // não desalinhar os 4 campos que já formam pares ali.
+    const campoCategoria = document.createElement("div");
+    campoCategoria.className = "modal-field";
+    const labelCategoria = document.createElement("label");
+    labelCategoria.innerText = "Categoria (opcional)";
+    const inputCategoria = criarInput("text", "Ex.: Capangas, Contatos...");
+    inputCategoria.value = npcExistente ? npcExistente.categoria || "" : "";
+    const datalistCategoria = document.createElement("datalist");
+    datalistCategoria.id = "datalist-categoria-npc";
+    categoriasDistintas(npcsCache).forEach(cat => {
+        const opt = document.createElement("option");
+        opt.value = cat;
+        datalistCategoria.appendChild(opt);
+    });
+    inputCategoria.setAttribute("list", datalistCategoria.id);
+    campoCategoria.append(labelCategoria, inputCategoria, datalistCategoria);
+    container.appendChild(campoCategoria);
 
     // ---- Atributos primários ----
     const secAtributos = document.createElement("div");
@@ -13856,6 +15847,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
         });
         const payload = {
             nome: inputNome.value.trim(),
+            categoria: inputCategoria.value.trim(),
             npcDetalhado: {
                 vulgo: inputVulgo.value.trim(),
                 idade: inputIdade.value.trim(),
@@ -13929,6 +15921,23 @@ function criarInput(tipo, placeholder) {
 }
 
 // ---------------------------------------------------------------------
+// Categoria como texto livre com sugestão (plano-busca-categorias.txt,
+// Fase A) — usada pelos 3 bancos (NPCs, Itens Globais, Receitas
+// Globais). Calcula, na hora, os valores distintos de `campo` já em uso
+// num cache (sem vazio, sem duplicata, ordenado alfabético) — não
+// existe lista de categorias sincronizada à parte no Firebase, é sempre
+// derivada do que já está salvo nos registros.
+// ---------------------------------------------------------------------
+function categoriasDistintas(cache, campo = "categoria") {
+    const vistas = new Set();
+    (cache || []).forEach(registro => {
+        const valor = (registro && registro[campo] || "").trim();
+        if (valor) vistas.add(valor);
+    });
+    return [...vistas].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+// ---------------------------------------------------------------------
 // Scroll infinito genérico: em vez de jogar a lista inteira no DOM de
 // uma vez (o Banco Global de Itens/Receitas só cresce com o tempo),
 // renderiza só a primeira leva (tamanhoPagina) e vai completando o
@@ -13937,6 +15946,81 @@ function criarInput(tipo, placeholder) {
 // no fim da lista: quando ela entra na área visível do container que
 // rola de verdade (scrollRoot), carrega mais um lote.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Barra de busca por nome + filtro de categoria (plano-busca-categorias.txt,
+// Fase B) — reaproveitada pelos 3 painéis de listagem do Banco Global
+// (NPCs, Itens, Receitas). O filtro de categoria funciona em AND com o
+// texto digitado, e a lista de categorias do <select> é recalculada na
+// hora a partir do cache atual (mesmo espírito de categoriasDistintas,
+// Fase A — só que aqui cada opção já vem com a contagem entre
+// parênteses). `campo` é o nome do campo de categoria no objeto: varia
+// entre os 3 bancos ("categoria" pra NPCs/Receitas, "categoriaBanco"
+// pra Itens — ver nota sobre a colisão de nome em prepararModalItem).
+// ---------------------------------------------------------------------
+const SEM_CATEGORIA = "__sem_categoria__";
+
+function montarBarraFiltro(corpo, { placeholderBusca = "Buscar por nome..." } = {}) {
+    const linha = document.createElement("div");
+    linha.style.display = "flex";
+    linha.style.gap = "8px";
+    linha.style.flexWrap = "wrap";
+    linha.style.marginBottom = "10px";
+
+    const busca = criarInput("text", placeholderBusca);
+    busca.style.flex = "1 1 200px";
+
+    const selectCategoria = document.createElement("select");
+    selectCategoria.style.flex = "1 1 160px";
+
+    linha.append(busca, selectCategoria);
+    corpo.appendChild(linha);
+
+    // Recalcula as <option> do select a partir do cache atual, mantendo
+    // a categoria selecionada se ela ainda existir entre as opções
+    // (senão volta pra "Todas as categorias" — ex.: categoria escolhida
+    // que não tem mais nenhum registro).
+    function popularSelectCategoria(cache, campo = "categoria") {
+        const valorAtual = selectCategoria.value;
+        const contagem = new Map();
+        let semCategoria = 0;
+        (cache || []).forEach(registro => {
+            const valor = (registro && registro[campo] || "").trim();
+            if (!valor) { semCategoria++; return; }
+            contagem.set(valor, (contagem.get(valor) || 0) + 1);
+        });
+        selectCategoria.innerHTML = "";
+        const optTodas = document.createElement("option");
+        optTodas.value = "";
+        optTodas.innerText = "Todas as categorias";
+        selectCategoria.appendChild(optTodas);
+        [...contagem.keys()].sort((a, b) => a.localeCompare(b, "pt-BR")).forEach(cat => {
+            const opt = document.createElement("option");
+            opt.value = cat;
+            opt.innerText = `${cat} (${contagem.get(cat)})`;
+            selectCategoria.appendChild(opt);
+        });
+        if (semCategoria > 0) {
+            const opt = document.createElement("option");
+            opt.value = SEM_CATEGORIA;
+            opt.innerText = `Sem categoria (${semCategoria})`;
+            selectCategoria.appendChild(opt);
+        }
+        selectCategoria.value = [...selectCategoria.options].some(o => o.value === valorAtual) ? valorAtual : "";
+    }
+
+    return { busca, selectCategoria, popularSelectCategoria };
+}
+
+// Testa um registro (npc / item / receita) contra o <select> de
+// categoria montado acima. Select em "" (Todas) sempre passa.
+function itemPassaFiltroCategoria(registro, selectCategoria, campo = "categoria") {
+    const filtro = selectCategoria.value;
+    if (!filtro) return true;
+    const valor = (registro && registro[campo] || "").trim();
+    if (filtro === SEM_CATEGORIA) return !valor;
+    return valor === filtro;
+}
+
 function montarListaComScrollInfinito({ container, scrollRoot, itens, renderItem, tamanhoPagina = 20, mensagemVazia = "Nada encontrado.", contadorEl = null }) {
     container.innerHTML = "";
     if (contadorEl) contadorEl.innerText = "";
@@ -13977,9 +16061,7 @@ function montarListaComScrollInfinito({ container, scrollRoot, itens, renderItem
 // zero sem precisar estar dentro de nenhuma ficha.
 // ---------------------------------------------------------------------
 function montarPainelBibliotecaItens(corpo) {
-    const busca = criarInput("text", "Buscar por nome...");
-    busca.style.marginBottom = "10px";
-    corpo.appendChild(busca);
+    const { busca, selectCategoria, popularSelectCategoria } = montarBarraFiltro(corpo, { placeholderBusca: "Buscar por nome..." });
 
     const contador = document.createElement("span");
     contador.className = "hint-inline scroll-infinito-contador";
@@ -13991,6 +16073,15 @@ function montarPainelBibliotecaItens(corpo) {
     lista.style.gap = "8px";
     corpo.appendChild(lista);
 
+    // Cache LOCAL da lista (separado de itensGlobaisCache, que continua
+    // alimentando o autocompletar do modal de item em qualquer ficha):
+    // igual ao Painel de NPCs, um listener próprio aqui evita que a
+    // barra de busca/categoria seja perdida sempre que o Banco Global
+    // mudar em segundo plano — antes, esse painel era remontado do zero
+    // a cada atualização (ver "banco global de itens" no init), o que
+    // apagava o texto digitado e o filtro escolhido.
+    let itensAtuais = [];
+
     const renderCardItem = (it) => {
         const card = document.createElement("div");
         card.className = "npc-card";
@@ -13998,6 +16089,7 @@ function montarPainelBibliotecaItens(corpo) {
         card.innerHTML = `
             <strong>${escapeHtml(it.nome)}</strong>
             <span>${escapeHtml(rotuloTag(it.tag))}${it.nivelTag ? ` (nível ${it.nivelTag})` : ""} · ${it.peso ?? 0} kg</span>
+            ${it.categoriaBanco ? `<span class="hint-inline">Categoria: ${escapeHtml(it.categoriaBanco)}</span>` : ""}
             ${it.arma ? `<span>Dano base: ${it.arma.danoBase ?? 0}</span>` : ""}
             <span class="hint-inline">${escapeHtml(origem)}</span>
         `;
@@ -14020,8 +16112,9 @@ function montarPainelBibliotecaItens(corpo) {
 
     const renderLista = () => {
         const filtro = busca.value.trim().toLowerCase();
-        const itens = itensGlobaisCache
+        const itens = itensAtuais
             .filter(it => !filtro || (it.nome || "").toLowerCase().includes(filtro))
+            .filter(it => itemPassaFiltroCategoria(it, selectCategoria, "categoriaBanco"))
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
         montarListaComScrollInfinito({
             container: lista,
@@ -14033,7 +16126,16 @@ function montarPainelBibliotecaItens(corpo) {
         });
     };
     busca.addEventListener("input", renderLista);
-    renderLista();
+    selectCategoria.addEventListener("change", renderLista);
+
+    // Listener local (não o itensGlobaisCache do topo do arquivo, que
+    // continua alimentando o autocompletar do modal de item em qualquer
+    // ficha) — ver comentário acima de itensAtuais e definirLimpezaPainelMestre.
+    definirLimpezaPainelMestre(ouvirItensGlobais((itens) => {
+        itensAtuais = itens || [];
+        popularSelectCategoria(itensAtuais, "categoriaBanco");
+        renderLista();
+    }));
 
     const btnNovo = document.createElement("button");
     btnNovo.className = "btn-lime"; btnNovo.type = "button"; btnNovo.innerText = "+ Criar Novo Item";
@@ -14050,9 +16152,7 @@ function montarPainelBibliotecaItens(corpo) {
 // receita sem precisar estar dentro de nenhuma ficha específica.
 // ---------------------------------------------------------------------
 function montarPainelBibliotecaReceitas(corpo) {
-    const busca = criarInput("text", "Buscar por nome...");
-    busca.style.marginBottom = "10px";
-    corpo.appendChild(busca);
+    const { busca, selectCategoria, popularSelectCategoria } = montarBarraFiltro(corpo, { placeholderBusca: "Buscar por nome..." });
 
     const contador = document.createElement("span");
     contador.className = "hint-inline scroll-infinito-contador";
@@ -14064,12 +16164,19 @@ function montarPainelBibliotecaReceitas(corpo) {
     lista.style.gap = "8px";
     corpo.appendChild(lista);
 
+    // Cache LOCAL (separado de receitasGlobaisCache, que continua
+    // alimentando a aba "Receitas" da ficha) — mesmo motivo do
+    // itensAtuais em montarPainelBibliotecaItens: listener próprio pra
+    // não perder busca/categoria a cada atualização em segundo plano.
+    let receitasAtuais = [];
+
     const renderCardReceita = (r) => {
         const card = document.createElement("div");
         card.className = "npc-card";
         card.innerHTML = `
             <strong>${escapeHtml(r.nome)}</strong>
             <span>${escapeHtml(r.periciaVinculada || "—")} · Nível ${Number(r.nivel) || 1}${(r.dificuldade || r.dificuldade === 0) ? ` · Dificuldade ${r.dificuldade}` : ""}${(r.dificuldadeArmar || r.dificuldadeArmar === 0) ? ` · Dificuldade de armar ${r.dificuldadeArmar}` : ""}</span>
+            ${r.categoria ? `<span class="hint-inline">Categoria: ${escapeHtml(r.categoria)}</span>` : ""}
             ${formatarIngredientes(r) ? `<span class="hint-inline">Materiais: ${escapeHtml(formatarIngredientes(r))}</span>` : ""}
             <span class="hint-inline">Cadastrada por ${escapeHtml(r.criadoPorNome || "—")} (${r.criadoPorTipo === "mestre" ? "Mestre" : "jogador"})</span>
         `;
@@ -14092,8 +16199,9 @@ function montarPainelBibliotecaReceitas(corpo) {
 
     const renderLista = () => {
         const filtro = busca.value.trim().toLowerCase();
-        const receitas = receitasGlobaisCache
+        const receitas = receitasAtuais
             .filter(r => !filtro || (r.nome || "").toLowerCase().includes(filtro))
+            .filter(r => itemPassaFiltroCategoria(r, selectCategoria, "categoria"))
             .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
         montarListaComScrollInfinito({
             container: lista,
@@ -14105,7 +16213,13 @@ function montarPainelBibliotecaReceitas(corpo) {
         });
     };
     busca.addEventListener("input", renderLista);
-    renderLista();
+    selectCategoria.addEventListener("change", renderLista);
+
+    definirLimpezaPainelMestre(ouvirReceitasGlobais((receitas) => {
+        receitasAtuais = receitas || [];
+        popularSelectCategoria(receitasAtuais, "categoria");
+        renderLista();
+    }));
 
     const btnNovo = document.createElement("button");
     btnNovo.className = "btn-lime"; btnNovo.type = "button"; btnNovo.innerText = "+ Criar Nova Receita";
@@ -14859,18 +16973,87 @@ function montarDetalheCenario(detalhe, cenario) {
     detalhe.appendChild(secaoVeiculos);
 
     const veiculos = cenario.veiculos || {};
-    Object.entries(veiculos).forEach(([veiculoId, v]) => {
+    Object.entries(veiculos).forEach(([veiculoId, entry]) => {
         const linha = document.createElement("div");
         linha.style.display = "flex";
         linha.style.justifyContent = "space-between";
         linha.style.alignItems = "center";
-        linha.innerHTML = `<span>🚗 ${escapeHtml(v.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(v.tipo)}, ${v.trancado ? "🔒 Trancado" : "🔓 Destrancado"})</span></span>`;
+
+        // Ponteiro pra veículo de JOGADOR (Fase 6 do plano — ver
+        // plano-veiculos-fase2.txt, seção "FASE 6"): a fonte de verdade
+        // é fichas/{fichaId}/veiculos/{veiculoId} (todasAsFichasCache),
+        // não os campos da entry. Trancar/destrancar aqui precisa
+        // escrever no veículo de verdade (definirTrancaVeiculoJogador),
+        // não em editarVeiculoCenario (que escreveria numa entry que não
+        // tem esses campos de verdade). "Remover" aqui só tira o
+        // ponteiro do cenário (removerVeiculoDoCenario) — o veículo
+        // continua existindo, só "guardado" de volta na ficha do dono.
+        if (entry.origem === "jogador") {
+            const fichaDona = todasAsFichasCache[entry.fichaId];
+            const vReal = fichaDona && fichaDona.veiculos && fichaDona.veiculos[entry.veiculoId];
+            const nomeDono = (fichaDona && fichaDona.config && fichaDona.config.nomeExibicao) || entry.fichaId;
+
+            if (!vReal) {
+                // Dono apagou o veículo com o ponteiro ainda no cenário —
+                // só sobra tirar o ponteiro morto.
+                linha.innerHTML = `<span>🚗 <span class="hint">Veículo de ${escapeHtml(nomeDono)} — removido pelo dono.</span></span>`;
+                const btnRemoverPointer = document.createElement("button");
+                btnRemoverPointer.className = "btn-red"; btnRemoverPointer.type = "button"; btnRemoverPointer.innerText = "Remover ponteiro";
+                btnRemoverPointer.addEventListener("click", async () => { await removerVeiculoCenario(cenario.id, veiculoId); toast("Ponteiro removido do cenário."); });
+                linha.appendChild(btnRemoverPointer);
+                detalhe.appendChild(linha);
+                return;
+            }
+
+            linha.innerHTML = `<span>🚗 ${escapeHtml(vReal.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(vReal.tipo)}, ${vReal.trancado ? "🔒 Trancado" : "🔓 Destrancado"} · de ${escapeHtml(nomeDono)}${!vReal.trancado && vReal.ultimoADestrancar ? ` · último a destrancar: ${escapeHtml(vReal.ultimoADestrancar)}` : ""})</span></span>`;
+
+            const botoes = document.createElement("span");
+            botoes.style.display = "flex"; botoes.style.gap = "6px"; botoes.style.alignItems = "center";
+
+            // "Quem destrancou por último" (item 4 do plano): só faz
+            // sentido perguntar quando o clique vai DESTRANCAR (a
+            // resolução de um Arrombar bem-sucedido = roubo) — trancar
+            // de novo não muda esse registro.
+            let inputDestravadoPor = null;
+            if (vReal.trancado) {
+                inputDestravadoPor = document.createElement("input");
+                inputDestravadoPor.type = "text";
+                inputDestravadoPor.placeholder = "quem destrancou?";
+                inputDestravadoPor.style.width = "130px";
+                botoes.appendChild(inputDestravadoPor);
+            }
+
+            const btnAlternar = document.createElement("button");
+            btnAlternar.className = "btn-ghost"; btnAlternar.type = "button";
+            btnAlternar.innerText = vReal.trancado ? "Destrancar (sucesso no Arrombar / roubo)" : "Trancar de novo";
+            btnAlternar.addEventListener("click", async () => {
+                const nomeDestravador = inputDestravadoPor ? inputDestravadoPor.value.trim() : "";
+                await definirTrancaVeiculoJogador(entry.fichaId, entry.veiculoId, !vReal.trancado, vReal.trancado ? nomeDestravador : undefined);
+                toast(vReal.trancado ? "Veículo destrancado — posse mudou de mãos." : "Veículo trancado de novo.");
+            });
+
+            const btnRemoverDoCenario = document.createElement("button");
+            btnRemoverDoCenario.className = "btn-red"; btnRemoverDoCenario.type = "button"; btnRemoverDoCenario.innerText = "Remover do cenário";
+            btnRemoverDoCenario.addEventListener("click", async () => {
+                await removerVeiculoDoCenario(cenario.id, veiculoId, entry.fichaId, entry.veiculoId);
+                toast("Veículo removido do cenário (continua guardado na ficha do dono).");
+            });
+
+            botoes.append(btnAlternar, btnRemoverDoCenario);
+            linha.appendChild(botoes);
+            detalhe.appendChild(linha);
+            return;
+        }
+
+        // Formato antigo (veículo criado direto pelo Mestre no cenário,
+        // sem dono) — comportamento inalterado.
+        linha.innerHTML = `<span>🚗 ${escapeHtml(entry.nome || "(sem nome)")} <span class="entity-sub">(${rotuloTipoVeiculo(entry.tipo)}, ${entry.trancado ? "🔒 Trancado" : "🔓 Destrancado"})</span></span>`;
         const botoes = document.createElement("span");
         botoes.style.display = "flex"; botoes.style.gap = "6px";
         const btnAlternar = document.createElement("button");
         btnAlternar.className = "btn-ghost"; btnAlternar.type = "button";
-        btnAlternar.innerText = v.trancado ? "Destrancar (sucesso no Arrombar)" : "Trancar de novo";
-        btnAlternar.addEventListener("click", async () => { await editarVeiculoCenario(cenario.id, veiculoId, { trancado: !v.trancado }); toast(v.trancado ? "Veículo destrancado." : "Veículo trancado."); });
+        btnAlternar.innerText = entry.trancado ? "Destrancar (sucesso no Arrombar)" : "Trancar de novo";
+        btnAlternar.addEventListener("click", async () => { await editarVeiculoCenario(cenario.id, veiculoId, { trancado: !entry.trancado }); toast(entry.trancado ? "Veículo destrancado." : "Veículo trancado."); });
         const btnRemover = document.createElement("button");
         btnRemover.className = "btn-red"; btnRemover.type = "button"; btnRemover.innerText = "Remover";
         btnRemover.addEventListener("click", async () => { await removerVeiculoCenario(cenario.id, veiculoId); toast("Veículo removido do cenário."); });
@@ -14893,6 +17076,291 @@ function montarDetalheCenario(detalhe, cenario) {
             montarFormularioVeiculoCenario(areaFormVeiculo, cenario.id);
         }
     });
+
+    // ---- Corrida/Perseguição (Fase 7a do plano — ver
+    // plano-veiculos-fase2.txt, seção "FASE 7") ----
+    montarSecaoPerseguicaoCenario(detalhe, cenario, veiculos);
+}
+
+// Botão "Iniciar Corrida/Perseguição" (só aparece com 2+ veículos no
+// cenário, exatamente o gatilho pedido no plano original), OU o status
+// da perseguição já em andamento nesse cenário + "Encerrar" — inclui o
+// contador de rotas de fuga (Fase 7c), o anúncio do vencedor quando a
+// corrida já acabou (Fase 7d) e, por participante, um lançamento manual
+// de teste/rota de fuga (Fase 7e) — o único jeito de pontuar por um NPC,
+// já que os botões de "Perseguição em andamento" da aba Cenário
+// (renderizarCenarios) só existem pro jogador dono da própria ficha. O
+// nó só é zerado quando o Mestre clica "Encerrar Perseguição" — a
+// corrida acabada não se limpa sozinha.
+function montarSecaoPerseguicaoCenario(detalhe, cenario, veiculos) {
+    const secao = document.createElement("div");
+    secao.className = "section-header";
+    secao.innerText = "Corrida / Perseguição";
+    detalhe.appendChild(secao);
+
+    const perseguicaoDesteCenario = perseguicaoAtivaCache.ativo && perseguicaoAtivaCache.cenarioId === cenario.id;
+
+    // Já rolando uma perseguição em OUTRO cenário — nó singleton por
+    // mesa (mesmo espírito de combateAtivo), então não dá pra iniciar
+    // outra aqui até a primeira ser encerrada.
+    if (perseguicaoAtivaCache.ativo && !perseguicaoDesteCenario) {
+        const aviso = document.createElement("p");
+        aviso.className = "hint";
+        aviso.innerText = "Já existe uma perseguição em andamento em outro cenário — encerre-a antes de iniciar uma nova.";
+        detalhe.appendChild(aviso);
+        return;
+    }
+
+    if (perseguicaoDesteCenario) {
+        const bairro = bairroPerseguicao(perseguicaoAtivaCache.bairro);
+        const card = document.createElement("div");
+        card.className = "npc-card";
+        card.style.flexDirection = "column";
+        card.style.alignItems = "stretch";
+        const voltas = perseguicaoAtivaCache.voltasNecessarias;
+        const rotasFuga = perseguicaoAtivaCache.rotasFuga || { perseguido: 0, perseguidor: 0 };
+        const resultadoFinal = perseguicaoAtivaCache.resultadoFinal;
+        const resultadoFinalHtml = resultadoFinal
+            ? `<span class="entity-sub" style="color:var(--lime,#a6e22e);"><strong>🏁 Corrida encerrada</strong> — ${resultadoFinal.vencedor === "empate" ? "empate" : `venceu ${resultadoFinal.vencedor === "perseguido" ? "o(s) perseguido(s)" : "o(s) perseguidor(es)"}`} (${resultadoFinal.pontosPerseguido} perseguido x ${resultadoFinal.pontosPerseguidor} perseguidor) — clique "Encerrar Perseguição" quando quiser.</span>`
+            : "";
+        card.innerHTML = `<strong>🏁 ${escapeHtml(bairro ? bairro.label : perseguicaoAtivaCache.bairro)}</strong>
+            <span class="entity-sub">Volta ${perseguicaoAtivaCache.voltaAtual || 1}${voltas ? ` de ${voltas}` : " (nº de voltas ainda não cadastrado pro bairro — ver dados-manual.js)"}</span>
+            <span class="entity-sub">Rotas de fuga encontradas (Fase 7c, -2 pontos pro lado adversário cada) — 🏎️ Perseguido: ${Number(rotasFuga.perseguido) || 0} · 🚨 Perseguidor: ${Number(rotasFuga.perseguidor) || 0}</span>
+            ${resultadoFinalHtml}`;
+        const listaParticipantes = document.createElement("div");
+        listaParticipantes.style.marginTop = "8px";
+        Object.entries(perseguicaoAtivaCache.participantes || {}).forEach(([pid, p]) => {
+            const linhaWrap = document.createElement("div");
+            linhaWrap.style.marginTop = "4px";
+
+            const linha = document.createElement("div");
+            linha.style.display = "flex";
+            linha.style.justifyContent = "space-between";
+            linha.style.alignItems = "center";
+            linha.innerHTML = `<span>${p.lado === "perseguidor" ? "🚨" : "🏎️"} ${escapeHtml(p.nome)} <span class="entity-sub">(${p.lado} · ${Number(p.pontos) || 0} ponto(s))${p.agiuNestaVolta ? " · ✅ já testou" : " · ⏳ aguardando"}</span></span>`;
+            const btnRemover = document.createElement("button");
+            btnRemover.className = "btn-red"; btnRemover.type = "button"; btnRemover.innerText = "Remover";
+            btnRemover.addEventListener("click", async () => { await removerParticipantePerseguicao(pid); toast("Piloto removido da perseguição."); });
+            linha.appendChild(btnRemover);
+            linhaWrap.appendChild(linha);
+
+            // Fase 7e: ação manual do Mestre — registra o resultado de um
+            // teste (Testar Dirigir Veículos ou Rota de Fuga) EM NOME
+            // deste participante. Indispensável pra NPCs (tipo:"npc"),
+            // que não têm como usar os botões de "Perseguição em
+            // andamento" da aba Cenário (esses só aparecem pro jogador
+            // dono da própria ficha, ver renderizarCenarios) — mas
+            // funciona pra qualquer participante, inclusive um jogador
+            // ausente da mesa naquela rodada. O Mestre digita o
+            // resultado já pronto (d20 + modificador, decidido/rolado
+            // fora do app ou combinado na mesa) — não recalcula perícia
+            // nenhuma, é puramente um "lançamento manual" no mesmo
+            // espírito do campo de dano manual de veículo. Só aparece
+            // enquanto o participante ainda não agiu nesta volta e a
+            // corrida não tiver acabado.
+            if (!p.agiuNestaVolta && !resultadoFinal) {
+                const acaoManual = document.createElement("div");
+                acaoManual.style.display = "flex";
+                acaoManual.style.gap = "4px";
+                acaoManual.style.flexWrap = "wrap";
+                acaoManual.style.marginTop = "2px";
+                acaoManual.style.marginBottom = "4px";
+
+                const inputResultado = document.createElement("input");
+                inputResultado.type = "number";
+                inputResultado.placeholder = "Resultado (d20+mod)";
+                inputResultado.style.width = "150px";
+                acaoManual.appendChild(inputResultado);
+
+                const btnTestar = document.createElement("button");
+                btnTestar.className = "btn-lime"; btnTestar.type = "button";
+                btnTestar.innerText = "🎲 Registrar Teste";
+                btnTestar.title = "Converte o resultado em pontos da volta (Testar Dirigir Veículos), igual ao botão do jogador.";
+                btnTestar.addEventListener("click", async () => {
+                    if (!tabelaPontuacaoFugaCadastrada()) { toast("Tabela de pontuação da perseguição ainda não cadastrada.", "erro"); return; }
+                    const valor = Number(inputResultado.value);
+                    if (!Number.isFinite(valor)) { toast("Digite o resultado do teste (d20 + modificador).", "erro"); return; }
+                    const pontos = pontosPorResultadoTesteFuga(valor);
+                    if (pontos === null) { toast("Resultado fora de qualquer faixa cadastrada — nenhum ponto aplicado.", "erro"); return; }
+                    try {
+                        await registrarPontosPerseguicao(pid, pontos, valor, "Mestre");
+                        toast(`+${pontos} ponto(s) pra ${p.nome} (resultado ${valor}).`, pontos > 0 ? "ok" : "erro");
+                    } catch (err) {
+                        console.error(err);
+                        toast(err && err.message ? err.message : "Falha ao registrar teste.", "erro");
+                    }
+                });
+                acaoManual.appendChild(btnTestar);
+
+                const btnRotaSucesso = document.createElement("button");
+                btnRotaSucesso.className = "btn-ghost"; btnRotaSucesso.type = "button";
+                btnRotaSucesso.innerText = "🏃 Rota de fuga: achou";
+                btnRotaSucesso.title = "Abre mão da pontuação da volta — soma 1 rota de fuga encontrada pro lado deste piloto (-2 pontos pro lado adversário no total final).";
+                btnRotaSucesso.addEventListener("click", async () => {
+                    const valor = Number(inputResultado.value) || 0;
+                    try {
+                        await registrarTentativaRotaFugaPerseguicao(pid, true, valor);
+                        toast(`${p.nome} encontrou uma rota de fuga — abriu mão da pontuação da volta.`, "ok");
+                    } catch (err) {
+                        console.error(err);
+                        toast(err && err.message ? err.message : "Falha ao registrar rota de fuga.", "erro");
+                    }
+                });
+                acaoManual.appendChild(btnRotaSucesso);
+
+                const btnRotaFalha = document.createElement("button");
+                btnRotaFalha.className = "btn-ghost"; btnRotaFalha.type = "button";
+                btnRotaFalha.innerText = "🏃 Rota de fuga: não achou";
+                btnRotaFalha.addEventListener("click", async () => {
+                    const valor = Number(inputResultado.value) || 0;
+                    try {
+                        await registrarTentativaRotaFugaPerseguicao(pid, false, valor);
+                        toast(`${p.nome} não encontrou uma rota de fuga — abriu mão da pontuação da volta mesmo assim.`, "erro");
+                    } catch (err) {
+                        console.error(err);
+                        toast(err && err.message ? err.message : "Falha ao registrar rota de fuga.", "erro");
+                    }
+                });
+                acaoManual.appendChild(btnRotaFalha);
+
+                linhaWrap.appendChild(acaoManual);
+            }
+
+            listaParticipantes.appendChild(linhaWrap);
+        });
+        card.appendChild(listaParticipantes);
+
+        const linhaBotoes = document.createElement("div");
+        linhaBotoes.style.display = "flex";
+        linhaBotoes.style.gap = "6px";
+        linhaBotoes.style.marginTop = "8px";
+
+        // Override manual — avança a volta mesmo que nem todo mundo
+        // tenha testado (ex.: jogador ausente naquela rodada). Some
+        // depois que a corrida já acabou (resultadoFinal) — nesse ponto
+        // só falta o Mestre encerrar, não faz mais sentido avançar volta.
+        if (!resultadoFinal) {
+            const btnAvancar = document.createElement("button");
+            btnAvancar.className = "btn-ghost"; btnAvancar.type = "button"; btnAvancar.innerText = "Avançar volta manualmente";
+            btnAvancar.addEventListener("click", async () => {
+                await avancarVoltaManualPerseguicao();
+                toast("Volta avançada manualmente.");
+            });
+            linhaBotoes.appendChild(btnAvancar);
+        }
+
+        const btnEncerrar = document.createElement("button");
+        btnEncerrar.className = "btn-red"; btnEncerrar.type = "button"; btnEncerrar.innerText = "Encerrar Perseguição";
+        btnEncerrar.addEventListener("click", async () => {
+            if (!confirm("Encerrar a perseguição? Essa ação não pode ser desfeita.")) return;
+            await encerrarPerseguicao();
+            toast("Perseguição encerrada.");
+        });
+        linhaBotoes.appendChild(btnEncerrar);
+        card.appendChild(linhaBotoes);
+        detalhe.appendChild(card);
+        return;
+    }
+
+    const veiculosCount = Object.keys(veiculos || {}).length;
+    if (veiculosCount < 2) {
+        const aviso = document.createElement("p");
+        aviso.className = "hint";
+        aviso.innerText = "Precisa de pelo menos 2 veículos no cenário pra iniciar uma corrida/perseguição.";
+        detalhe.appendChild(aviso);
+        return;
+    }
+
+    const btnAbrirForm = document.createElement("button");
+    btnAbrirForm.className = "btn-lime"; btnAbrirForm.type = "button"; btnAbrirForm.innerText = "🏁 Iniciar Corrida/Perseguição";
+    const areaForm = document.createElement("div");
+    areaForm.style.display = "none";
+    areaForm.style.marginTop = "8px";
+    detalhe.append(btnAbrirForm, areaForm);
+    btnAbrirForm.addEventListener("click", () => {
+        areaForm.style.display = areaForm.style.display === "none" ? "block" : "none";
+        if (areaForm.style.display === "block" && !areaForm.hasChildNodes()) {
+            montarFormularioIniciarPerseguicao(areaForm, cenario, veiculos);
+        }
+    });
+}
+
+// Mini-formulário: escolher bairro + pra cada veículo presente, quem
+// pilota (sugerido a partir de cenario.participantes, ver plano) e de
+// que lado (perseguido/perseguidor). "Nenhum piloto" descarta aquele
+// veículo da perseguição (ex.: veículo do formato antigo, sem dono,
+// parado em cena, que não vai entrar na corrida).
+function montarFormularioIniciarPerseguicao(area, cenario, veiculos) {
+    const participantesCenario = cenario.participantes || {};
+
+    const selectBairro = document.createElement("select");
+    listarBairrosPerseguicao().forEach(b => {
+        const opt = document.createElement("option");
+        opt.value = b.key; opt.innerText = b.label;
+        selectBairro.appendChild(opt);
+    });
+    const linhaBairro = document.createElement("div");
+    linhaBairro.style.display = "flex"; linhaBairro.style.gap = "6px"; linhaBairro.style.alignItems = "center";
+    linhaBairro.innerHTML = "<span>Bairro:</span>";
+    linhaBairro.appendChild(selectBairro);
+    area.appendChild(linhaBairro);
+
+    const linhasPorVeiculo = [];
+    Object.entries(veiculos).forEach(([veiculoId, entry], idx) => {
+        let nomeVeiculo = entry.nome || "(sem nome)";
+        if (entry.origem === "jogador") {
+            const fichaDona = todasAsFichasCache[entry.fichaId];
+            const vReal = fichaDona && fichaDona.veiculos && fichaDona.veiculos[entry.veiculoId];
+            nomeVeiculo = vReal ? (vReal.nome || "(sem nome)") : "(veículo removido pelo dono)";
+        }
+
+        const linha = document.createElement("div");
+        linha.style.display = "flex"; linha.style.gap = "6px"; linha.style.alignItems = "center"; linha.style.flexWrap = "wrap";
+        linha.style.marginTop = "6px";
+
+        const label = document.createElement("span");
+        label.innerText = `🚗 ${nomeVeiculo}:`;
+        linha.appendChild(label);
+
+        const selectPiloto = document.createElement("select");
+        selectPiloto.innerHTML = '<option value="">-- não participa --</option>';
+        Object.entries(participantesCenario).forEach(([pid, p]) => {
+            const opt = document.createElement("option");
+            opt.value = pid; opt.innerText = p.nome;
+            selectPiloto.appendChild(opt);
+        });
+        linha.appendChild(selectPiloto);
+
+        const selectLado = document.createElement("select");
+        selectLado.innerHTML = '<option value="perseguido">perseguido</option><option value="perseguidor">perseguidor</option>';
+        // Alterna o default entre os dois lados por veículo, só pra dar
+        // um ponto de partida razoável (Mestre ajusta à vontade).
+        if (idx % 2 === 1) selectLado.value = "perseguidor";
+        linha.appendChild(selectLado);
+
+        area.appendChild(linha);
+        linhasPorVeiculo.push({ veiculoId, selectPiloto, selectLado });
+    });
+
+    const btnConfirmar = document.createElement("button");
+    btnConfirmar.className = "btn-lime"; btnConfirmar.type = "button"; btnConfirmar.innerText = "Confirmar e iniciar";
+    btnConfirmar.style.marginTop = "10px";
+    btnConfirmar.addEventListener("click", async () => {
+        const participantesEntrada = linhasPorVeiculo
+            .filter(l => l.selectPiloto.value)
+            .map(l => {
+                const p = participantesCenario[l.selectPiloto.value];
+                return { tipo: p.tipo, refId: p.refId, nome: p.nome, veiculoId: l.veiculoId, lado: l.selectLado.value };
+            });
+        try {
+            await iniciarPerseguicao(cenario.id, selectBairro.value, participantesEntrada);
+            toast("Perseguição iniciada.");
+        } catch (err) {
+            console.error(err);
+            toast(err && err.message ? err.message : "Falha ao iniciar perseguição.", "erro");
+        }
+    });
+    area.appendChild(btnConfirmar);
 }
 
 // Formulário compacto pra criar um veículo direto num cenário — reaproveita

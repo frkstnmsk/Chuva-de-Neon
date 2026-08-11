@@ -4,7 +4,7 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL, custoUpgradeVeiculoTabela, ehFerramentaCriacaoGeral, TABELA_PONTUACAO_FUGA, ehArma } from "./dados-manual.js";
 
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
@@ -107,6 +107,20 @@ export function calcularPvMaximo(ficha, diaIndiceAtual) {
     return temOverride ? (Number(override) || 0) : base;
 }
 
+// Nomes das listas da ficha que carregam entidades com `modificadores`
+// estruturados — reaproveitado por coletarModificadores (abaixo) e por
+// modificadoresOcasionaisDaPericia. Ficou como constante porque as duas
+// funções precisam varrer exatamente as mesmas fontes, na mesma ordem
+// (senão o "origem" mostrado no toggle da perícia poderia não bater com
+// o que aparece no detalhamento da rolagem).
+const FONTES_MODIFICADOR = [
+    { lista: "inventario", tipo: "Item" },
+    { lista: "vantagens", tipo: "Vantagem" },
+    { lista: "desvantagens", tipo: "Desvantagem" },
+    { lista: "especializacoes", tipo: "Especialização" },
+    { lista: "fatosUniversais", tipo: "Fato universal" }
+];
+
 export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
     // Item com tag "droga" NUNCA contribui com seus modificadores só por
     // estar na mochila — esse é o mesmo campo "Modificadores automáticos"
@@ -120,13 +134,8 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
         if (it && it.tag === "droga") continue;
         inventarioSemDrogas[id] = it;
     }
-    const fontes = [
-        { lista: inventarioSemDrogas, tipo: "Item" },
-        { lista: ficha.vantagens, tipo: "Vantagem" },
-        { lista: ficha.desvantagens, tipo: "Desvantagem" },
-        { lista: ficha.especializacoes, tipo: "Especialização" },
-        { lista: ficha.fatosUniversais, tipo: "Fato universal" }
-    ];
+    const listasPorNome = { ...ficha, inventario: inventarioSemDrogas };
+    const fontes = FONTES_MODIFICADOR.map(f => ({ lista: listasPorNome[f.lista], tipo: f.tipo }));
     const todos = [];
     for (const fonte of fontes) {
         const lista = fonte.lista || {};
@@ -140,6 +149,17 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
             const mods = entidade.modificadores || [];
             for (const m of mods) {
                 if (!m.alvo || !m.valor) continue;
+                // Modificador de Ocasião Especial (m.ocasional): representa
+                // um bônus/penalidade que só vale numa situação pontual
+                // descrita na especialização/vantagem (ex.: "a menos de 10
+                // metros", "enquanto concentrado") — não é permanente feito
+                // os demais. Só entra na conta quando o jogador liga o
+                // checkbox correspondente na própria linha da perícia (ver
+                // modificadoresOcasionaisDaPericia mais abaixo e
+                // renderizarPericias em ficha.js), gravado em
+                // `m.ativoOcasional`. Sem isso ligado, fica de fora — mas
+                // continua cadastrado normalmente na especialização.
+                if (m.ocasional && !m.ativoOcasional) continue;
                 todos.push({
                     alvo: m.alvo,
                     valor: Number(m.valor) || 0,
@@ -159,6 +179,44 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
         todos.push(...calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtualTexto));
     }
     return todos;
+}
+
+// ---------------------------------------------------------------------
+// Modificadores de Ocasião Especial de uma perícia — varre as mesmas
+// fontes de coletarModificadores procurando modificadores com
+// `ocasional: true` mirando `pericia:<nomePericia>`. Diferente de
+// coletarModificadores (que só soma o que já está ligado),
+// devolve TODOS os candidatos (ligados ou não) com o suficiente pra
+// montar um checkbox por perícia (ficha.js) e togglear cada um
+// individualmente sem abrir o cadastro da especialização/vantagem de
+// origem: `lista` (nome do nó no Firebase), `entidadeId` e `modIndex`
+// (posição dentro do array `modificadores` daquela entidade).
+// ---------------------------------------------------------------------
+export function modificadoresOcasionaisDaPericia(ficha, nomePericia) {
+    const alvo = `pericia:${nomePericia}`;
+    const resultado = [];
+    for (const fonte of FONTES_MODIFICADOR) {
+        const lista = (ficha && ficha[fonte.lista]) || {};
+        for (const entidadeId of Object.keys(lista)) {
+            const entidade = lista[entidadeId];
+            // Especialização/vantagem desligada (Ativo/Inativo) não deve
+            // nem oferecer o checkbox — mesma regra de coletarModificadores.
+            if (!entidade || entidade.ativo === false) continue;
+            const mods = entidade.modificadores || [];
+            mods.forEach((m, modIndex) => {
+                if (!m || !m.ocasional || m.alvo !== alvo) return;
+                resultado.push({
+                    lista: fonte.lista,
+                    entidadeId,
+                    modIndex,
+                    valor: Number(m.valor) || 0,
+                    ativo: !!m.ativoOcasional,
+                    origem: entidade.nome || `(${fonte.tipo} sem nome)`
+                });
+            });
+        }
+    }
+    return resultado;
 }
 
 // ---------------------------------------------------------------------
@@ -965,6 +1023,109 @@ export function reducaoDanoVeiculo(protecao) {
     return nivelVeiculo("protecao", protecao)?.reducaoDano ?? 0;
 }
 
+// =====================================================================
+// VIDA DO VEÍCULO (manual pg. 39) — Fase 2 do plano (ver
+// plano-veiculos-fase2.txt): PV atual, dano e deterioração automática.
+// =====================================================================
+
+// Nível efetivo de um atributo do veículo, descontando as deteriorações
+// acumuladas (ver normalizarVeiculos, normalizacao.js) — o valor
+// "base" em atributos.* nunca é alterado por dano, só esse cálculo em
+// cima dele na hora de usar. Clampado 0..5 igual ao nível bruto (uma
+// pilha grande de deteriorações não deixa o atributo "negativo", só
+// achata em 0 — pior caso, o carro fica de fato incapaz naquele
+// atributo, não "pior que incapaz").
+// `bonusTemporarios` (Fase 4 do plano — ver plano-veiculos-fase2.txt,
+// seção "FASE 4"): array de { atributo, valor, motivo, criadoEm } —
+// bônus de manobra (ex.: Cavalo de Pau "+1 Eficiência por uma cena")
+// somados por cima do valor já descontado das deteriorações. Mesmo
+// clamp 0..5 de sempre — sem isso, um bônus poderia empurrar o nível
+// pra fora da escala e nivelVeiculo() (dados-manual.js) cairia de
+// volta pro nível 0 por não achar a entrada (ela só tem níveis 0..5).
+// Parâmetro opcional e com default [] — todo chamador antigo continua
+// funcionando exatamente como antes.
+export function atributoEfetivoVeiculo(chave, atributos = {}, deterioracoes = [], bonusTemporarios = []) {
+    const base = Number(atributos[chave]) || 0;
+    const perdas = (deterioracoes || []).reduce(
+        (soma, d) => soma + (d && d.atributo === chave ? (Number(d.valor) || 0) : 0), 0
+    );
+    const bonus = (bonusTemporarios || []).reduce(
+        (soma, b) => soma + (b && b.atributo === chave ? (Number(b.valor) || 0) : 0), 0
+    );
+    return Math.max(0, Math.min(5, base - perdas + bonus));
+}
+
+// Aplica dano a um veículo (manual pg. 39): desconta reducaoDanoVeiculo
+// do PROTEÇÃO EFETIVO (já com deteriorações anteriores) antes de
+// subtrair do PV — mesmo espírito da redução de armadura em
+// aplicarDano (mestre.js) — e decide quantos "quintos" do PV máximo
+// foram cruzados NESTE golpe, comparando quanto já tinha sido perdido
+// antes com quanto passa a estar perdido depois. Cada quinto cruzado
+// gera duas deteriorações novas: -1 Proteção (automático) e -1 no
+// atributo escolhido por quem causou o dano (`atributoEscolhido`, com
+// fallback "Velocidade" se ninguém decidir — manual: "escolhido por
+// quem causou o dano ou pelo narrador").
+//
+// Função PURA — só calcula e devolve o resultado; não lê nem escreve
+// Firebase (ver causarDanoVeiculo em mestre.js pra orquestração).
+// `veiculo` é o registro já normalizado (atributos + pvAtual +
+// deterioracoes, ver normalizarVeiculos).
+// `pularReducao` (Fase 4 do plano): dano de manobra malsucedida (ex.:
+// Cavalo de Pau/Drift, "1/10 ou 1/3 do total de PV") já é calculado EM
+// CIMA do próprio PV máximo do veículo — aplicar a redução de dano da
+// Proteção por cima disso contaria a resistência do veículo duas vezes
+// (uma vez no próprio total de PV, que já é maior num veículo mais
+// protegido, e de novo na redução). Dano externo (tiro, colisão,
+// ferramenta manual do Mestre) continua reduzindo normalmente —
+// default false preserva o comportamento de sempre pra esses casos.
+export function aplicarDanoVeiculo(veiculo, danoBruto, atributoEscolhido, pularReducao = false) {
+    const atributos = (veiculo && veiculo.atributos) || {};
+    const deterioracoesAtuais = (veiculo && veiculo.deterioracoes) || [];
+    const bonusTemporariosAtuais = (veiculo && veiculo.bonusTemporarios) || [];
+
+    const protecaoEfetiva = atributoEfetivoVeiculo("protecao", atributos, deterioracoesAtuais, bonusTemporariosAtuais);
+    const pvMaximo = pvMaxVeiculo(protecaoEfetiva);
+    const reducao = pularReducao ? 0 : reducaoDanoVeiculo(protecaoEfetiva);
+
+    const pvAtualAntes = (veiculo && veiculo.pvAtual !== null && veiculo.pvAtual !== undefined)
+        ? Number(veiculo.pvAtual) : pvMaximo;
+    const danoFinal = Math.max(0, (Number(danoBruto) || 0) - reducao);
+    const pvAtualDepois = Math.max(0, pvAtualAntes - danoFinal);
+
+    // "a cada um quinto dos PVs máximos perdidos" — usa o PV máximo
+    // EFETIVO atual (já refletindo deteriorações anteriores) como a
+    // régua de 1/5 em 1/5; não recalcula a régua com o PV máximo "de
+    // fábrica" do veículo.
+    const quinto = pvMaximo > 0 ? pvMaximo / 5 : 0;
+    const perdidoAntes = Math.max(0, pvMaximo - pvAtualAntes);
+    const perdidoDepois = Math.max(0, pvMaximo - pvAtualDepois);
+    const quintosAntes = quinto > 0 ? Math.min(5, Math.floor(perdidoAntes / quinto)) : 0;
+    const quintosDepois = quinto > 0 ? Math.min(5, Math.floor(perdidoDepois / quinto)) : 0;
+    const novosQuintosCruzados = Math.max(0, quintosDepois - quintosAntes);
+
+    const atributoOutro = (atributoEscolhido && ATRIBUTOS_VEICULO.includes(atributoEscolhido) && atributoEscolhido !== "protecao")
+        ? atributoEscolhido
+        : "velocidade";
+
+    const novasDeterioracoes = [];
+    for (let i = 0; i < novosQuintosCruzados; i++) {
+        novasDeterioracoes.push({ atributo: "protecao", valor: 1 });
+        novasDeterioracoes.push({ atributo: atributoOutro, valor: 1 });
+    }
+
+    return {
+        pvMaximo,
+        reducao,
+        danoFinal,
+        pvAtualAntes,
+        pvAtualDepois,
+        novosQuintosCruzados,
+        atributoDeteriorado: atributoOutro,
+        novasDeterioracoes,
+        deterioracoesResultantes: [...deterioracoesAtuais, ...novasDeterioracoes]
+    };
+}
+
 // A cada dois pontos em Proteção, o veículo sofre -1 em Velocidade
 // (manual pg. 37). Sempre negativo ou zero.
 export function penalidadeVelocidadePorProtecao(protecao) {
@@ -1048,40 +1209,67 @@ export function modificadoresControleVeiculo(controle) {
 // `raciocinioPiloto` é opcional (usa 0 se não vier, zerando ações por
 // turno) — normalmente é o Raciocínio (já com modificadores) de quem
 // está dirigindo, resolvido pela ficha.js.
+//
+// `deterioracoes` (Fase 2 do plano — ver plano-veiculos-fase2.txt) é
+// opcional (default []): quando informado, TODA a conta abaixo passa a
+// usar o nível EFETIVO de cada atributo (atributoEfetivoVeiculo), não o
+// bruto — é o ponto único onde essa substituição acontece, pra não
+// espalhar "atributos.velocidade - deteriorações" em cada função que
+// consome o resultado. `nivel`, em cada bloco do retorno, continua
+// sendo o valor BRUTO (o que foi comprado/upado — útil pra UI mostrar
+// o "nível oficial" do atributo, mesmo com dano em cima); quem quiser o
+// efetivo usa nivelEfetivo (só existe explicitamente em velocidade,
+// que já tinha esse campo antes por causa da penalidade de Proteção —
+// os outros atributos não precisam expor o efetivo à parte porque ele
+// já foi consumido internamente pelas funções de lookup).
 // ---------------------------------------------------------------------
-export function calcularModificadoresVeiculo(atributos = {}, raciocinioPiloto = 0) {
-    const velocidade = Number(atributos.velocidade) || 0;
-    const eficiencia = Number(atributos.eficiencia) || 0;
-    const protecao = Number(atributos.protecao) || 0;
-    const capacidadeCarga = Number(atributos.capacidadeCarga) || 0;
-    const controle = Number(atributos.controle) || 0;
+// `bonusTemporarios` (Fase 4 do plano — ver plano-veiculos-fase2.txt):
+// mesmo formato de atributoEfetivoVeiculo acima, opcional/default [] —
+// chamadas antigas continuam idênticas a antes.
+export function calcularModificadoresVeiculo(atributos = {}, raciocinioPiloto = 0, deterioracoes = [], bonusTemporarios = []) {
+    const velocidadeEfetiva = atributoEfetivoVeiculo("velocidade", atributos, deterioracoes, bonusTemporarios);
+    const eficienciaEfetiva = atributoEfetivoVeiculo("eficiencia", atributos, deterioracoes, bonusTemporarios);
+    const protecaoEfetiva = atributoEfetivoVeiculo("protecao", atributos, deterioracoes, bonusTemporarios);
+    const capacidadeCargaEfetiva = atributoEfetivoVeiculo("capacidadeCarga", atributos, deterioracoes, bonusTemporarios);
+    const controleEfetivo = atributoEfetivoVeiculo("controle", atributos, deterioracoes, bonusTemporarios);
 
-    const penalidadeVelocidade = penalidadeVelocidadePorProtecao(protecao);
-    const nivelVelEfetivo = nivelVelocidadeEfetivo(velocidade, protecao);
+    const penalidadeVelocidade = penalidadeVelocidadePorProtecao(protecaoEfetiva);
+    const nivelVelEfetivo = nivelVelocidadeEfetivo(velocidadeEfetiva, protecaoEfetiva);
 
     return {
         velocidade: {
-            nivel: velocidade,
+            nivel: Number(atributos.velocidade) || 0,
             nivelEfetivo: nivelVelEfetivo,
             penalidadePorProtecao: penalidadeVelocidade,
             kmhMax: kmhMaxVeiculo(nivelVelEfetivo),
             acoesPorTurno: acoesPorTurnoVeiculo(nivelVelEfetivo, raciocinioPiloto)
         },
         eficiencia: {
-            nivel: eficiencia,
-            turnosAteVelocidadeMaxima: turnosAteVelocidadeMaximaVeiculo(eficiencia)
+            nivel: Number(atributos.eficiencia) || 0,
+            turnosAteVelocidadeMaxima: turnosAteVelocidadeMaximaVeiculo(eficienciaEfetiva)
         },
         protecao: {
-            nivel: protecao,
-            pvMaximo: pvMaxVeiculo(protecao),
-            reducaoDano: reducaoDanoVeiculo(protecao)
+            nivel: Number(atributos.protecao) || 0,
+            pvMaximo: pvMaxVeiculo(protecaoEfetiva),
+            reducaoDano: reducaoDanoVeiculo(protecaoEfetiva)
         },
         capacidadeCarga: {
-            nivel: capacidadeCarga,
-            kgMax: kgMaxVeiculo(capacidadeCarga),
-            penalidadeContabilidade: penalidadeContabilidadeCarga(capacidadeCarga)
+            nivel: Number(atributos.capacidadeCarga) || 0,
+            kgMax: kgMaxVeiculo(capacidadeCargaEfetiva),
+            penalidadeContabilidade: penalidadeContabilidadeCarga(capacidadeCargaEfetiva)
         },
-        controle: modificadoresControleVeiculo(controle)
+        controle: { ...modificadoresControleVeiculo(controleEfetivo), nivel: Number(atributos.controle) || 0 },
+        // Fase 5a do plano (ver plano-acessorios-veiculo.txt): entra
+        // aqui pelo mesmo motivo dos outros cinco — renderizarVeiculos
+        // (ficha.js) itera ATRIBUTOS_VEICULO e lê mods[chave] pra cada
+        // um, então "acessorios" precisa de uma entrada aqui ou o card
+        // quebra. `slotsDisponiveis` já é o nível EFETIVO (descontando
+        // deterioração/bônus, via slotsAcessoriosVeiculo) — é esse
+        // número que a Fase 5b/5c usam pra saber quantos slots cabem.
+        acessorios: {
+            nivel: Number(atributos.acessorios) || 0,
+            slotsDisponiveis: slotsAcessoriosVeiculo(atributos, deterioracoes, bonusTemporarios)
+        }
     };
 }
 
@@ -1099,11 +1287,192 @@ export function calcularModificadoresVeiculo(atributos = {}, raciocinioPiloto = 
 // dados-manual.js.
 // ---------------------------------------------------------------------
 export function valorTotalVeiculo(atributos = {}) {
-    return ATRIBUTOS_VEICULO.reduce((soma, chave) => soma + precoNivelVeiculo(chave, atributos[chave]), 0);
+    return ATRIBUTOS_VEICULO
+        .filter(chave => chave !== "acessorios")
+        .reduce((soma, chave) => soma + precoNivelVeiculo(chave, atributos[chave]), 0);
 }
 
 export function valorManutencaoVeiculo(atributos = {}) {
-    return ATRIBUTOS_VEICULO.reduce((soma, chave) => soma + Math.floor(precoNivelVeiculo(chave, atributos[chave]) / 20), 0);
+    return ATRIBUTOS_VEICULO
+        .filter(chave => chave !== "acessorios")
+        .reduce((soma, chave) => soma + Math.floor(precoNivelVeiculo(chave, atributos[chave]) / 20), 0);
+}
+
+// =====================================================================
+// SLOTS DE ACESSÓRIOS/ARMAMENTO (manual pg. 37-38) — Fase 5a do plano
+// (ver plano-acessorios-veiculo.txt, seção "FASE 5a"). O nível efetivo
+// do atributo "acessorios" (deteriorações + bônus temporários, mesma
+// régua de atributoEfetivoVeiculo) É a capacidade total de slots —
+// leitura (A) do plano. Funções PURAS, sem Firebase.
+// =====================================================================
+
+// Capacidade total de slots do veículo — puro alias de
+// atributoEfetivoVeiculo("acessorios", ...) pra deixar explícito na
+// leitura do código o que esse número significa neste contexto,
+// exatamente como o plano pede (não muda nada na função da Fase 2).
+export function slotsAcessoriosVeiculo(atributos = {}, deterioracoes = [], bonusTemporarios = []) {
+    return atributoEfetivoVeiculo("acessorios", atributos, deterioracoes, bonusTemporarios);
+}
+
+// Soma o nível de cada entrada instalada — cada acessório consome
+// slots iguais ao seu próprio nível (consenso do manual, sem
+// ambiguidade). `acessoriosInstalados` é o array bruto do veículo
+// (ver normalizarVeiculos, normalizacao.js); entradas sem `nivel`
+// numérico não contam (defensivo contra dado malformado do Firebase).
+//
+// `itensArmaInstalados` (Fase 5c do plano — ver
+// plano-acessorios-veiculo.txt, seção "FASE 5c"): os 3 acessórios-arma
+// NÃO vivem em acessoriosInstalados — são itens de inventário comuns
+// com `item.instaladoEmVeiculoId` apontando pro veículo (ver
+// itensArmaInstaladosEmVeiculo abaixo). Parâmetro opcional/default []
+// pra toda chamada antiga (só acessórios passivos) continuar idêntica
+// a antes; quem já sabe quais armas estão montadas neste veículo passa
+// o array aqui pra elas também contarem contra o pool de slots. Cada
+// item usa `nivelTag` (não `nivel`) como nível — mesmo campo que
+// qualquer item de tag "arma" já usa em todo o resto do sistema (ver
+// TAGS_ITEM, dados-manual.js).
+export function slotsAcessoriosUsados(acessoriosInstalados = [], itensArmaInstalados = []) {
+    const somaPassivos = (acessoriosInstalados || []).reduce(
+        (soma, a) => soma + (Number(a && a.nivel) || 0), 0
+    );
+    const somaArmas = (itensArmaInstalados || []).reduce(
+        (soma, it) => soma + (Number(it && it.nivelTag) || 0), 0
+    );
+    return somaPassivos + somaArmas;
+}
+
+// Slots livres = capacidade total - usados, nunca negativo (uma
+// deterioração reduzindo a capacidade DEPOIS de instalar acessórios
+// não "estoura" pra negativo, só zera — o excesso instalado continua
+// fisicamente no carro até o Mestre decidir remover algo).
+//
+// `itensArmaInstalados` (Fase 5c): mesmo parâmetro opcional de
+// slotsAcessoriosUsados acima, só repassado.
+export function slotsAcessoriosLivres(veiculo, itensArmaInstalados = []) {
+    const atributos = (veiculo && veiculo.atributos) || {};
+    const deterioracoesAtuais = (veiculo && veiculo.deterioracoes) || [];
+    const bonusTemporariosAtuais = (veiculo && veiculo.bonusTemporarios) || [];
+    const total = slotsAcessoriosVeiculo(atributos, deterioracoesAtuais, bonusTemporariosAtuais);
+    const usados = slotsAcessoriosUsados(veiculo && veiculo.acessoriosInstalados, itensArmaInstalados);
+    return Math.max(0, total - usados);
+}
+
+// `acessorio` só precisa ter um campo `nivel` numérico — serve tanto
+// pra uma entrada do catálogo passivo (Fase 5b) quanto, via
+// instalarArmaNoVeiculo abaixo, pra um item-arma (Fase 5c). Compara
+// contra os slots livres ATUAIS (já descontando o que já está
+// instalado, acessório passivo OU arma — ver itensArmaInstalados).
+export function podeInstalarAcessorio(veiculo, acessorio, itensArmaInstalados = []) {
+    const nivel = Number(acessorio && acessorio.nivel) || 0;
+    if (nivel <= 0) return false;
+    return nivel <= slotsAcessoriosLivres(veiculo, itensArmaInstalados);
+}
+
+// =====================================================================
+// ACESSÓRIOS-ARMA (Truck Pistol, Metralhadora de Teto, Torreta Tática —
+// manual pg. 37-38) — Fase 5c do plano (ver plano-acessorios-veiculo.txt,
+// seção "FASE 5c"). Nenhuma tabela nova de dano/dificuldade: os três SÃO
+// armas de verdade e vivem como item comum de inventário (tag "arma",
+// TAGS_ITEM em dados-manual.js) — a única peça nova é o ponteiro
+// item→veículo (`item.instaladoEmVeiculoId`, ver normalizarInventario em
+// normalizacao.js) e o controle de slot em cima dele, que reaproveita
+// 100% de podeInstalarAcessorio acima. Disparo em si (dano, dificuldade,
+// perícia) continua vivendo inteiro no item, sem nenhuma função nova
+// aqui — quem dispara usa o mesmo fluxo de "Usar" que qualquer outra
+// arma do inventário já usa (iniciarUsoItem, ficha.js).
+// =====================================================================
+
+// Devolve, do inventário de UMA ficha, os itens-arma montados neste
+// veículo específico — usado tanto pra somar contra o pool de slots
+// (slotsAcessoriosUsados/Livres acima) quanto pra desenhar a lista de
+// "armas instaladas" no card do veículo (ficha.js). `inventario` é o
+// objeto bruto `fichaAtual.inventario` (chave = itemId); devolve um
+// array de `{ id, ...item }` pra quem consumir já ter o id à mão.
+export function itensArmaInstaladosEmVeiculo(inventario, veiculoId) {
+    if (!veiculoId) return [];
+    return Object.entries(inventario || {})
+        .filter(([, it]) => it && ehArma(it.tag) && it.instaladoEmVeiculoId === veiculoId)
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+// Só valida se a arma cabe no pool de slots livres do veículo — não
+// grava nada (quem chama, ficha.js, grava item.instaladoEmVeiculoId
+// depois de confirmar `true` aqui). `item` é o item de inventário (usa
+// `item.nivelTag`, o mesmo campo que já vale como "nível" pra qualquer
+// tag com `temNivel: true` — ver TAGS_ITEM). `itensArmaInstalados` é o
+// resultado de itensArmaInstaladosEmVeiculo acima, já sem contar o
+// próprio item sendo instalado (quem chama filtra isso, se for o caso
+// de reinstalar/trocar de veículo).
+export function instalarArmaNoVeiculo(item, veiculo, itensArmaInstalados = []) {
+    return podeInstalarAcessorio(veiculo, { nivel: item && item.nivelTag }, itensArmaInstalados);
+}
+
+// Penalidade situacional (manual pg. 37-38): "piloto atira com -2 por
+// estar dirigindo" — só a Truck Pistol permite disparo por quem está no
+// volante; Metralhadora de Teto e Torreta Tática exigem
+// passageiro/copiloto (quem pilota não pode disparar essas duas). Não
+// existe, ainda, um registro formal de "quem está pilotando agora"
+// nesta ficha de veículo (isso só passa a existir de verdade na Fase 9,
+// veículo como participante de combate) — por isso esta função só
+// devolve o número da penalidade em si; a decisão de SE ela se aplica
+// (quem está atirando é quem está no volante neste turno?) fica manual,
+// a critério do Mestre/jogador na hora de rolar (mesmo espírito de
+// efeitoOleoVeiculo/efeitoCospePregoVeiculo acima, que também só
+// calculam a consequência sem arbitrar sozinhos o contexto da mesa).
+export const PENALIDADE_ARMA_VEICULO_PILOTANDO = -2;
+
+// =====================================================================
+// EFEITOS DOS ACESSÓRIOS PASSIVOS (manual pg. 37-38) — Fase 5b do plano
+// (ver plano-acessorios-veiculo.txt, seção "FASE 5b"). Só os dois
+// acessórios que têm efeito mecânico reaproveitável em cima de uma peça
+// que já existe (bonusTemporario) ganham função própria — os outros 7
+// (Pneu para Neve, Compartimento Secreto, Para-choque Mad Max,
+// Dispositivo — passivos; No Network — só um teste de Eletrônica pra
+// operar, sem efeito mecânico pra calcular; IA de Bordo, Lança Fumaça —
+// só "usadoNestaCena", também sem fórmula) não precisam de nada aqui, o
+// texto do catálogo já é o efeito inteiro. Funções PURAS, sem Firebase.
+// =====================================================================
+
+// Óleo (manual pg. 37): quem estiver perseguindo precisa passar em
+// Dirigir Veículos dif. 14 — falhando, sofre -2 em ações de direção por
+// 1 turno. `resultadoTeste` é o total (d20+mod) de QUEM PERSEGUIU,
+// rolado onde quer que essa rolagem aconteça (perseguição ativa, Fase
+// 7, ou fora dela) — esta função só decide a consequência, não rola
+// nada. Devolve um objeto pronto pra virar uma entrada de
+// bonusTemporarios negativa (ver comentário de bonusTemporarios,
+// atributoEfetivoVeiculo acima) com `expiraEm: "1 turno"` — campo
+// textual/informativo pro Mestre saber quando limpar (o veículo ainda
+// não é participante de combate — Fase 9 — então não há um contador de
+// turno automático pra expirar sozinho; até lá, o Mestre limpa na mão,
+// mesmo botão "Limpar" que já existe pros bônus de manobra).
+export function efeitoOleoVeiculo(resultadoTeste) {
+    const sucesso = Number(resultadoTeste) >= 14;
+    if (sucesso) return { sucesso: true, bonusTemporario: null };
+    return {
+        sucesso: false,
+        bonusTemporario: { atributo: "controle", valor: -2, motivo: "Óleo (perseguidor)", expiraEm: "1 turno" }
+    };
+}
+
+// Cospe Prego (manual pg. 37): quem estiver perseguindo precisa passar
+// em Dirigir Veículos dif. 18 — falhando, sofre -3 Controle; se o
+// resultado ficar abaixo de 13 (falha feia, não só "não bateu 18"), o
+// perseguidor é deixado pra trás. Mesmo espírito de efeitoOleoVeiculo
+// acima: só calcula, não rola nada. `perseguidorDeixadoParaTras: true`
+// é o sinal pra quem chamar (dentro de uma Perseguição ativa, Fase 7)
+// decidir se chama removerParticipantePerseguicao ou, se só sobrar um
+// lado, vencedorPerseguicao antecipado (mestre.js/regras.js) — testado
+// fora de perseguição, esse sinal é só narrativo (o Mestre decide o que
+// significa "deixado pra trás" na cena).
+export function efeitoCospePregoVeiculo(resultadoTeste) {
+    const resultado = Number(resultadoTeste) || 0;
+    const sucesso = resultado >= 18;
+    if (sucesso) return { sucesso: true, bonusTemporario: null, perseguidorDeixadoParaTras: false };
+    return {
+        sucesso: false,
+        bonusTemporario: { atributo: "controle", valor: -3, motivo: "Cospe Prego (perseguidor)", expiraEm: "1 turno" },
+        perseguidorDeixadoParaTras: resultado < 13
+    };
 }
 
 // ---------------------------------------------------------------------
@@ -1135,6 +1504,190 @@ export const DIAS_POR_PERIODICIDADE_MANUTENCAO = { semanal: 7, quinzenal: 14, me
 export function diasParaProximaManutencaoVeiculo(tipoVeiculo) {
     const periodicidade = periodicidadeManutencaoVeiculo(tipoVeiculo);
     return DIAS_POR_PERIODICIDADE_MANUTENCAO[periodicidade] || DIAS_POR_PERIODICIDADE_MANUTENCAO.mensal;
+}
+
+// =====================================================================
+// REPARO E UPGRADE DE ATRIBUTO — "ir ao mecânico" (manual pg. 38-39) —
+// Fase 3 do plano (ver plano-veiculos-fase2.txt). Funções PURAS (só
+// cálculo, sem Firebase) — a orquestração de consumir material/gravar
+// o novo nível/limpar deterioração fica em ficha.js, igual ao resto
+// desta seção do arquivo.
+// =====================================================================
+
+// "11 + nível do atributo" (manual pg. 38). No upgrade, `nivel` é o
+// NÍVEL-ALVO que está sendo comprado (subir de 2 pra 3 = dificuldade
+// 11+3=14). No reparo, `nivel` é o nível ATUAL do atributo que está
+// sendo devolvido ao normal (não existe "nível-alvo" num reparo — ver
+// custoReparoVeiculo abaixo) — mesma fórmula nos dois casos.
+export function dificuldadeUpgradeVeiculo(nivel) {
+    return 11 + (Number(nivel) || 0);
+}
+
+// Custo (preço + materiais) de subir o atributo `atributoKey` para o
+// nível `nivelAlvo` (1 a 5) — puro lookup em CUSTOS_UPGRADE_VEICULO
+// (dados-manual.js). Devolve null se o atributo/nível não existir OU
+// se aquela linha da tabela ainda não tiver sido preenchida (ver
+// comentário no topo da tabela) — quem chama trata null como "sem
+// dado, upgrade indisponível por enquanto", nunca como "grátis".
+export function custoUpgradeVeiculo(atributoKey, nivelAlvo) {
+    return custoUpgradeVeiculoTabela(atributoKey, nivelAlvo);
+}
+
+// Aplica o ajuste de preço da mesa (mestre.js — ouvirFatorPrecoMateriaisVeiculo/
+// definirFatorPrecoMateriaisVeiculo, guardado em CN$ fatorPercentual %) por
+// cima de um preço base do manual. Puro — não sabe de banco nem de mesa,
+// só faz a conta; quem chama já traz o fator já lido/cacheado. `precoBase`
+// null/undefined devolve null (sem dado, nada pra ajustar). Arredonda pra
+// CN$ inteiro — preço fracionado não faz sentido na moeda do jogo.
+export function precoVeiculoComFator(precoBase, fatorPercentual) {
+    if (precoBase === null || precoBase === undefined) return null;
+    const fator = Number(fatorPercentual) || 0;
+    return Math.round((Number(precoBase) || 0) * (1 + fator / 100));
+}
+
+// Reparo (manual pg. 39: "matérias-primas iguais ao nível do atributo
+// do veículo") não tem tabela própria — reaproveita a receita de subir
+// "1 nível" (índice do nível-alvo 1 dentro de CUSTOS_UPGRADE_VEICULO) e
+// multiplica a quantidade de cada material, e o preço, pelo nível ATUAL
+// do atributo (mínimo 1, pra sempre exigir algum material mesmo com o
+// atributo zerado/destruído). Devolve null se a receita-base (nível 1)
+// ainda não estiver preenchida na tabela.
+export function custoReparoVeiculo(atributoKey, nivelAtual) {
+    const base = custoUpgradeVeiculoTabela(atributoKey, 1);
+    if (!base) return null;
+    const multiplicador = Math.max(1, Number(nivelAtual) || 0);
+    return {
+        preco: (Number(base.preco) || 0) * multiplicador,
+        materiais: (base.materiais || []).map(m => ({
+            ...m,
+            quantidade: (Number(m.quantidade) || 0) * multiplicador
+        }))
+    };
+}
+
+// Kit de Ferramentas de Criação (geral, manual pg. 71 — mesmo item que
+// já serve pra Explosivos/Armeiro/Ofícios Utilitários/Eletrônica, ver
+// ehFerramentaCriacaoGeral em dados-manual.js) precisa ter nível >= o
+// nível envolvido na ação: o nível-ALVO no upgrade, o nível ATUAL no
+// reparo. Não é um valor fixo (por isso não é uma constante, é uma
+// checagem parametrizada) — devolve true se ALGUM item do inventário
+// da ficha atende.
+export function veiculoTemKitFerramentasSuficiente(fichaAtual, nivelNecessario) {
+    const inventario = (fichaAtual && fichaAtual.inventario) || {};
+    const necessario = Number(nivelNecessario) || 0;
+    return Object.values(inventario).some(it =>
+        it && ehFerramentaCriacaoGeral(it.tag) && (Number(it.nivelTag) || 0) >= necessario
+    );
+}
+
+// Remove só as deteriorações de UM atributo específico (usado quando
+// esse atributo é reparado com sucesso — manual pg. 39, "some quando o
+// veículo é consertado"). Deteriorações de OUTROS atributos continuam
+// intactas — cada uma é reparada separadamente, uma de cada vez.
+export function zerarDeterioracoesDoAtributoVeiculo(deterioracoes, atributoKey) {
+    return (deterioracoes || []).filter(d => !(d && d.atributo === atributoKey));
+}
+
+// =====================================================================
+// MANOBRAS DE VEÍCULO (manual pg. 41) — Fase 4 do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 4"). Catálogo de dados em
+// MANOBRAS_VEICULO (dados-manual.js) — aqui só a lógica em cima dele.
+// =====================================================================
+
+// Confere os requisitos NUMÉRICOS de uma manobra (manobra.requisitos)
+// contra o nível EFETIVO de cada atributo do veículo (já descontando
+// deteriorações e somando bônus temporários — mesma régua usada em
+// todo o resto do sistema, ver atributoEfetivoVeiculo acima). Não
+// confere manobra.requisitoExtra (Totozinho: "Velocidade igual à do
+// outro veículo") — isso não tem como automatizar sem o outro veículo
+// em cena, fica só como aviso textual na UI.
+// Devolve { atende, faltando: [{ atributo, necessario, atual }] }.
+export function veiculoAtendeRequisitosManobra(atributos, deterioracoes, bonusTemporarios, manobra) {
+    const faltando = [];
+    Object.entries((manobra && manobra.requisitos) || {}).forEach(([chave, minimo]) => {
+        const necessario = Number(minimo) || 0;
+        const atual = atributoEfetivoVeiculo(chave, atributos, deterioracoes, bonusTemporarios);
+        if (atual < necessario) faltando.push({ atributo: chave, necessario, atual });
+    });
+    return { atende: faltando.length === 0, faltando };
+}
+
+// Decide o efeito MECÂNICO automático (dano numérico ou bônus de
+// atributo) de uma manobra a partir do resultado do teste de Dirigir
+// Veículos — só as manobras com `efeitoMecanico` preenchido
+// (dados-manual.js: hoje, Cavalo de Pau e Drift) têm algo pra aplicar
+// aqui; as demais (Grau, Corredor, Arranque(Comum), Totozinho, Retorno)
+// devolvem { tipo: "nenhum" } — o efeito delas é só texto/narrativo ou
+// depende de outra rolagem/entidade fora do que dá pra automatizar.
+// `resultadoTeste` é o retorno de rolarERegistrar (precisa ter
+// `sucesso` e `criticoNegativo`).
+export function resolverEfeitoManobra(manobra, resultadoTeste) {
+    const efeito = manobra && manobra.efeitoMecanico;
+    if (!efeito) return { tipo: "nenhum" };
+    const { sucesso, criticoNegativo } = resultadoTeste || {};
+    let entrada = null;
+    if (criticoNegativo && efeito.falhaCritica) entrada = efeito.falhaCritica;
+    else if (!sucesso && efeito.falha) entrada = efeito.falha;
+    else if (sucesso && efeito.sucesso) entrada = efeito.sucesso;
+    return entrada ? { ...entrada } : { tipo: "nenhum" };
+}
+
+// =====================================================================
+// CORRIDA E PERSEGUIÇÃO (manual pg. 42) — Fase 7a do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 7"). Só a lógica que NÃO
+// depende dos números ainda não preenchidos em TABELA_PONTUACAO_FUGA
+// (dados-manual.js) fica 100% funcional agora; a que depende (pontos
+// por resultado) devolve null enquanto a tabela estiver vazia, mesmo
+// padrão de custoUpgradeVeiculoTabela.
+// =====================================================================
+
+// Resultado (total da rolagem de Dirigir Veículos contra a dificuldade
+// combinada na mesa) → pontos ganhos na volta, por faixa de
+// TABELA_PONTUACAO_FUGA, mais o bônus "+1 ponto extra por +2 acima de
+// 20" do manual, aplicado por cima da faixa encontrada. Devolve null
+// se a tabela ainda não tiver nenhuma faixa cadastrada (placeholder) —
+// a UI (ficha.js) trata null como "dados ainda não cadastrados" e não
+// deixa a rolagem virar pontuação sozinha.
+export function pontosPorResultadoTesteFuga(resultado) {
+    if (!TABELA_PONTUACAO_FUGA.length) return null;
+    const valor = Number(resultado) || 0;
+    const faixa = TABELA_PONTUACAO_FUGA.find(f => valor >= f.min && (f.max === null || valor <= f.max));
+    if (!faixa || faixa.pontos === null || faixa.pontos === undefined) return null;
+    const bonusAcimaDe20 = valor > 20 ? Math.floor((valor - 20) / 2) : 0;
+    return faixa.pontos + bonusAcimaDe20;
+}
+
+// Compara a soma de pontos de cada lado ao fim das voltas necessárias,
+// descontando -2 por cada rota de fuga encontrada (manual pg. 42) do
+// TOTAL DO LADO ADVERSÁRIO — achar uma rota de fuga representa uma
+// vantagem contra quem está perseguindo/sendo perseguido (ex.: o
+// perseguido que escapa por uma rota alternativa atrapalha o avanço do
+// perseguidor). Mesma regra descrita em toda a UI (ficha.js, "cada uma
+// vale -2 pontos pro lado adversário no total final") e no comentário
+// de perseguicaoAtiva/rotasFuga em mestre.js — CORRIGIDO aqui: a
+// versão anterior descontava do próprio lado que encontrou a rota, o
+// oposto do que o resto do sistema já documentava e mostrava na tela.
+// Devolve { vencedor: "perseguido" | "perseguidor" | "empate",
+// pontosPerseguido, pontosPerseguidor }. `rotasFugaEncontradasPorLado`
+// é opcional — { perseguido: number, perseguidor: number } — default 0
+// pros dois lados. Fase 7c grava esse contador em
+// perseguicaoAtiva/rotasFuga (mestre.js,
+// registrarTentativaRotaFugaPerseguicao); Fase 7d passa
+// `perseguicaoAtiva.rotasFuga` direto aqui ao fim da corrida.
+export function vencedorPerseguicao(perseguicaoAtiva, rotasFugaEncontradasPorLado = {}) {
+    const participantes = Object.values((perseguicaoAtiva && perseguicaoAtiva.participantes) || {});
+    const somaLado = (lado) => participantes.filter(p => p.lado === lado).reduce((soma, p) => soma + (Number(p.pontos) || 0), 0);
+    const penalidadeRotaFuga = (lado) => 2 * (Number(rotasFugaEncontradasPorLado[lado]) || 0);
+
+    // A penalidade de UM lado sai do total do lado OPOSTO.
+    const pontosPerseguido = somaLado("perseguido") - penalidadeRotaFuga("perseguidor");
+    const pontosPerseguidor = somaLado("perseguidor") - penalidadeRotaFuga("perseguido");
+
+    let vencedor = "empate";
+    if (pontosPerseguido > pontosPerseguidor) vencedor = "perseguido";
+    else if (pontosPerseguidor > pontosPerseguido) vencedor = "perseguidor";
+
+    return { vencedor, pontosPerseguido, pontosPerseguidor };
 }
 
 // =====================================================================

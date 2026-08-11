@@ -9,7 +9,7 @@
 // "livre legada" — não aparecem mais pra criação de novas, mas o
 // registro existente continua editável/visível.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, TIPOS_VEICULO, ehContainer } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, TIPOS_VEICULO, ehContainer, buscarAcessorioVeiculo } from "./dados-manual.js";
 import { deltaModificadoresOverrideNpc } from "./npc-detalhado.js";
 
 // Saldos fixos padrão de toda ficha nova. `fixo: true` marca os que não
@@ -192,6 +192,89 @@ function normalizarTipoVeiculo(tipo) {
     return TIPOS_VEICULO_VALIDOS.includes(tipo) ? tipo : "pessoal";
 }
 
+// Vida do veículo (manual pg. 39, Fase 2 — ver plano-veiculos-fase2.txt):
+// `pvAtual` segue exatamente a mesma convenção já usada em
+// dados.pvAtual da ficha do personagem — null/undefined = "cheio"
+// (equivale ao pvMaxVeiculo(protecao) calculado na hora, não um valor
+// fixo gravado), só passa a guardar um número quando o veículo já
+// tomou dano de verdade. Isso evita ter que "inicializar" pvAtual em
+// todo veículo já existente só porque a Fase 2 chegou.
+function normalizarPvAtualVeiculo(valor) {
+    if (valor === null || valor === undefined) return null;
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : null;
+}
+
+// `deterioracoes`: array de { atributo, valor } — cada entrada é um -1
+// isolado (não um total já somado), pra ficar fácil zerar só as
+// deteriorações de UM atributo específico quando ele for reparado
+// (Fase 3), sem mexer nas dos outros atributos. Entradas malformadas
+// (sem atributo válido ou sem valor numérico) são descartadas — o
+// mesmo espírito defensivo do resto desta função: nunca deixar lixo de
+// edição manual no Firebase quebrar o cálculo.
+function normalizarDeterioracoesVeiculo(lista) {
+    if (!Array.isArray(lista)) return [];
+    return lista
+        .filter(d => d && ATRIBUTOS_VEICULO.includes(d.atributo) && Number.isFinite(Number(d.valor)))
+        .map(d => ({ atributo: d.atributo, valor: Number(d.valor) }));
+}
+
+// `bonusTemporarios` (Fase 4 do plano — ver plano-veiculos-fase2.txt,
+// seção "FASE 4"): array de { atributo, valor, motivo, criadoEm } —
+// bônus de manobra "por uma cena" (ex.: Cavalo de Pau, Drift). Mesmo
+// espírito defensivo de normalizarDeterioracoesVeiculo: entrada sem
+// atributo válido ou sem valor numérico é descartada. Fica de fora até
+// alguma manobra aplicar um (nunca precisa ser "inicializado").
+function normalizarBonusTemporariosVeiculo(lista) {
+    if (!Array.isArray(lista)) return [];
+    return lista
+        .filter(b => b && ATRIBUTOS_VEICULO.includes(b.atributo) && Number.isFinite(Number(b.valor)))
+        .map(b => ({
+            atributo: b.atributo,
+            valor: Number(b.valor),
+            motivo: b.motivo || "",
+            criadoEm: b.criadoEm || Date.now()
+        }));
+}
+
+// `acessoriosInstalados` (Fase 5a do plano — ver
+// plano-acessorios-veiculo.txt; catálogo em si é a Fase 5b): array de
+// { key, instaladoEm, usadoNestaCena } pros acessórios passivos do
+// catálogo (CATALOGO_ACESSORIOS_VEICULO, dados-manual.js). Os 3
+// acessórios-arma (Fase 5c) NÃO entram neste array — vivem como item
+// de inventário normal com `item.instaladoEmVeiculoId` apontando pro
+// veículo. Entrada sem `key` (string não vazia) é descartada — mesmo
+// espírito defensivo do resto deste arquivo. Entrada com `key` que não
+// bate com NENHUM acessório do catálogo atual também é descartada (ex.:
+// catálogo mudou depois de instalado) — mais seguro que deixar um
+// `nivel: 0` fantasma comendo 0 slots mas aparecendo na lista.
+//
+// `nivel` é resolvido AQUI, a cada normalização, a partir do catálogo
+// atual (nunca gravado no Firebase) — assim slotsAcessoriosUsados
+// (regras.js) só precisa ler `.nivel` de cada entrada sem se importar
+// se ela veio do catálogo passivo ou (futuramente) de outro lugar, e o
+// número nunca fica dessincronizado do catálogo.
+//
+// `usadoNestaCena`: só relevante pros acessórios com
+// mecanica === "uma_vez_por_cena" (IA de Bordo, Lança Fumaça) — o
+// Mestre zera manualmente ao trocar de cena (botão "Resetar usos",
+// mesmo espírito do "Limpar" de bonusTemporarios).
+function normalizarAcessoriosInstaladosVeiculo(lista) {
+    if (!Array.isArray(lista)) return [];
+    return lista
+        .filter(a => a && typeof a.key === "string" && a.key.trim() !== "")
+        .map(a => {
+            const doCatalogo = buscarAcessorioVeiculo(a.key);
+            return doCatalogo ? {
+                key: a.key,
+                nivel: doCatalogo.nivel,
+                instaladoEm: Number.isFinite(Number(a.instaladoEm)) ? Number(a.instaladoEm) : Date.now(),
+                usadoNestaCena: a.usadoNestaCena === true
+            } : null;
+        })
+        .filter(Boolean);
+}
+
 export function normalizarVeiculos(lista) {
     const out = {};
     if (!lista) return out;
@@ -206,6 +289,17 @@ export function normalizarVeiculos(lista) {
             nome: v.nome || "",
             tipo: normalizarTipoVeiculo(v.tipo),
             atributos,
+            // Vida do veículo (Fase 2 do plano) — ver comentários das
+            // funções normalizarPvAtualVeiculo/normalizarDeterioracoesVeiculo
+            // logo acima.
+            pvAtual: normalizarPvAtualVeiculo(v.pvAtual),
+            deterioracoes: normalizarDeterioracoesVeiculo(v.deterioracoes),
+            // Bônus temporário de manobra (Fase 4 — ver comentário de
+            // normalizarBonusTemporariosVeiculo logo acima).
+            bonusTemporarios: normalizarBonusTemporariosVeiculo(v.bonusTemporarios),
+            // Slots de acessórios/armamento (Fase 5a — ver comentário de
+            // normalizarAcessoriosInstaladosVeiculo logo acima).
+            acessoriosInstalados: normalizarAcessoriosInstaladosVeiculo(v.acessoriosInstalados),
             criadoEm: v.criadoEm || Date.now(),
             // Trava física (ver plano-veiculos.txt, adendo "chave"):
             // veículo criado pela feature nova já nasce trancado (só
@@ -224,7 +318,27 @@ export function normalizarVeiculos(lista) {
             // não por esse id — assim, mesmo se esse item específico
             // for perdido e outro for criado manualmente com o mesmo
             // veiculoId, o destrave continua funcionando.
-            chaveItemId: v.chaveItemId || null
+            chaveItemId: v.chaveItemId || null,
+            // "Aparecer no Cenário" (Fase 6 do plano — ver
+            // plano-veiculos-fase2.txt, seção "FASE 6"): cenarioId aponta
+            // pro cenário onde este veículo está presente agora (null =
+            // "guardado", fora de cena — estado padrão). cenarioEntryId
+            // guarda a push key da entrada-ponteiro correspondente em
+            // cenarios/{cenarioId}/veiculos/{cenarioEntryId}, pra
+            // remover/atualizar sem precisar procurar em todos os
+            // cenários (ver aparecerVeiculoNoCenario/removerVeiculoDoCenario,
+            // mestre.js).
+            cenarioId: v.cenarioId || null,
+            cenarioEntryId: v.cenarioEntryId || null,
+            // "Quem destrancou por último" (Fase 6, item 4 — ver
+            // plano-veiculos-fase2.txt, seção "FASE 6"): registro simples
+            // de texto pra apoiar a narração de um roubo (Arrombar bem-
+            // sucedido) — gravado por definirTrancaVeiculoJogador
+            // (mestre.js) sempre que o Mestre destranca o veículo de
+            // outro dono pelo Gerenciador de Cenário. Não tem relação
+            // nenhuma com a chave física de verdade (chaveItemId acima),
+            // que continua sempre com o dono original.
+            ultimoADestrancar: v.ultimoADestrancar || null
         };
     }
     return out;
@@ -429,7 +543,20 @@ export function normalizarInventario(lista) {
             // padrão de referência cruzada que dentroDe usa pra
             // recipientes). Mesma classe de bug do materialTipo/ehSaldo
             // se esquecido aqui — teria sido apagado a cada recarga.
-            veiculoId: it.veiculoId || null
+            veiculoId: it.veiculoId || null,
+            // Acessório-arma montado no veículo (tag "arma" — Fase 5c do
+            // plano, ver plano-acessorios-veiculo.txt, seção "FASE 5c"):
+            // ponteiro pro veículo onde este item está instalado, mesmo
+            // espírito do `veiculoId` da chave acima (referência cruzada,
+            // não cópia) — null = "na mão"/guardado, fora de qualquer
+            // veículo. Mesma classe de bug do materialTipo/ehSaldo se
+            // esquecido aqui.
+            instaladoEmVeiculoId: it.instaladoEmVeiculoId || null,
+            // Onde no carro a arma fica (texto livre — "traseira",
+            // "teto", "torreta" etc.): o manual só dá exemplos, não uma
+            // lista fechada de posições, então não vira enum. Só
+            // informativo pra UI, sem efeito mecânico.
+            slotVeiculo: it.slotVeiculo || null
         };
     }
     return out;

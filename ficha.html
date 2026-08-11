@@ -49,6 +49,10 @@
                 <input type="checkbox" id="chk-godmode-ignorar-saude">
                 Ignorar penalidade de Machucado/Muito Machucado (requer Godmode ativo)
             </label>
+            <label class="godmode-toggle">
+                Ajuste de preço de materiais — veículos (%)
+                <input type="number" id="input-fator-preco-materiais-veiculo" value="0" step="1" style="width:70px;margin-left:8px;" title="Percentual somado/subtraído ao CN$ de referência de Melhorar/Reparar veículo (Fase 3). 0 = preço padrão do manual. Ex.: 20 = +20%, -10 = -10%. Não muda os materiais consumidos, só o valor em dinheiro mostrado como referência.">
+            </label>
         </div>
         <div id="mestre-corpo-topo" class="mestre-corpo-topo" style="display:none;">
             <span id="mestre-corpo-titulo"></span>
@@ -635,6 +639,13 @@
             <label for="modal-nivel-tag">Nível da tag</label>
             <select id="modal-nivel-tag"></select>
         </div>
+        <div class="modal-field" id="modal-campo-instalar-veiculo" style="display:none;">
+            <label for="modal-instalar-veiculo">Instalar em veículo (opcional)</label>
+            <select id="modal-instalar-veiculo">
+                <option value="">-- não montada em nenhum veículo --</option>
+            </select>
+            <p class="hint">Acessório-arma (Truck Pistol, Metralhadora de Teto, Torreta Tática — manual pg. 37-38): monta esta arma no veículo escolhido, consumindo slots iguais ao Nível da tag acima. Só lista veículos com slot livre suficiente (ou o veículo onde ela já está montada, se for o caso). Disparo continua igual ao de qualquer arma — sem regra nova, só o item "morar" no carro em vez de na mão.</p>
+        </div>
         <div class="modal-field" id="modal-campo-equipavel" style="display:none;">
             <label class="checkbox-inline">
                 <input type="checkbox" id="modal-equipavel">
@@ -743,6 +754,12 @@
         <div class="modal-field" id="modal-campo-categoria-item" style="display:none;">
             <label for="modal-categoria-item">Categoria do inventário</label>
             <select id="modal-categoria-item"></select>
+        </div>
+        <div class="modal-field" id="modal-campo-categoria-banco" style="display:none;">
+            <label for="modal-categoria-banco">Categoria (opcional)</label>
+            <input type="text" id="modal-categoria-banco" list="modal-categoria-banco-datalist" placeholder="Ex.: Capangas, Armas de fogo...">
+            <datalist id="modal-categoria-banco-datalist"></datalist>
+            <p class="hint">Usada pra filtrar a Biblioteca de Itens depois. Digite uma categoria já existente ou crie uma nova.</p>
         </div>
         <div class="modal-field" id="modal-campo-ja-equipar" style="display:none;">
             <label class="checkbox-inline">
@@ -1050,6 +1067,9 @@
     <div class="modificador-row">
         <select class="mod-alvo"></select>
         <input type="number" class="mod-valor" placeholder="+/-" value="0">
+        <label class="checkbox-inline mod-ocasional-label" title="Em vez de valer sempre, esse modificador vira um checkbox na própria perícia — o jogador liga só quando a situação especial da especialização/vantagem realmente se aplica.">
+            <input type="checkbox" class="mod-ocasional"> Ocasião especial
+        </label>
         <button class="mod-remover btn-red" type="button" title="Remover">×</button>
     </div>
 </template>

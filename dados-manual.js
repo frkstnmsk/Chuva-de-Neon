@@ -1924,13 +1924,43 @@ export const ESCALAS_VEICULO = {
             { nivel: 4, efeito: "seu carro está mexidíssimo — +2 para drifts, +2 em rolagens de fuga e corridas", preco: 221000 },
             { nivel: 5, efeito: "o carro mexido da porra — +3 para drifts, +3 em rolagens de fuga e corridas", preco: 475000 }
         ]
+    },
+    // Fase 5a do plano (ver plano-acessorios-veiculo.txt): o manual (pg.
+    // 37) cita "Acessórios" como um dos atributos do veículo, mas nunca
+    // fecha uma escala 0-5 com efeito por nível nem uma tabela de preço
+    // (diferente dos cinco acima). Seguindo a leitura (A) do plano: o
+    // nível deste atributo É a capacidade total de slots do veículo — o
+    // efeito de cada nível é só "N slots disponíveis", sem efeito
+    // mecânico próprio além disso (o efeito de verdade vem do que for
+    // instalado, catálogo da Fase 5b). `preco: null` em toda linha —
+    // sem tabela publicada, custo de subir o nível fica "a combinar com
+    // o narrador" (mesmo tratamento de Explosivos/Química, pg. 82).
+    acessorios: {
+        label: "Acessórios",
+        descricao: "Slots disponíveis para instalar acessórios e armamento no veículo. Cada acessório consome slots iguais ao seu próprio nível.",
+        niveis: [
+            { nivel: 0, efeito: "0 slots disponíveis para acessórios/armamento", preco: null },
+            { nivel: 1, efeito: "1 slot disponível para acessórios/armamento", preco: null },
+            { nivel: 2, efeito: "2 slots disponíveis para acessórios/armamento", preco: null },
+            { nivel: 3, efeito: "3 slots disponíveis para acessórios/armamento", preco: null },
+            { nivel: 4, efeito: "4 slots disponíveis para acessórios/armamento", preco: null },
+            { nivel: 5, efeito: "5 slots disponíveis para acessórios/armamento", preco: null }
+        ]
     }
 };
 
 // Lista fechada das chaves de atributo de veículo, na mesma ordem do
 // manual — usada pra iterar (formulário do Mestre, soma da
 // manutenção) sem depender da ordem de inserção do objeto.
-export const ATRIBUTOS_VEICULO = ["velocidade", "eficiencia", "protecao", "capacidadeCarga", "controle"];
+//
+// "acessorios" entra nesta lista de propósito (Fase 5a) pra herdar de
+// graça toda a UI/normalização genérica que já itera ATRIBUTOS_VEICULO
+// (clamp de nível em normalizarVeiculos, atributoEfetivoVeiculo, o
+// card padrão da aba Veículos, o modal de "Melhorar"). As DUAS exceções
+// são valorTotalVeiculo e valorManutencaoVeiculo (regras.js), que
+// excluem "acessorios" explicitamente — esse atributo não tem preço
+// por nível (preco: null acima), então não entra nessas somas.
+export const ATRIBUTOS_VEICULO = ["velocidade", "eficiencia", "protecao", "capacidadeCarga", "controle", "acessorios"];
 
 export function rotuloAtributoVeiculo(atributoKey) {
     const escala = ESCALAS_VEICULO[atributoKey];
@@ -1954,4 +1984,461 @@ export function nivelVeiculo(atributoKey, nivel) {
 export function precoNivelVeiculo(atributoKey, nivel) {
     const entrada = nivelVeiculo(atributoKey, nivel);
     return entrada ? entrada.preco : 0;
+}
+
+// =====================================================================
+// REPARO E UPGRADE DE ATRIBUTO — "ir ao mecânico" (manual pg. 38-39) —
+// Fase 3 do plano (ver plano-veiculos-fase2.txt).
+// =====================================================================
+//
+// Tabela preenchida com os valores do manual (pg. 38-39, seção
+// "Aumentando atributos e confeccionando veículo"). Nenhum material
+// tem tier mínimo especificado nessa seção do manual — por isso
+// `qualidade: null` em toda linha (qualquer tier do material serve).
+//
+// Formato: por atributo (chaves de ATRIBUTOS_VEICULO), um array de 5
+// posições — índice 0 = custo pra subir DO nível 0 PRO nível 1, índice
+// 1 = de 1 pro 2, ..., índice 4 = de 4 pro 5 (ou seja, índice =
+// nivelAlvo - 1; ver custoUpgradeVeiculoTabela abaixo, que já esconde
+// essa conta de quem consome a tabela). Cada entrada preenchida deve
+// ter o formato:
+//   { preco: number, materiais: [{ material: string (nome batendo
+//     com MATERIAIS_CRIACAO acima), qualidade: string|null (tier
+//     mínimo exigido, ou null = qualquer tier serve), quantidade:
+//     number }] }
+//
+// A dificuldade do teste NÃO mora aqui — é calculada por fórmula (11 +
+// nível-alvo do manual pg. 38) em dificuldadeUpgradeVeiculo (regras.js),
+// não é um dado de tabela.
+//
+// Reparo (manual pg. 39) NÃO tem tabela própria: reaproveita a receita
+// de subir "1 nível" (índice 0, ou seja, a receita de comprar o nível
+// 1) e multiplica a quantidade de cada material pelo nível ATUAL do
+// atributo — ver custoReparoVeiculo em regras.js. Preencher só esta
+// tabela de upgrade já é suficiente pros dois fluxos funcionarem.
+export const CUSTOS_UPGRADE_VEICULO = {
+    velocidade: [
+        { preco: 7000, materiais: [{ material: "Eletrônico", qualidade: null, quantidade: 10 }, { material: "Metal pesado", qualidade: null, quantidade: 10 }] },
+        { preco: 14000, materiais: [{ material: "Eletrônico", qualidade: null, quantidade: 20 }, { material: "Metal pesado", qualidade: null, quantidade: 20 }] },
+        { preco: 40000, materiais: [{ material: "Eletrônico", qualidade: null, quantidade: 40 }, { material: "Metal pesado", qualidade: null, quantidade: 30 }] },
+        { preco: 115000, materiais: [{ material: "Eletrônico", qualidade: null, quantidade: 60 }, { material: "Metal pesado", qualidade: null, quantidade: 20 }, { material: "Material especial", qualidade: null, quantidade: 15 }] },
+        { preco: 207000, materiais: [{ material: "Eletrônico", qualidade: null, quantidade: 100 }, { material: "Metal pesado", qualidade: null, quantidade: 15 }, { material: "Material especial", qualidade: null, quantidade: 20 }] }
+    ],
+    eficiencia: [
+        { preco: 8750, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 5 }, { material: "Eletrônico avançado", qualidade: null, quantidade: 5 }, { material: "Material especial", qualidade: null, quantidade: 1 }] },
+        { preco: 26250, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 15 }, { material: "Eletrônico avançado", qualidade: null, quantidade: 15 }, { material: "Material especial", qualidade: null, quantidade: 3 }] },
+        { preco: 55000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 20 }, { material: "Eletrônico avançado", qualidade: null, quantidade: 20 }, { material: "Material especial", qualidade: null, quantidade: 5 }] },
+        { preco: 293000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 70 }, { material: "Eletrônico avançado", qualidade: null, quantidade: 60 }, { material: "Material especial", qualidade: null, quantidade: 40 }] },
+        { preco: 775000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 150 }, { material: "Eletrônico avançado", qualidade: null, quantidade: 100 }, { material: "Material especial", qualidade: null, quantidade: 80 }] }
+    ],
+    protecao: [
+        { preco: 40150, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 30 }, { material: "Metal leve", qualidade: null, quantidade: 1 }, { material: "Material especial", qualidade: null, quantidade: 5 }] },
+        { preco: 100750, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 100 }, { material: "Metal leve", qualidade: null, quantidade: 5 }, { material: "Material especial", qualidade: null, quantidade: 10 }] },
+        { preco: 274500, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 150 }, { material: "Metal leve", qualidade: null, quantidade: 15 }, { material: "Material especial", qualidade: null, quantidade: 30 }] },
+        { preco: 466000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 200 }, { material: "Metal leve", qualidade: null, quantidade: 20 }, { material: "Material especial", qualidade: null, quantidade: 60 }] },
+        { preco: 750000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 400 }, { material: "Metal leve", qualidade: null, quantidade: 50 }, { material: "Material especial", qualidade: null, quantidade: 1 }] }
+    ],
+    capacidadeCarga: [
+        { preco: 10000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 20 }] },
+        { preco: 25000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 50 }] },
+        { preco: 240000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 300 }] },
+        { preco: 320000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 400 }] },
+        { preco: 900000, materiais: [{ material: "Metal pesado", qualidade: null, quantidade: 500 }] }
+    ],
+    controle: [
+        { preco: 5750, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 5 }, { material: "Material especial", qualidade: null, quantidade: 1 }] },
+        { preco: 17250, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 15 }, { material: "Material especial", qualidade: null, quantidade: 3 }] },
+        { preco: 31000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 20 }, { material: "Material especial", qualidade: null, quantidade: 5 }] },
+        { preco: 221000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 70 }, { material: "Material especial", qualidade: null, quantidade: 40 }] },
+        { preco: 475000, materiais: [{ material: "Metal leve", qualidade: null, quantidade: 150 }, { material: "Material especial", qualidade: null, quantidade: 80 }] }
+    ],
+    // Fase 5a (plano-acessorios-veiculo.txt): sem tabela no manual —
+    // preço a combinar com o narrador (mesmo tratamento dado a
+    // Explosivos por pontos de material, pg. 82). Array vazio de
+    // propósito: custoUpgradeVeiculoTabela("acessorios", nivelAlvo)
+    // devolve null pra qualquer nível (nenhum índice preenchido), e
+    // motivoMecanicoVeiculoIndisponivel (ficha.js) já sabe mostrar
+    // "custo ainda não cadastrado, fale com o Mestre" e desabilitar o
+    // botão "Melhorar" quando custo é null — sem precisar de nenhum
+    // código novo. O Mestre pode setar `atributos.acessorios` na mão
+    // (mesmo caminho de edição direta que qualquer atributo de veículo
+    // já usa) se quiser liberar slots sem passar pelo fluxo de compra.
+    acessorios: []
+};
+
+// Lookup de conveniência: nivelAlvo vai de 1 a 5 (não existe "upgrade
+// pro nível 0"). Devolve null se o atributo não existir na tabela OU
+// se a linha daquele nível ainda não tiver sido preenchida (placeholder).
+export function custoUpgradeVeiculoTabela(atributoKey, nivelAlvo) {
+    const lista = CUSTOS_UPGRADE_VEICULO[atributoKey];
+    if (!lista) return null;
+    const idx = Number(nivelAlvo) - 1;
+    if (idx < 0 || idx > 4) return null;
+    return lista[idx] || null;
+}
+
+// Perícias que o manual permite usar pra ir ao mecânico (upgrade ou
+// reparo) — a critério do narrador, exatamente como Ferramenta de
+// Criação geral já permite escolher entre várias perícias na hora de
+// usar (ver PERICIAS_FERRAMENTA_CRIACAO acima). Mecânica Automotiva é
+// a "óbvia"; Ofícios Utilitários serve de alternativa genérica.
+export const PERICIAS_MECANICO_VEICULO = ["Mecânica Automotiva", "Ofícios Utilitários"];
+
+// =====================================================================
+// CATÁLOGO DE ACESSÓRIOS DE VEÍCULO (manual pg. 37-38) — Fase 5b do
+// plano (ver plano-acessorios-veiculo.txt).
+// =====================================================================
+//
+// Os 9 acessórios NÃO-armados do manual. Os outros 3 (Truck Pistol,
+// Metralhadora de Teto, Torreta Tática) SÃO armas de verdade e vivem
+// como item de inventário comum (tag "arma") em vez de entrar aqui —
+// ver Fase 5c do plano, ainda não implementada.
+//
+// Cada entrada:
+//   key         — id estável (usado em acessoriosInstalados, nunca muda)
+//   nome        — texto exibido na UI
+//   nivel       — 1 a 5, direto do manual
+//   slots       — quantos slots ocupa ao instalar; É SEMPRE igual a
+//                 `nivel` (manual: "cada acessório consome slots iguais
+//                 ao seu nível") — campo redundante de propósito, só pra
+//                 deixar explícito na leitura do código sem precisar
+//                 lembrar a regra geral toda vez que este catálogo for
+//                 lido.
+//   descricao   — efeito direto do manual.
+//   mecanica    — como a Fase 5d (UI) decide o que desenhar:
+//     "passivo"              — só texto, efeito fica a critério do
+//                               narrador na hora que a situação surgir.
+//                               Nenhum botão de ação.
+//     "teste_dif_fixa"        — tem uma dificuldade fixa própria
+//                               (`dificuldade` + `periciaTeste` abaixo)
+//                               e ganha um botão "🎲 Testar" que rola
+//                               essa perícia da PRÓPRIA ficha contra
+//                               essa dificuldade (ver
+//                               rolarTesteAcessorioVeiculo, ficha.js).
+//                               Óleo e Cospe Prego impõem a dificuldade
+//                               a QUEM PERSEGUE, não a quem instalou —
+//                               fora de uma Perseguição ativa (Fase 7)
+//                               em que dê pra automatizar de quem é a
+//                               rolagem, o botão serve de atalho/registro
+//                               no Log; o Mestre decide manualmente quem
+//                               rola contra essa mesma dificuldade
+//                               quando o alvo é outro personagem.
+//     "uma_vez_por_cena"      — tem "usos": campo `usadoNestaCena` (bool)
+//                               em cima da entrada de acessoriosInstalados
+//                               (ver normalizarAcessoriosInstaladosVeiculo,
+//                               normalizacao.js), Mestre zera manualmente
+//                               ao trocar de cena — mesmo padrão simples
+//                               de bonusTemporarios (Fase 4), sem cron job.
+//   dificuldade   — só presente quando mecanica === "teste_dif_fixa".
+//   periciaTeste  — idem; nome batendo com PERICIAS_MANUAL.
+//
+// Preço de aquisição: NENHUM dos 9 tem preço em CN$ publicado no manual
+// (diferente dos 5 atributos numéricos) — fica a critério do narrador em
+// toda instalação, mesmo tratamento "a combinar" já usado no upgrade do
+// atributo Acessórios (ver CUSTOS_UPGRADE_VEICULO.acessorios acima).
+export const CATALOGO_ACESSORIOS_VEICULO = [
+    {
+        key: "oleo",
+        nome: "Óleo",
+        nivel: 1,
+        slots: 1,
+        descricao: "Espalha óleo na pista atrás do veículo. Quem estiver perseguindo precisa passar em um teste de Dirigir Veículos (dificuldade 14) ou perde o controle momentaneamente.",
+        mecanica: "teste_dif_fixa",
+        dificuldade: 14,
+        periciaTeste: "Dirigir Veículos"
+    },
+    {
+        key: "pneu-para-neve",
+        nome: "Pneu para Neve",
+        nivel: 1,
+        slots: 1,
+        descricao: "Pneus especiais que mantêm a aderência em gelo, neve e terrenos escorregadios. Efeito puramente narrativo — o narrador decide quando ele evita uma penalidade que se aplicaria de outra forma.",
+        mecanica: "passivo"
+    },
+    {
+        key: "compartimento-secreto",
+        nome: "Compartimento Secreto",
+        nivel: 1,
+        slots: 1,
+        descricao: "Um esconderijo disfarçado no veículo, difícil de encontrar numa revista comum. Efeito narrativo — o narrador decide a dificuldade de encontrá-lo caso alguém reviste o carro.",
+        mecanica: "passivo"
+    },
+    {
+        key: "para-choque-mad-max",
+        nome: "Para-choque Mad Max",
+        nivel: 2,
+        slots: 2,
+        descricao: "Um para-choque reforçado e hostil, ideal pra atropelamentos. Efeito narrativo por enquanto — quando o sistema de Combate com veículo (Fase 8/9) existir, este acessório passa a somar um bônus automático dentro de resolverEfeitoAtropelamento; até lá, o narrador aplica o bônus na mesa.",
+        mecanica: "passivo"
+    },
+    {
+        key: "no-network",
+        nome: "No Network",
+        nivel: 2,
+        slots: 2,
+        descricao: "Bloqueia sinais de celular e rádio num raio curto ao redor do veículo. Operá-lo exige um teste de Eletrônica (dificuldade 16).",
+        mecanica: "teste_dif_fixa",
+        dificuldade: 16,
+        periciaTeste: "Eletrônica"
+    },
+    {
+        key: "ia-de-bordo",
+        nome: "IA de Bordo",
+        nivel: 2,
+        slots: 2,
+        descricao: "Uma inteligência artificial simples embarcada, capaz de auxiliar o piloto ou operar sistemas do veículo (como uma Torreta Tática instalada — ver Fase 5c) de forma limitada. Uso limitado a uma vez por cena.",
+        mecanica: "uma_vez_por_cena"
+    },
+    {
+        key: "lanca-fumaca",
+        nome: "Lança Fumaça",
+        nivel: 3,
+        slots: 3,
+        descricao: "Libera uma cortina de fumaça atrás do veículo, dificultando a visão e a mira de quem está atrás. Uso limitado a uma vez por cena.",
+        mecanica: "uma_vez_por_cena"
+    },
+    {
+        key: "cospe-prego",
+        nome: "Cospe Prego",
+        nivel: 4,
+        slots: 4,
+        descricao: "Espalha uma esteira de pregos atrás do veículo. Quem estiver perseguindo precisa passar em um teste de Dirigir Veículos (dificuldade 18) ou fica seriamente prejudicado, podendo até ser deixado pra trás.",
+        mecanica: "teste_dif_fixa",
+        dificuldade: 18,
+        periciaTeste: "Dirigir Veículos"
+    },
+    {
+        key: "dispositivo",
+        nome: "Dispositivo",
+        nivel: 4,
+        slots: 4,
+        descricao: "Um espaço reservado e blindado pra transportar um dispositivo especial (explosivo, equipamento de missão, carga sensível) escondido no próprio veículo. Efeito narrativo — cabe ao narrador definir o que está instalado ali e as consequências de cada situação.",
+        mecanica: "passivo"
+    }
+];
+
+export function buscarAcessorioVeiculo(key) {
+    return CATALOGO_ACESSORIOS_VEICULO.find(a => a.key === key) || null;
+}
+
+// =====================================================================
+// MANOBRAS DE VEÍCULO (manual pg. 41) — Fase 4 do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 4").
+// =====================================================================
+//
+// Cada entrada:
+//   chave            — id estável (usado em Firebase/log, nunca muda)
+//   nome, descricao  — texto direto do manual, exibido na UI
+//   requisitos       — { <chave de ATRIBUTOS_VEICULO>: nível mínimo
+//                        EFETIVO exigido } — só as exigências
+//                        numéricas; ver requisitoExtra abaixo pras que
+//                        não são.
+//   requisitoExtra   — texto de um requisito que o manual descreve mas
+//                       que não dá pra checar automaticamente contra um
+//                       número fixo (ex.: Totozinho pede "Velocidade
+//                       igual à do perseguidor/perseguido", que depende
+//                       de OUTRO veículo em cena) — mostrado na UI como
+//                       aviso pro jogador/Mestre conferirem na mesa.
+//   dificuldade      — número fixo da dificuldade do teste de Dirigir
+//                       Veículos, OU null quando o manual não define um
+//                       valor fixo (Cavalo de Pau, Drift, Retorno — a
+//                       dificuldade real depende da cena, a critério do
+//                       Mestre). Quando null, a UI (ficha.js) pede pra
+//                       digitar a dificuldade combinada na mesa antes
+//                       de liberar o botão de rolar.
+//   turnos           — texto livre descrevendo a duração da manobra.
+//   efeitoSucesso/efeitoFalha/efeitoFalhaCritica — texto do efeito
+//                       (sempre mostrado no resultado, mesmo quando não
+//                       automatizável).
+//   efeitoMecanico   — só presente nas manobras cujo efeito é 100%
+//                       mecânico (dano numérico ou bônus de atributo) e
+//                       por isso a UI aplica sozinha (ver
+//                       resolverEfeitoManobra em regras.js). Formato:
+//                       { sucesso: { tipo: "bonusTemporario", atributo,
+//                       valor }, falha: { tipo: "dano", fracaoDano },
+//                       falhaCritica: { tipo: "dano", fracaoDano } } —
+//                       qualquer chave ausente (ex.: sem falhaCritica
+//                       definida) significa "nenhum efeito automático
+//                       nesse resultado", só o texto.
+export const MANOBRAS_VEICULO = [
+    {
+        chave: "grau",
+        nome: "Grau",
+        descricao: "Passa por cima de carros que estejam de frente para você. Manobra de no mínimo dois turnos. Primeiro teste Dirigir Veículos, dificuldade 15, para levantar a moto — nesse ponto, o piloto fica sensível a quedas e não pode esquivar. Depois de levantar, teste Dirigir Veículos, dificuldade 12, para manter a moto, ou dificuldade 16 para pular por cima de um carro.",
+        requisitos: { controle: 2, velocidade: 2, eficiencia: 2 },
+        dificuldade: 15,
+        turnos: "no mínimo 2 turnos (levantar + manter/pular)",
+        efeitoSucesso: "A moto levanta. Testes seguintes (manter: dificuldade 12; pular por cima de um carro: dificuldade 16) são rolagens separadas — role de novo aqui quando chegar a hora.",
+        efeitoFalha: "Não levanta a moto — o Mestre decide a consequência narrativa.",
+        efeitoFalhaCritica: "Não levanta a moto e sofre uma queda — o Mestre decide a consequência narrativa."
+    },
+    {
+        chave: "corredor",
+        nome: "Corredor",
+        descricao: "Passar entre fileiras de carros. Manobra de turnos variáveis. Teste Dirigir Veículos, dificuldade 13, para cada turno entre carros.",
+        requisitos: { controle: 2, velocidade: 1, eficiencia: 2 },
+        dificuldade: 13,
+        turnos: "variável — um teste por turno entre os carros",
+        efeitoSucesso: "Avança mais um turno entre os carros.",
+        efeitoFalha: "Não avança neste turno — o Mestre decide a consequência narrativa.",
+        efeitoFalhaCritica: "Bate nos carros ao lado — o Mestre decide a consequência narrativa."
+    },
+    {
+        chave: "arranqueComum",
+        nome: "Arranque Comum",
+        descricao: "Ao arrancar, reduz em um o número de turnos até a velocidade máxima. Teste Dirigir Veículos, dificuldade 15.",
+        requisitos: { eficiencia: 2, velocidade: 2, controle: 1 },
+        dificuldade: 15,
+        turnos: "1",
+        efeitoSucesso: "Reduz em 1 o número de turnos até a velocidade máxima.",
+        efeitoFalha: "Arrancada normal — sem redução de turnos.",
+        efeitoFalhaCritica: "Arrancada normal — sem redução de turnos; Mestre decide se há alguma consequência extra."
+    },
+    {
+        chave: "arranque",
+        nome: "Arranque",
+        descricao: "Ao arrancar, reduz em dois o número de turnos até a velocidade máxima. Teste Dirigir Veículos, dificuldade 16.",
+        requisitos: { controle: 4, velocidade: 2, eficiencia: 2 },
+        dificuldade: 16,
+        turnos: "1",
+        efeitoSucesso: "Reduz em 2 o número de turnos até a velocidade máxima.",
+        efeitoFalha: "Arrancada normal — sem redução de turnos.",
+        efeitoFalhaCritica: "Arrancada normal — sem redução de turnos; Mestre decide se há alguma consequência extra."
+    },
+    {
+        chave: "totozinho",
+        nome: "Totozinho",
+        descricao: "Bater em um veículo próximo para fazê-lo perder o controle. Teste Dirigir Veículos, dificuldade 15. Cada ponto extra na rolagem concede modificador –1 ao motorista vítima (máximo –3).",
+        requisitos: { controle: 3, protecao: 2 },
+        requisitoExtra: "Velocidade igual à do veículo perseguido/perseguidor (confira manualmente contra o outro veículo em cena).",
+        dificuldade: 15,
+        turnos: "1",
+        efeitoSucesso: "O motorista vítima recebe –1 no próximo teste por cada ponto acima da dificuldade (máximo –3) — aplique manualmente no teste seguinte dele.",
+        efeitoFalha: "O veículo vítima não perde o controle.",
+        efeitoFalhaCritica: "A manobra falha e pode atingir o próprio veículo — o Mestre decide a consequência."
+    },
+    {
+        chave: "cavaloDePau",
+        nome: "Cavalo de Pau",
+        descricao: "Fazer curvas fechadas e parar o carro em seguida. Teste Dirigir Veículos. Com sucesso, o carro para imediatamente após a curva e o piloto fica com +1 em Eficiência por uma cena. Com falha, o veículo para antes da curva e recebe 1/10 de dano baseado no seu total de pontos de vida. Com falha crítica, o carro capota e recebe 1/3 de dano.",
+        requisitos: { controle: 4, velocidade: 2, eficiencia: 1 },
+        dificuldade: null,
+        turnos: "1",
+        efeitoSucesso: "O carro para imediatamente após a curva. +1 em Eficiência por uma cena.",
+        efeitoFalha: "O veículo para antes da curva e recebe 1/10 de dano baseado no seu total de pontos de vida.",
+        efeitoFalhaCritica: "O carro capota e recebe 1/3 de dano.",
+        efeitoMecanico: {
+            sucesso: { tipo: "bonusTemporario", atributo: "eficiencia", valor: 1 },
+            falha: { tipo: "dano", fracaoDano: 1 / 10 },
+            falhaCritica: { tipo: "dano", fracaoDano: 1 / 3 }
+        }
+    },
+    {
+        chave: "drift",
+        nome: "Drift",
+        descricao: "Fazer curvas fechadas sem desacelerar. Teste Dirigir Veículos. Com sucesso, o veículo aumenta sua velocidade máxima em +1 após fazer a curva. Com falha, o veículo desacelera ao realizar a curva e recebe 1/10 de dano baseado no seu total de pontos de vida. Com falha crítica, o veículo capota e recebe 1/3 de dano.",
+        requisitos: { controle: 4, velocidade: 2, eficiencia: 1 },
+        dificuldade: null,
+        turnos: "1",
+        efeitoSucesso: "O veículo aumenta sua velocidade máxima em +1 após fazer a curva (por uma cena).",
+        efeitoFalha: "O veículo desacelera ao realizar a curva e recebe 1/10 de dano baseado no seu total de pontos de vida.",
+        efeitoFalhaCritica: "O veículo capota e recebe 1/3 de dano.",
+        efeitoMecanico: {
+            sucesso: { tipo: "bonusTemporario", atributo: "velocidade", valor: 1 },
+            falha: { tipo: "dano", fracaoDano: 1 / 10 },
+            falhaCritica: { tipo: "dano", fracaoDano: 1 / 3 }
+        }
+    },
+    {
+        chave: "retorno",
+        nome: "Retorno",
+        descricao: "Vira o veículo em 180 graus. A manobra demora três turnos.",
+        requisitos: { controle: 3, velocidade: 3, eficiencia: 2 },
+        dificuldade: null,
+        turnos: "3",
+        efeitoSucesso: "O veículo vira 180°.",
+        efeitoFalha: "O veículo não completa o giro — o Mestre decide a consequência narrativa.",
+        efeitoFalhaCritica: "O veículo perde o controle durante o giro — o Mestre decide a consequência narrativa."
+    }
+];
+
+export function buscarManobraVeiculo(chave) {
+    return MANOBRAS_VEICULO.find(m => m.chave === chave) || null;
+}
+
+// =====================================================================
+// CORRIDA E PERSEGUIÇÃO (manual pg. 42) — Fase 7 do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 7").
+// =====================================================================
+//
+// Tabelas preenchidas com os valores do manual (pg. 42, seções "Rotas
+// de fuga" / "Bairros e voltas necessárias (sem rotas de fuga)" /
+// "Dificuldade para Encontrar Rotas de Fuga por Bairro" / "Pontuação
+// em testes de fuga").
+//
+// BAIRROS_PERSEGUICAO: cada entrada é um "cenário" de perseguição —
+//   key                  — id estável (Firebase/log, nunca muda)
+//   label                — nome exibido na UI
+//   voltas               — number | null — quantas voltas a perseguição
+//                           dura nesse bairro
+//   dificuldadeRotaFuga  — number | null — dificuldade do teste de
+//                           Velocidade pra "Tentar rota de fuga" (manual
+//                           pg. 42), que abre mão da pontuação da volta
+//   penalidadePerseguidor — number — modificador do perseguidor nesse
+//                           bairro (manual: periferia/industrial dão
+//                           -1 ao perseguidor); 0 quando o bairro não
+//                           dá penalidade nenhuma.
+export const BAIRROS_PERSEGUICAO = [
+    { key: "periferia", label: "Periferia", voltas: 8, dificuldadeRotaFuga: 12, penalidadePerseguidor: -1 },
+    { key: "industrial", label: "Industrial", voltas: 7, dificuldadeRotaFuga: 13, penalidadePerseguidor: -1 },
+    { key: "comercial", label: "Comercial", voltas: 5, dificuldadeRotaFuga: 14, penalidadePerseguidor: 0 },
+    { key: "classeMedia", label: "Classe Média", voltas: 4, dificuldadeRotaFuga: 14, penalidadePerseguidor: 0 },
+    { key: "rico", label: "Rico", voltas: 3, dificuldadeRotaFuga: 16, penalidadePerseguidor: 0 }
+];
+
+export function bairroPerseguicao(key) {
+    return BAIRROS_PERSEGUICAO.find(b => b.key === key) || null;
+}
+
+// Helper de conveniência pra UI (ficha.js), mesmo padrão de
+// tabelaPontuacaoFugaCadastrada abaixo: true assim que o bairro tiver
+// uma dificuldadeRotaFuga cadastrada (não-null). Enquanto for null, o
+// botão "Tentar Rota de Fuga" da perseguição (Fase 7c) fica desabilitado
+// com aviso "dados ainda não cadastrados" — sem dificuldade inventada.
+export function bairroTemDificuldadeRotaFuga(bairroKeyOuBairro) {
+    const bairro = typeof bairroKeyOuBairro === "string" ? bairroPerseguicao(bairroKeyOuBairro) : bairroKeyOuBairro;
+    return !!bairro && bairro.dificuldadeRotaFuga !== null && bairro.dificuldadeRotaFuga !== undefined;
+}
+
+export function listarBairrosPerseguicao() {
+    return BAIRROS_PERSEGUICAO;
+}
+
+// TABELA_PONTUACAO_FUGA: mesma tabela dos rachas citada pelo manual
+// como igual à de perseguição — resultado do teste de Dirigir Veículos
+// (contra a dificuldade combinada na mesa) → pontos ganhos na volta,
+// incluindo "+1 ponto extra por +2 acima de 20" (aplicado à parte, ver
+// pontosPorResultadoTesteFuga em regras.js, que soma esse extra por
+// cima do valor de faixa encontrado aqui). Formato: array de faixas
+// { min, max, pontos }, checadas em ordem — `max: null` = sem teto.
+// Faixas do manual pg. 42 (a de resultado 1 é a falha crítica).
+export const TABELA_PONTUACAO_FUGA = [
+    { min: 1, max: 1, pontos: -3 },
+    { min: 2, max: 2, pontos: -2 },
+    { min: 3, max: 3, pontos: -1 },
+    { min: 4, max: 11, pontos: 0 },
+    { min: 12, max: 13, pontos: 1 },
+    { min: 14, max: 16, pontos: 2 },
+    { min: 17, max: 18, pontos: 3 },
+    { min: 19, max: 19, pontos: 4 },
+    { min: 20, max: null, pontos: 5 }
+];
+
+// Helper de conveniência pra UI (ficha.js): true assim que alguém
+// preencher pelo menos uma faixa da tabela acima. Enquanto vazia, os
+// botões de "Testar Dirigir Veículos" da perseguição (Fase 7b) ficam
+// desabilitados com aviso "dados ainda não cadastrados" — mesmo padrão
+// já usado pro upgrade de veículo.
+export function tabelaPontuacaoFugaCadastrada() {
+    return TABELA_PONTUACAO_FUGA.length > 0;
 }

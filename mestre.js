@@ -15,13 +15,14 @@ import {
     calcularDificuldadeDefesaJogador, DIFICULDADE_INFECCAO_MINIMA,
     calcularPvMaximo, avancarRecuperacaoPV, chanceFeridaPorDano,
     aplicarReducaoTratamentoHospital, deveConfirmarDesmaio, limiarAmputacaoPorDano,
-    golpeDilacera, deveTestarSangramentoProfundo, multiplicadorReducaoPorClasse, aplicarPisoDanoContundenteColete
+    golpeDilacera, deveTestarSangramentoProfundo, multiplicadorReducaoPorClasse, aplicarPisoDanoContundenteColete,
+    aplicarDanoVeiculo, zerarDeterioracoesDoAtributoVeiculo, vencedorPerseguicao
 } from "./regras.js";
 import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } from "./calendario.js";
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao } from "./dados-manual.js";
 import { itemCabeNoContainer, itemPodeSerLevadoSolto } from "./inventario.js";
 import { criarFerida } from "./saude.js";
 
@@ -127,6 +128,25 @@ export function ouvirIgnorarPenalidadeSaude(callback) {
 
 export async function definirIgnorarPenalidadeSaude(ativo) {
     await set(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")), !!ativo);
+}
+
+// ---------------------------------------------------------------------
+// Fator de preço de materiais (veículos) — toggle por mesa, mesmo padrão
+// de godmode acima. Algumas mesas encarecem o custo de materiais em
+// relação ao valor "de fábrica" do manual (CUSTOS_UPGRADE_VEICULO,
+// dados-manual.js); em vez de reescrever a tabela do manual por mesa,
+// guarda-se só um percentual de ajuste (pode ser negativo, pra mesas que
+// barateiam) aplicado por cima do preço de referência na hora de exibir.
+// Não muda em nada os MATERIAIS consumidos (Fase 3) — só o texto de CN$
+// mostrado como referência, que já era só informativo, o narrador decide
+// se cobra à parte. 0 = sem ajuste (preço padrão do manual).
+// ---------------------------------------------------------------------
+export function ouvirFatorPrecoMateriaisVeiculo(callback) {
+    return onValue(ref(db, caminhoMesa("fatorPrecoMateriaisVeiculo")), (snap) => callback(snap.exists() ? (Number(snap.val()) || 0) : 0));
+}
+
+export async function definirFatorPrecoMateriaisVeiculo(percentual) {
+    await set(ref(db, caminhoMesa("fatorPrecoMateriaisVeiculo")), Number(percentual) || 0);
 }
 
 // ---------------------------------------------------------------------
@@ -362,6 +382,30 @@ export async function causarDanoNpc(npcId, valor) {
 }
 
 // ---------------------------------------------------------------------
+// Causar dano a um VEÍCULO (manual pg. 36-43, Fase 2 do plano — ver
+// plano-veiculos-fase2.txt). Veículo ainda não é participante do
+// Gerenciador de Combate (isso é Fase 9, fora de escopo), então este é
+// o único jeito de aplicar dano nele por enquanto: endereçado por
+// fichaId+veiculoId em vez de participanteId, disparado manualmente
+// pelo Mestre (ver botão "Aplicar dano" no card do veículo, ficha.js).
+// A conta em si (redução por Proteção, PV, quantos "quintos" de PV
+// máximo foram cruzados, quais deteriorações aplicar) é toda pura em
+// aplicarDanoVeiculo (regras.js) — esta função só lê o veículo atual do
+// Firebase, chama a regra, e grava o resultado de volta.
+// ---------------------------------------------------------------------
+export async function causarDanoVeiculo(fichaId, veiculoId, danoBruto, atributoEscolhido) {
+    const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}`)));
+    if (!snap.exists()) throw new Error("Veículo não encontrado.");
+    const veiculo = snap.val();
+    const resultado = aplicarDanoVeiculo(veiculo, danoBruto, atributoEscolhido);
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}`)), {
+        pvAtual: resultado.pvAtualDepois,
+        deterioracoes: resultado.deterioracoesResultantes
+    });
+    return { ...resultado, nomeVeiculo: veiculo.nome || "Veículo" };
+}
+
+// ---------------------------------------------------------------------
 // Status por turno (Tick System) — efeitos que ficam "grudados" num
 // participante do Gerenciador de Combate e se resolvem sozinhos a cada
 // troca de turno, com contagem regressiva própria. Guardados em
@@ -537,10 +581,11 @@ export function ouvirNpcs(callback) {
 
 // Retorna o id do NPC recém-criado (usado pelo Gerenciador de Combate
 // pra já entrar direto na lista de participantes, sem passo extra).
-export async function criarNpc({ nome, pvs, periciasResumo, itensEssenciais, atributos, atributosSecundarios, agilidade, constituicao, reducoesDano }) {
+export async function criarNpc({ nome, pvs, periciasResumo, itensEssenciais, atributos, atributosSecundarios, agilidade, constituicao, reducoesDano, categoria }) {
     const novaRef = push(ref(db, caminhoMesa("npcs")));
     await set(novaRef, {
         nome: nome || "NPC sem nome",
+        categoria: categoria || "",
         pvs: Number(pvs) || 0,
         pvAtual: Number(pvs) || 0,
         periciasResumo: periciasResumo || "",
@@ -573,11 +618,15 @@ export async function excluirNpc(npcId) {
 // Reaproveita o mesmo nó `npcs/{id}` do gerador rápido — os dois
 // convivem na mesma lista, diferenciados pelo campo `modoDetalhado`.
 // ---------------------------------------------------------------------
-export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano }) {
+export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, categoria }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
     const novaRef = push(ref(db, caminhoMesa("npcs")));
     await set(novaRef, {
         nome: nome || "NPC sem nome",
+        // Categoria em texto livre, opcional — só pra busca/filtro no
+        // Painel de NPCs (plano-busca-categorias.txt, Fase A). "" =
+        // "Sem categoria" na hora de listar/filtrar.
+        categoria: categoria || "",
         pvs: secundarios.recursos.pv.valor,
         pvAtual: secundarios.recursos.pv.valor,
         periciasResumo: resumoPericiasNpc(npcDetalhado),
@@ -606,10 +655,11 @@ export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano }) {
     return novaRef.key;
 }
 
-export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoesDano, pvAtual }) {
+export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoesDano, pvAtual, categoria }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
     await update(ref(db, caminhoMesa(`npcs/${npcId}`)), {
         nome: nome || "NPC sem nome",
+        categoria: categoria || "",
         pvs: secundarios.recursos.pv.valor,
         pvAtual: pvAtual !== undefined && pvAtual !== null ? Number(pvAtual) : secundarios.recursos.pv.valor,
         periciasResumo: resumoPericiasNpc(npcDetalhado),
@@ -781,6 +831,340 @@ export async function removerVeiculoCenario(cenarioId, veiculoId) {
 // trancado:false depois de um "Arrombar" bem-sucedido — Fase 5).
 export async function editarVeiculoCenario(cenarioId, veiculoId, dados) {
     await update(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos/${veiculoId}`)), dados);
+}
+
+// ---- Veículo de JOGADOR presente num cenário (Fase 6 do plano — ver
+// plano-veiculos-fase2.txt, seção "FASE 6"). Diferente de
+// adicionarVeiculoCenario acima (cópia própria, sem dono, sempre
+// trancada), aqui a fonte de verdade continua sendo
+// fichas/{fichaId}/veiculos/{veiculoId} — a entrada em
+// cenarios/{cenarioId}/veiculos é só um PONTEIRO { origem: "jogador",
+// fichaId, veiculoId }, pra reparo/melhoria feitos por outro
+// personagem refletirem no veículo de verdade, não numa cópia solta. ----
+export async function aparecerVeiculoNoCenario(cenarioId, fichaId, veiculoId) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/veiculos`)));
+    const atualizacoes = {};
+    atualizacoes[caminhoMesa(`cenarios/${cenarioId}/veiculos/${novaRef.key}`)] = { origem: "jogador", fichaId, veiculoId };
+    atualizacoes[caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}/cenarioId`)] = cenarioId;
+    atualizacoes[caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}/cenarioEntryId`)] = novaRef.key;
+    await update(ref(db), atualizacoes);
+    return novaRef.key;
+}
+
+// Remove o veículo do cenário (some do cenário — NÃO apaga o veículo
+// de verdade, que continua existindo na ficha do dono, só "guardado").
+export async function removerVeiculoDoCenario(cenarioId, entryId, fichaId, veiculoId) {
+    const atualizacoes = {};
+    atualizacoes[caminhoMesa(`cenarios/${cenarioId}/veiculos/${entryId}`)] = null;
+    atualizacoes[caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}/cenarioId`)] = null;
+    atualizacoes[caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}/cenarioEntryId`)] = null;
+    await update(ref(db), atualizacoes);
+}
+
+// Trancar/destrancar um veículo de JOGADOR direto pelo Mestre (Gerenciador
+// de Cenário) — mesmo espírito de editarVeiculoCenario, só que escrevendo
+// no veículo de verdade (fichas/{fichaId}/veiculos/{veiculoId}) em vez da
+// cópia solta do cenário, já que aqui o veículo tem dono. Usado tanto
+// pra resolver um "Arrombar" bem-sucedido (roubo — a chave física
+// continua sendo do dono original, ver veiculoTemChaveDisponivel em
+// regras.js, só a posse física/uso imediato muda) quanto pra o Mestre
+// destrancar/trancar manualmente por narrativa.
+// destravadoPorNome (Fase 6, item 4 do plano — "quem destrancou por
+// último"): só faz sentido/é gravado quando `trancado` está virando
+// false (um destrave) — registro de texto simples pra apoiar a
+// narração do Mestre num roubo, sem relação com a chave física de
+// verdade (que continua sempre com o dono original, ver
+// veiculoTemChaveDisponivel em regras.js).
+export async function definirTrancaVeiculoJogador(fichaId, veiculoId, trancado, destravadoPorNome) {
+    const atualizacoes = { trancado };
+    if (!trancado) atualizacoes.ultimoADestrancar = destravadoPorNome || "não registrado";
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/veiculos/${veiculoId}`)), atualizacoes);
+}
+
+// =====================================================================
+// GERENCIADOR DE PERSEGUIÇÃO — Fase 7 do plano (ver
+// plano-veiculos-fase2.txt, seção "FASE 7"), construído em sub-fases
+// incrementais (mesmo espírito de plano-veiculos-fase6-NOTA.txt):
+// 7a estrutura de dados + iniciar/encerrar, 7b teste de pontuação por
+// volta, 7c rota de fuga, 7d (Manobra da Fase 4 como ação de volta +
+// anúncio do vencedor ao fim das voltas necessárias) — todas já
+// implementadas abaixo.
+//
+// Arquitetura: nó PRÓPRIO `perseguicaoAtiva`, singleton por mesa — MESMO
+// padrão de combateAtivo (onValue em tempo real, participantes
+// keyed por id), mas em nó separado de propósito: perseguição tem
+// regras de turno bem diferentes de combate (não é ordem de
+// iniciativa attack/defesa, é "todo mundo testa Dirigir Veículos por
+// volta e acumula pontos" — ver plano-veiculos-fase2.txt).
+//
+// Formato de perseguicaoAtiva:
+//   ativo:              bool
+//   cenarioId:          string — de qual cenário essa perseguição saiu
+//                        (o botão "Iniciar" só aparece com 2+ veículos
+//                        presentes nele, ver montarDetalheCenario em
+//                        ficha.js), só informativo aqui.
+//   bairro:             chave de BAIRROS_PERSEGUICAO (dados-manual.js)
+//   voltasNecessarias:  number — copiado do bairro no momento de
+//                        iniciar (não muda se a tabela for editada
+//                        depois, igual custo de item comprado)
+//   voltaAtual:         number, começa em 1
+//   participantes: {
+//     {participanteId}: {
+//       tipo: "ficha" | "npc", refId, nome,
+//       veiculoId,              // qual veículo esse piloto usa
+//       lado: "perseguido" | "perseguidor",
+//       pontos: number,         // 0 ao entrar
+//       agiuNestaVolta: bool    // já testou/tentou algo nesta volta
+//     }
+//   }
+//   log: {}                     // {entryId}: {volta, participanteId,
+//                                // resultado, pontos, texto} — Fase 7b
+//                                // (tentativa de rota de fuga, Fase 7c,
+//                                // grava tipo:"rota_fuga" + sucesso no
+//                                // lugar de pontos)
+//   rotasFuga: { perseguido: number, perseguidor: number } // Fase 7c —
+//                                // contador de rotas ENCONTRADAS (só
+//                                // sucesso soma), consumido por
+//                                // vencedorPerseguicao (regras.js)
+//   resultadoFinal: { vencedor, pontosPerseguido, pontosPerseguidor } |
+//                                // undefined — Fase 7d: gravado por
+//                                // aplicarAvancoOuFimDeVolta assim que
+//                                // voltaAtual passaria de
+//                                // voltasNecessarias. Presença deste
+//                                // campo é o sinal (ficha.js/mestre.js)
+//                                // de que a corrida acabou e só falta o
+//                                // Mestre clicar "Encerrar" pra zerar o nó.
+// =====================================================================
+
+export function ouvirPerseguicaoAtiva(callback) {
+    return onValue(ref(db, caminhoMesa("perseguicaoAtiva")), (snap) => {
+        callback(snap.exists() ? snap.val() : { ativo: false, participantes: {} });
+    });
+}
+
+// Inicia uma perseguição/corrida ligada a um cenário. `participantesEntrada`
+// é um array de { tipo, refId, nome, veiculoId, lado } montado pelo
+// Mestre no mini-formulário (ver montarFormularioIniciarPerseguicao em
+// ficha.js) — cada um vira uma entrada em perseguicaoAtiva/participantes
+// com pontos: 0. Precisa de pelo menos 1 perseguido e 1 perseguidor
+// (a checagem de "2+ veículos no cenário" já foi feita na UI antes de
+// mostrar o botão — aqui é só a validação mínima de novo, por segurança,
+// já que nada impede chamar esta função fora da UI normal).
+export async function iniciarPerseguicao(cenarioId, bairroKey, participantesEntrada) {
+    if (!Array.isArray(participantesEntrada) || participantesEntrada.length < 2) {
+        throw new Error("Selecione pelo menos 2 pilotos pra iniciar a perseguição.");
+    }
+    const temPerseguido = participantesEntrada.some(p => p.lado === "perseguido");
+    const temPerseguidor = participantesEntrada.some(p => p.lado === "perseguidor");
+    if (!temPerseguido || !temPerseguidor) {
+        throw new Error("Precisa de pelo menos um perseguido e um perseguidor.");
+    }
+
+    const bairro = bairroPerseguicao(bairroKey);
+    if (!bairro) throw new Error("Bairro inválido.");
+
+    const participantes = {};
+    participantesEntrada.forEach(p => {
+        const novaRef = push(ref(db, caminhoMesa("perseguicaoAtiva/participantes")));
+        participantes[novaRef.key] = {
+            tipo: p.tipo, refId: p.refId, nome: p.nome || p.refId,
+            veiculoId: p.veiculoId || null,
+            lado: p.lado,
+            pontos: 0,
+            agiuNestaVolta: false
+        };
+    });
+
+    await set(ref(db, caminhoMesa("perseguicaoAtiva")), {
+        ativo: true,
+        cenarioId,
+        bairro: bairroKey,
+        voltasNecessarias: bairro.voltas,
+        voltaAtual: 1,
+        participantes,
+        log: {},
+        // Contador de rotas de fuga ENCONTRADAS (sucesso no teste de
+        // Velocidade), por lado — Fase 7c. Alimenta vencedorPerseguicao
+        // (regras.js) direto no formato que ela já espera:
+        // { perseguido: number, perseguidor: number }.
+        rotasFuga: { perseguido: 0, perseguidor: 0 }
+    });
+}
+
+// Tira um piloto da perseguição em andamento (ex.: capotou e saiu de
+// cena) sem encerrar a perseguição inteira pros outros.
+export async function removerParticipantePerseguicao(participanteId) {
+    await remove(ref(db, caminhoMesa(`perseguicaoAtiva/participantes/${participanteId}`)));
+}
+
+// Encerra a perseguição (mesmo padrão de encerrarCombate — zera o nó
+// inteiro, não guarda histórico depois de encerrado).
+export async function encerrarPerseguicao() {
+    await set(ref(db, caminhoMesa("perseguicaoAtiva")), { ativo: false, participantes: {} });
+}
+
+// ---- Fase 7d: avançar volta ou encerrar a corrida ----
+//
+// Chamada por registrarPontosPerseguicao e
+// registrarTentativaRotaFugaPerseguicao depois de marcar
+// `agiuNestaVolta` de quem acabou de agir (Testar Dirigir Veículos,
+// Rota de Fuga, ou Manobra — Fase 4 integrada como ação de volta desde
+// esta sub-fase). `participantesAtualizados` já reflete o efeito desta
+// ação (pontos somados ou agiuNestaVolta marcado) — os dois chamadores
+// montam essa cópia atualizada porque o snapshot lido no início da
+// função ainda não tem a mudança que está sendo gravada agora.
+// `rotasFugaAtualizado` idem, já refletindo incremento se houver.
+//
+// Se nem todo mundo já agiu nesta volta, não faz nada (a volta
+// continua). Se todo mundo já agiu:
+//   - ainda faltam voltas → avança voltaAtual e reseta agiuNestaVolta
+//     de todo mundo pra rodada seguinte (mesmo comportamento das Fases
+//     7b/7c antes desta sub-fase);
+//   - a próxima volta passaria de voltasNecessarias → a corrida acabou:
+//     calcula o vencedor (vencedorPerseguicao, regras.js) e grava em
+//     perseguicaoAtiva/resultadoFinal + uma linha de log anunciando o
+//     resultado. NÃO avança voltaAtual além do necessário nem zera o
+//     nó sozinha — o Mestre confere o card e clica "Encerrar Perseguição"
+//     (encerrarPerseguicao, já existente) quando quiser, igual ao fim
+//     de combate.
+function aplicarAvancoOuFimDeVolta(estado, participantesAtualizados, rotasFugaAtualizado, atualizacoes) {
+    const todosAgiram = Object.values(participantesAtualizados).every(p => !!p.agiuNestaVolta);
+    if (!todosAgiram) return;
+
+    const proximaVolta = (Number(estado.voltaAtual) || 1) + 1;
+    const voltasNecessarias = Number(estado.voltasNecessarias) || null;
+
+    if (voltasNecessarias && proximaVolta > voltasNecessarias) {
+        const resultado = vencedorPerseguicao({ participantes: participantesAtualizados }, rotasFugaAtualizado);
+        atualizacoes[caminhoMesa("perseguicaoAtiva/resultadoFinal")] = resultado;
+
+        const novaRefLog = push(ref(db, caminhoMesa("perseguicaoAtiva/log")));
+        const rotuloVencedor = resultado.vencedor === "empate"
+            ? "empate"
+            : (resultado.vencedor === "perseguido" ? "o(s) perseguido(s)" : "o(s) perseguidor(es)");
+        atualizacoes[caminhoMesa(`perseguicaoAtiva/log/${novaRefLog.key}`)] = {
+            volta: estado.voltaAtual || 1,
+            tipo: "resultado_final",
+            texto: `Fim da corrida — venceu ${rotuloVencedor} (${resultado.pontosPerseguido} perseguido x ${resultado.pontosPerseguidor} perseguidor).`
+        };
+        return;
+    }
+
+    atualizacoes[caminhoMesa("perseguicaoAtiva/voltaAtual")] = proximaVolta;
+    Object.keys(participantesAtualizados).forEach(pid => {
+        atualizacoes[caminhoMesa(`perseguicaoAtiva/participantes/${pid}/agiuNestaVolta`)] = false;
+    });
+}
+
+// ---- Fase 7b: teste de pontuação por volta ----
+//
+// Registra o resultado de "Testar Dirigir Veículos" (ou de uma Manobra
+// rolada DENTRO de uma perseguição ativa — Fase 7d, ver
+// resolverManobraVeiculo em ficha.js) de UM piloto na volta atual: soma
+// `pontosGanhos` (já calculado por pontosPorResultadoTesteFuga,
+// regras.js — quem chama decide, esta função só grava) em
+// participantes/{id}/pontos, marca `agiuNestaVolta: true` pra ele, e
+// grava uma linha de log. `origemTexto`, se informado (ex.: "Manobra:
+// Drift"), substitui o texto padrão "Testar Dirigir Veículos" no log —
+// só pra deixar claro de onde veio a pontuação. Delega em
+// aplicarAvancoOuFimDeVolta a decisão de avançar a volta ou encerrar a
+// corrida quando todo mundo já tiver agido.
+export async function registrarPontosPerseguicao(participanteId, pontosGanhos, resultadoBruto, origemTexto = null) {
+    const snap = await get(ref(db, caminhoMesa("perseguicaoAtiva")));
+    if (!snap.exists() || !snap.val().ativo) throw new Error("Nenhuma perseguição ativa no momento.");
+    const estado = snap.val();
+    if (estado.resultadoFinal) throw new Error("Essa corrida já acabou — peça pro Mestre encerrar a perseguição antes de agir de novo.");
+    const participantes = estado.participantes || {};
+    if (!participantes[participanteId]) throw new Error("Você não está mais na perseguição.");
+
+    const pontosAtuais = Number(participantes[participanteId].pontos) || 0;
+    const atualizacoes = {};
+    atualizacoes[caminhoMesa(`perseguicaoAtiva/participantes/${participanteId}/pontos`)] = pontosAtuais + (Number(pontosGanhos) || 0);
+    atualizacoes[caminhoMesa(`perseguicaoAtiva/participantes/${participanteId}/agiuNestaVolta`)] = true;
+
+    const novaRefLog = push(ref(db, caminhoMesa("perseguicaoAtiva/log")));
+    atualizacoes[caminhoMesa(`perseguicaoAtiva/log/${novaRefLog.key}`)] = {
+        volta: estado.voltaAtual || 1,
+        participanteId,
+        resultado: Number(resultadoBruto) || 0,
+        pontos: Number(pontosGanhos) || 0,
+        texto: `${participantes[participanteId].nome}${origemTexto ? ` (${origemTexto})` : ""}: resultado ${Number(resultadoBruto) || 0} → +${Number(pontosGanhos) || 0} ponto(s)`
+    };
+
+    // Cópia local já refletindo pontos + agiuNestaVolta desta ação —
+    // participantes[pid] sempre existe aqui, já que a lista vem do
+    // próprio snapshot lido acima.
+    const participantesAtualizados = {};
+    Object.entries(participantes).forEach(([pid, p]) => {
+        participantesAtualizados[pid] = pid === participanteId
+            ? { ...p, pontos: pontosAtuais + (Number(pontosGanhos) || 0), agiuNestaVolta: true }
+            : p;
+    });
+    aplicarAvancoOuFimDeVolta(estado, participantesAtualizados, estado.rotasFuga || { perseguido: 0, perseguidor: 0 }, atualizacoes);
+
+    await update(ref(db), atualizacoes);
+}
+
+// ---- Fase 7c: rota de fuga ----
+//
+// Registra o resultado de "Tentar Rota de Fuga" de UM piloto na volta
+// atual: diferente de registrarPontosPerseguicao (Fase 7b), NÃO soma
+// pontos — "abre mão da pontuação da volta" (plano-veiculos-fase2.txt,
+// Fase 7) — só marca `agiuNestaVolta: true` (a tentativa consome a ação
+// da volta do mesmo jeito) e, se `sucesso`, incrementa
+// perseguicaoAtiva/rotasFuga/{lado} em 1 (contador que
+// vencedorPerseguicao, regras.js, já sabe ler desde a Fase 7a — só
+// faltava quem gravasse). Mesma lógica de avanço/fim de volta de
+// registrarPontosPerseguicao, via aplicarAvancoOuFimDeVolta (Fase 7d).
+export async function registrarTentativaRotaFugaPerseguicao(participanteId, sucesso, resultadoBruto) {
+    const snap = await get(ref(db, caminhoMesa("perseguicaoAtiva")));
+    if (!snap.exists() || !snap.val().ativo) throw new Error("Nenhuma perseguição ativa no momento.");
+    const estado = snap.val();
+    if (estado.resultadoFinal) throw new Error("Essa corrida já acabou — peça pro Mestre encerrar a perseguição antes de agir de novo.");
+    const participantes = estado.participantes || {};
+    const participante = participantes[participanteId];
+    if (!participante) throw new Error("Você não está mais na perseguição.");
+
+    const atualizacoes = {};
+    atualizacoes[caminhoMesa(`perseguicaoAtiva/participantes/${participanteId}/agiuNestaVolta`)] = true;
+
+    const rotasFugaAtualizado = { ...(estado.rotasFuga || { perseguido: 0, perseguidor: 0 }) };
+    if (sucesso) {
+        rotasFugaAtualizado[participante.lado] = (Number(rotasFugaAtualizado[participante.lado]) || 0) + 1;
+        atualizacoes[caminhoMesa(`perseguicaoAtiva/rotasFuga/${participante.lado}`)] = rotasFugaAtualizado[participante.lado];
+    }
+
+    const novaRefLog = push(ref(db, caminhoMesa("perseguicaoAtiva/log")));
+    atualizacoes[caminhoMesa(`perseguicaoAtiva/log/${novaRefLog.key}`)] = {
+        volta: estado.voltaAtual || 1,
+        participanteId,
+        tipo: "rota_fuga",
+        resultado: Number(resultadoBruto) || 0,
+        sucesso: !!sucesso,
+        texto: `${participante.nome}: tentou rota de fuga, resultado ${Number(resultadoBruto) || 0} → ${sucesso ? "✅ encontrou (abriu mão da pontuação da volta)" : "❌ não encontrou (abriu mão da pontuação da volta)"}`
+    };
+
+    const participantesAtualizados = {};
+    Object.entries(participantes).forEach(([pid, p]) => {
+        participantesAtualizados[pid] = pid === participanteId ? { ...p, agiuNestaVolta: true } : p;
+    });
+    aplicarAvancoOuFimDeVolta(estado, participantesAtualizados, rotasFugaAtualizado, atualizacoes);
+
+    await update(ref(db), atualizacoes);
+}
+
+// Override manual do Mestre — avança a volta e reseta quem já agiu,
+// mesmo que nem todo mundo tenha testado ainda (ex.: um jogador ausente
+// da mesa naquela rodada e o Mestre não quer travar os outros).
+export async function avancarVoltaManualPerseguicao() {
+    const snap = await get(ref(db, caminhoMesa("perseguicaoAtiva")));
+    if (!snap.exists() || !snap.val().ativo) return;
+    const estado = snap.val();
+    const atualizacoes = { [caminhoMesa("perseguicaoAtiva/voltaAtual")]: (Number(estado.voltaAtual) || 1) + 1 };
+    Object.keys(estado.participantes || {}).forEach(pid => {
+        atualizacoes[caminhoMesa(`perseguicaoAtiva/participantes/${pid}/agiuNestaVolta`)] = false;
+    });
+    await update(ref(db), atualizacoes);
 }
 
 // ---- Explosivos armados no cenário (ver plano-explosivos-cenario.txt,
@@ -2273,7 +2657,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -2546,6 +2930,38 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         // sempre chega solto, precisando ser equipado/guardado depois.
         await set(novaRefItemCenario, { ...itemCenario, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false });
         await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
+
+    } else if (tipo === "melhorar_veiculo_terceiro" || tipo === "reparar_veiculo_terceiro") {
+        // Reparo/Melhoria de veículo do OUTRO jogador, feito por quem
+        // está no mesmo cenário (Fase 6 do plano — ver
+        // plano-veiculos-fase2.txt, seção "FASE 6"). Quem gastou os
+        // materiais e rolou a perícia foi a ficha ATUANTE (acao.fichaId
+        // — a "mão de obra"), já resolvido no client (ver
+        // resolverMecanicoVeiculo/resolverMecanicoVeiculoTerceiro em
+        // ficha.js) antes mesmo de criar esta pendência — só chega aqui
+        // se o teste já teve SUCESSO. Falta só aplicar o efeito mecânico
+        // no veículo do DONO (payload.fichaAlvoId/veiculoId), depois de
+        // revalidar que ele ainda existe (o dono pode ter apagado o
+        // veículo, ou ele pode ter saído do cenário, enquanto o pedido
+        // esperava aprovação).
+        const { fichaAlvoId, veiculoId: veiculoAlvoId, atributoKey } = payload;
+        const snapVeiculoAlvo = await get(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/veiculos/${veiculoAlvoId}`)));
+        if (!snapVeiculoAlvo.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.veiculoNome || "o veículo"}" não existe mais.`);
+        }
+        const veiculoAlvo = snapVeiculoAlvo.val();
+        if (tipo === "melhorar_veiculo_terceiro") {
+            const nivelAtualBase = Number((veiculoAlvo.atributos || {})[atributoKey]) || 0;
+            const novoNivel = Math.min(5, nivelAtualBase + 1);
+            await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/veiculos/${veiculoAlvoId}/atributos`)), { [atributoKey]: novoNivel });
+        } else {
+            const deterioracoesRestantes = zerarDeterioracoesDoAtributoVeiculo(veiculoAlvo.deterioracoes || [], atributoKey);
+            await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/veiculos/${veiculoAlvoId}`)), {
+                deterioracoes: deterioracoesRestantes,
+                pvAtual: null
+            });
+        }
 
     } else if (tipo === "pegar_dinheiro_cenario") {
         // Pegar um valor específico de um saldo solto no cenário: o

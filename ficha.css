@@ -890,6 +890,34 @@
     }
 }
 
+/* Checkboxes de "Ocasião Especial" numa perícia (modificador situacional
+   de especialização/vantagem/item que só conta quando marcado — ver
+   modificadoresOcasionaisDaPericia em regras.js). Fica numa linha à
+   parte, abaixo do nome/badges da perícia, sempre visível (diferente de
+   .entity-sub) porque o jogador precisa vê-la ANTES de rolar. */
+.pericia-ocasionais {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(255,255,255,0.12);
+}
+.pericia-ocasional-item {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    gap: 5px;
+}
+.pericia-ocasional-item:has(input:checked) {
+    color: var(--neon-lime);
+}
+
+.mod-ocasional-label {
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
 .mod-pill {
     font-family: var(--font-mono);
     font-size: 0.68rem;
@@ -1492,10 +1520,236 @@ select.select-guardar-dentro {
     color: var(--text-dim);
     margin-top: 2px;
 }
+
+/* ---------- Vida do veículo (Fase 2 — ver plano-veiculos-fase2.txt):
+   barra de PV, badge de deterioração e campo de dano manual do Mestre.
+   Mesmo espírito visual da .volume-bar-* (recipientes), só com classes
+   próprias pra não herdar padding/gap pensado pra outro contexto. ---------- */
+.veiculo-pv-wrap {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.veiculo-pv-texto {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+.veiculo-pv-texto-critica {
+    color: var(--neon-red);
+    font-weight: 600;
+}
+.veiculo-pv-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.veiculo-pv-fill {
+    height: 100%;
+    background: var(--neon-gold);
+    transition: width 0.35s ease, background-color 0.35s ease;
+}
+.veiculo-pv-fill-critica {
+    background: var(--neon-red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
+}
+.veiculo-deterioracao-badge {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin-top: 8px;
+    font-size: 0.72rem;
+    white-space: normal;
+}
+.veiculo-dano-manual {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.veiculo-dano-input {
+    width: 90px;
+}
+.veiculo-dano-atributo {
+    flex: 1;
+    min-width: 140px;
+}
+.veiculo-dano-btn {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+}
 #btn-repor-chave-veiculo {
     margin-left: 10px;
     font-size: 0.75rem;
     padding: 5px 10px;
+}
+
+/* ---------- Reparo e Upgrade de atributo (Fase 3 — ver
+   plano-veiculos-fase2.txt): botões "Melhorar"/"Reparar" dentro de
+   cada bloco de atributo do card de veículo. ---------- */
+.veiculo-atributo-acoes {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+.veiculo-mecanico-btn {
+    font-size: 0.68rem;
+    padding: 4px 8px;
+    flex: 1;
+    min-width: 90px;
+}
+.veiculo-mecanico-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.material-falta {
+    color: var(--neon-red);
+}
+/* modal-mecanico-veiculo-terceiro (Fase 6 — ver plano-veiculos-fase2.txt,
+   seção "FASE 6"): mesmo modal de mecânico da Fase 3, variante pra
+   veículo de outro dono — reaproveita o mesmo estilo de .modal-campo. */
+#modal-mecanico-veiculo .modal-campo,
+#modal-mecanico-veiculo-terceiro .modal-campo {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+.veiculo-manobra-btn {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+}
+.veiculo-bonus-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.veiculo-bonus-limpar-btn {
+    font-size: 0.68rem;
+    padding: 3px 8px;
+}
+
+/* ---------- Manobras de veículo (Fase 4 — ver
+   plano-veiculos-fase2.txt, seção "FASE 4"). ---------- */
+.veiculo-manobra-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+.veiculo-manobra-linha {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid var(--neon-lime);
+    border-radius: 2px;
+    padding: 10px 12px;
+}
+.veiculo-manobra-linha.desabilitada {
+    border-left-color: rgba(255, 255, 255, 0.2);
+    opacity: 0.65;
+}
+.veiculo-manobra-linha-topo {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.veiculo-manobra-linha-acoes {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+.veiculo-manobra-dificuldade-input {
+    width: 200px;
+}
+.veiculo-manobra-rolar-btn {
+    font-size: 0.78rem;
+    padding: 6px 12px;
+}
+.veiculo-manobra-rolar-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* ---------- Acessórios de veículo (Fase 5b — ver
+   plano-acessorios-veiculo.txt, seção "FASE 5b"): seção "Acessórios"
+   dentro do card do veículo + modal "+ Instalar Acessório", que
+   reaproveita .veiculo-manobra-lista/.veiculo-manobra-linha* (mesmo
+   visual de linha "cinza + desabilitada" já usado pelo modal de
+   Manobra). ---------- */
+.veiculo-acessorios-secao {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.veiculo-acessorios-acoes {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+.veiculo-acessorios-acoes .btn-ghost {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+}
+/* .veiculo-acessorio-linha: usada tanto na lista de instalados (dentro
+   do card) quanto no modal "+ Instalar Acessório" — mesmo visual base
+   de .veiculo-manobra-linha (borda + faixa lateral lime), só um pouco
+   mais compacta. */
+.veiculo-acessorio-linha {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid var(--neon-lime);
+    border-radius: 2px;
+    padding: 8px 10px;
+    margin-top: 8px;
+}
+.veiculo-acessorio-linha.desabilitada {
+    border-left-color: rgba(255, 255, 255, 0.2);
+    opacity: 0.65;
+}
+.veiculo-acessorios-secao .veiculo-acessorio-linha:first-of-type {
+    margin-top: 8px;
+}
+.veiculo-acessorio-linha-topo {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.veiculo-acessorio-linha-acoes {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.veiculo-acessorio-linha-acoes .btn-ghost {
+    font-size: 0.68rem;
+    padding: 4px 8px;
+}
+.veiculo-acessorio-testar-btn,
+.veiculo-acessorio-usar-btn {
+    flex: 1;
+    min-width: 90px;
+}
+.veiculo-acessorio-remover-btn {
+    flex: 0 0 auto;
 }
 
 /* ---------- Combate ---------- */
@@ -1621,7 +1875,7 @@ select.select-guardar-dentro {
 /* ---------- Modal: linhas de modificador ---------- */
 .modificador-row, .modificacao-arma-row {
     display: grid;
-    grid-template-columns: 1fr 80px 32px;
+    grid-template-columns: 1fr 80px auto 32px;
     gap: 8px;
     margin-bottom: 8px;
     align-items: center;
@@ -1629,6 +1883,17 @@ select.select-guardar-dentro {
 .modificacao-arma-row { grid-template-columns: 1fr 32px; }
 .modificador-row select, .modificador-row input,
 .modificacao-arma-row input { margin: 0; }
+@media (max-width: 600px) {
+    /* No celular, a linha de modificador vira 2 fileiras: alvo+valor em
+       cima, "Ocasião especial" + remover embaixo — 4 colunas fixas não
+       cabem na largura da tela. */
+    .modificador-row {
+        grid-template-columns: 1fr 80px 32px;
+    }
+    .mod-ocasional-label {
+        grid-column: 1 / 3;
+    }
+}
 .mod-remover, .modarma-remover {
     padding: 6px;
     font-size: 0.9rem;
