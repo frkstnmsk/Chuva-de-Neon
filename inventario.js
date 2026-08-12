@@ -374,4 +374,55 @@ export function itemPodeSerLevadoSolto(fichaAtual, item) {
     return !!item.equipada;
 }
 
+// Correção do "catch-22 de Levando Consigo": itemPodeSerLevadoSolto (acima)
+// só aceita um item recém-movido pra "levando" se ele já estiver
+// equipado — mas o botão de equipar (itemPodeEquipar/podeEquiparCategoria,
+// ver ficha.js) só aparece DEPOIS que o item já está em "levando". Sem
+// essa função, nenhum item novo (roupa, arma, item comum) conseguia
+// entrar em "Levando consigo" pela primeira vez — só um Mestre editando
+// o item direto no modal conseguia burlar isso setando os dois campos
+// (categoria + equipada) de uma vez.
+//
+// Esta função resolve o mover-pra-"levando" tentando automaticamente
+// colocar o item num lugar físico válido (na mão, vestido, ou carregado
+// nas costas) igual um "equipar" faria — respeitando os mesmos limites
+// de mãos livres e exclusividade de subtipoPorte. Devolve:
+//   { ok: true, equipar: true|false } — pode mover; `equipar` diz se
+//     deve gravar equipada:true junto (false quando o item já está
+//     guardado dentro de outra coisa via dentroDe, que dispensa isso).
+//   { ok: false, motivo: "<frase pra completar a mensagem de erro>" }
+// idItemAtual exclui o próprio item da checagem de exclusividade (mesmo
+// uso de itemPodeEquiparContainer).
+export function resolverEntradaLevandoConsigo(fichaAtual, item, idItemAtual) {
+    // Guardado dentro de outra coisa (mochila etc.) já é válido — não
+    // precisa de mão nem de estar "vestido" por si só.
+    if (item.dentroDe) return { ok: true, equipar: false };
+
+    if (ehContainer(item.tag)) {
+        const subtipo = item.subtipoPorte;
+        const subtipoValido = subtipo === "roupa" || subtipo === "cinto" ||
+            subtipo === "mochila" || subtipo === "bolsa_mao";
+        if (!subtipoValido) {
+            return { ok: false, motivo: `ficaria sem lugar físico válido em "Levando consigo" — esse tipo de recipiente não dá pra vestir/carregar direto; guarde-o dentro de outro container antes de mover.` };
+        }
+        if (subtipoPorteExclusivo(subtipo) && !itemPodeEquiparContainer(fichaAtual, item, idItemAtual)) {
+            return { ok: false, motivo: `não pode ir pra "Levando consigo" agora — já tem outra peça de "${rotuloSubtipoPorte(subtipo)}" equipada; desequipe-a antes.` };
+        }
+        if (subtipoPorteOcupaMao(subtipo)) {
+            const maosNecessarias = Number(item.maosNecessarias) || 1;
+            if (maosDisponiveis(fichaAtual) < maosNecessarias) {
+                return { ok: false, motivo: `não pode ir pra "Levando consigo" agora — sem mãos livres pra segurar; libere uma mão antes.` };
+            }
+        }
+        return { ok: true, equipar: true };
+    }
+
+    // Item comum (arma ou não) vai pra mão.
+    const maosNecessarias = Number(item.maosNecessarias) || 1;
+    if (maosDisponiveis(fichaAtual) < maosNecessarias) {
+        return { ok: false, motivo: `não pode ir pra "Levando consigo" agora — sem mãos livres pra segurar; libere uma mão antes.` };
+    }
+    return { ok: true, equipar: true };
+}
+
 export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo };

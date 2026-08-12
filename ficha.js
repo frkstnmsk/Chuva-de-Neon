@@ -75,7 +75,8 @@ import {
     ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis,
     TAMANHOS_ITEM, rotuloTamanho, itemCabeNoContainer, volumeTotalDentroDe,
     SUBTIPOS_PORTE, rotuloSubtipoPorte, itemPodeSerLevadoSolto, listaCompartimentos,
-    maosDisponiveis, itemPodeEquiparContainer, subtipoPorteOcupaMao, subtipoPorteExclusivo
+    maosDisponiveis, itemPodeEquiparContainer, subtipoPorteOcupaMao, subtipoPorteExclusivo,
+    resolverEntradaLevandoConsigo
 } from "./inventario.js";
 import {
     estadoInicialCriacao, funcaoDe, calcularPontosAtributoTotais,
@@ -6507,19 +6508,25 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             // "levado" sozinho, por exemplo).
             if (it.dentroDe) dados.dentroDe = null;
             // Trava central de "item não fica solto" (ver
-            // itemPodeSerLevadoSolto em inventario.js, passo 12 do
-            // projeto-slots-porte.txt): só entra em jogo ao mover PRA
+            // resolverEntradaLevandoConsigo em inventario.js, passo 12
+            // do projeto-slots-porte.txt): só entra em jogo ao mover PRA
             // "levando" — sair de "levando" já é sempre válido (não
-            // passa pela regra). Sem essa checagem, mover um item
-            // desequipado/sem container direto de "Em casa" pra
-            // "Levando consigo" deixaria o item sem lugar físico nenhum.
+            // passa pela regra). Em vez de só exigir que o item JÁ
+            // esteja equipado (impossível pro primeiro item — o botão
+            // de equipar só existe depois que o item já está em
+            // "levando"), tenta automaticamente colocá-lo num lugar
+            // físico válido (na mão, vestido, ou carregado nas costas),
+            // respeitando mãos livres/exclusividade. Só bloqueia quando
+            // nem isso é possível.
             if (novaCategoria === "levando") {
                 const itemPosMudanca = { ...it, ...dados };
-                if (!itemPodeSerLevadoSolto(fichaAtual, itemPosMudanca)) {
-                    toast(`"${it.nome}" precisa estar numa mão, vestido/carregado, ou guardado dentro de um compartimento pra ficar em "Levando consigo". Equipe-o ou guarde-o num container antes de mover.`, "erro");
+                const resultadoEntrada = resolverEntradaLevandoConsigo(fichaAtual, itemPosMudanca, id);
+                if (!resultadoEntrada.ok) {
+                    toast(`"${it.nome}" ${resultadoEntrada.motivo}`, "erro");
                     selectTransferir.value = "";
                     return;
                 }
+                if (resultadoEntrada.equipar) dados.equipada = true;
             }
             await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
             // Se o item movido é um recipiente, o que está guardado

@@ -23,7 +23,7 @@ import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao } from "./dados-manual.js";
-import { itemCabeNoContainer, itemPodeSerLevadoSolto } from "./inventario.js";
+import { itemCabeNoContainer, itemPodeSerLevadoSolto, resolverEntradaLevandoConsigo } from "./inventario.js";
 import { criarFerida } from "./saude.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
@@ -2795,20 +2795,27 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
 
         // Trava central de "item não fica solto" (ver
-        // itemPodeSerLevadoSolto em inventario.js, passo 12 do
-        // projeto-slots-porte.txt): só entra em jogo ao MOVER PRA
-        // "levando" — sair de "levando" já é sempre válido (não passa
-        // pela regra). Sem essa checagem aqui, um pedido de jogador
-        // pra mover um item desequipado/sem container de "Em casa"
-        // pra "Levando consigo" deixaria o item num estado sem lugar
-        // físico nenhum. Cancela o pedido em vez de gravar estado
-        // inconsistente, mesmo padrão de "guardar_item" logo abaixo.
+        // itemPodeSerLevadoSolto/resolverEntradaLevandoConsigo em
+        // inventario.js, passo 12 do projeto-slots-porte.txt): só entra
+        // em jogo ao MOVER PRA "levando" — sair de "levando" já é
+        // sempre válido (não passa pela regra). Em vez de só travar
+        // pedindo que o item JÁ esteja equipado (impossível pro
+        // primeiro item — o botão de equipar só existe depois que o
+        // item já está em "levando"), resolverEntradaLevandoConsigo
+        // tenta automaticamente colocá-lo num lugar físico válido (na
+        // mão, vestido, ou carregado nas costas), igual um "equipar"
+        // faria, respeitando mãos livres/exclusividade de subtipoPorte.
+        // Só cancela o pedido quando nem isso é possível.
         if (payload.categoriaNova === "levando") {
             const itemPosMudancaMover = { ...itemAtualMover, ...dadosMover };
-            if (!itemPodeSerLevadoSolto({ inventario: {} }, itemPosMudancaMover)) {
+            const snapInventarioMover = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+            const fichaParaChecagem = { inventario: snapInventarioMover.exists() ? snapInventarioMover.val() : {} };
+            const resultadoEntrada = resolverEntradaLevandoConsigo(fichaParaChecagem, itemPosMudancaMover, payload.itemId);
+            if (!resultadoEntrada.ok) {
                 await rejeitarAcaoPendente(acao.id);
-                throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" ficaria sem lugar físico válido em "Levando consigo" — equipe-o ou guarde-o num container antes de mover.`);
+                throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" ${resultadoEntrada.motivo}`);
             }
+            if (resultadoEntrada.equipar) dadosMover.equipada = true;
         }
 
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosMover);
