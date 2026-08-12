@@ -340,14 +340,23 @@ const TIPOS_TREINO = [
 // Personagem — depois disso, só o Mestre mexe (correção de exploit).
 const LISTAS_CARACTERISTICA_NARRATIVA = ["vantagens", "desvantagens", "fatosUniversais"];
 
-// Chaves de localStorage do layout das abas (ver gerenciarLayoutAbas mais
-// abaixo) — precisam ficar definidas antes do init() ser chamado, senão
+// Categorias fixas da navegação em 2 camadas (categoria → sub-aba) e
+// chaves de localStorage do layout — ver montarNavegacaoAbas() mais
+// abaixo. Precisam ficar definidas antes do init() ser chamado, senão
 // dá erro de "Cannot access before initialization" (a const ainda não
-// existe no momento em que gerenciarLayoutAbas() é executada).
-const CHAVE_ABAS_MODO = "cdn_abas_modo";
-const CHAVE_ABAS_FIXADAS = "cdn_abas_fixadas";
-const CHAVE_ABAS_MAIS = "cdn_abas_mais_ordem";
-const ABAS_FIXADAS_PADRAO = ["perfil", "atributos", "pericias", "inventario", "combate"];
+// existe no momento em que montarNavegacaoAbas() é executada).
+const CATEGORIAS_ABAS = [
+    { chave: "personagem", abas: ["perfil", "atributos", "pericias", "vant-desv", "especializacoes"] },
+    { chave: "recursos", abas: ["inventario", "financas", "receitas", "darknet"] },
+    { chave: "jogo", abas: ["combate", "saude", "veiculos", "cenario"] },
+    { chave: "progresso", abas: ["treinamento", "notas"] },
+];
+function categoriaDaAba(dataTab) {
+    const cat = CATEGORIAS_ABAS.find(c => c.abas.includes(dataTab));
+    return cat ? cat.chave : CATEGORIAS_ABAS[0].chave;
+}
+const CHAVE_SPLIT_ATIVO = "cdn_split_ativo";
+const CHAVE_ABA_POR_CATEGORIA = "cdn_aba_por_categoria"; // { principal: {personagem:"perfil",...}, secundario: {...} }
 
 // ---------------------------------------------------------------------
 // Elementos
@@ -387,13 +396,18 @@ const el = {
     painelInfoTopo: document.getElementById("painel-info-topo"),
     btnSalvar: document.getElementById("btn-salvar"),
     saveStatus: document.getElementById("save-status"),
-    tabsNav: document.getElementById("tabs-nav"),
-    tabsFixadas: document.getElementById("tabs-fixadas"),
-    tabsMaisWrap: document.getElementById("tabs-mais-wrap"),
-    tabsMaisBtn: document.getElementById("tabs-mais-btn"),
-    tabsMaisMenu: document.getElementById("tabs-mais-menu"),
-    tabsEditarBtn: document.getElementById("tabs-editar-btn"),
-    tabsModoBtn: document.getElementById("tabs-modo-btn"),
+    paineisArea: document.getElementById("paineis-area"),
+    btnTelaDividida: document.getElementById("btn-tela-dividida"),
+    slotPrincipal: document.getElementById("slot-principal"),
+    slotSecundario: document.getElementById("slot-secundario"),
+    tabPanelsPrincipal: document.getElementById("tab-panels-principal"),
+    tabPanelsSecundario: document.getElementById("tab-panels-secundario"),
+    navPrincipal: document.getElementById("nav-principal"),
+    navSecundaria: document.getElementById("nav-secundaria"),
+    categoriasNavPrincipal: document.getElementById("categorias-nav-principal"),
+    categoriasNavSecundaria: document.getElementById("categorias-nav-secundaria"),
+    tabsNavPrincipal: document.getElementById("tabs-nav-principal"),
+    tabsNavSecundaria: document.getElementById("tabs-nav-secundaria"),
     gridAtributosPrimarios: document.getElementById("grid-atributos-primarios"),
     gridAtributosSecundarios: document.getElementById("grid-atributos-secundarios"),
     gridRecursos: document.getElementById("grid-recursos"),
@@ -691,7 +705,7 @@ function atualizarIcones() {
 // Inicialização
 // ---------------------------------------------------------------------
 // init() é chamado de forma adiada (setTimeout 0) de propósito: várias
-// consts usadas logo no começo da função (ex.: CHAVE_ABAS_MODO,
+// consts usadas logo no começo da função (ex.: CATEGORIAS_ABAS,
 // ABAS_OCULTAS_NPC) são declaradas mais abaixo no arquivo. Chamando
 // init() direto aqui, ele roda ANTES dessas linhas serem executadas
 // (o motor de JS ainda não chegou nelas), o que dá "Cannot access
@@ -706,8 +720,7 @@ async function init() {
     if (el.mesaIndicador) el.mesaIndicador.innerText = `Mesa: ${sessao.mesaId || "?"}`;
 
     montarGridsEstaticas();
-    montarAbas();
-    gerenciarLayoutAbas();
+    montarNavegacaoAbas();
     montarSelectsFixos();
 
     // Regra de ouro financeira/inventário: só o Mestre pode adicionar
@@ -1074,276 +1087,206 @@ function retornarSync() { if (_pausarListener > 0) _pausarListener--; }
 // MONTAGEM ESTÁTICA (uma vez, no load)
 // =====================================================================
 
-function montarAbas() {
-    const botoes = el.tabsNav.querySelectorAll(".tab-btn[data-tab]");
-    botoes.forEach(btn => {
-        btn.addEventListener("click", () => {
-            botoes.forEach(b => b.classList.remove("active"));
-            btn.classList.add("active");
-            document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
-            document.querySelector(`.tab-panel[data-tab="${btn.dataset.tab}"]`).classList.add("active");
+// =====================================================================
+// NAVEGAÇÃO EM 2 CAMADAS (categoria → sub-aba) + MODO TELA DIVIDIDA
+// =====================================================================
+// Cada metade da tela ("principal", sempre visível, e "secundaria", só
+// quando a Tela Dividida está ligada) tem seu próprio bloco de
+// categoria+sub-abas (#nav-principal / #nav-secundaria), mas todos os
+// <section class="tab-panel"> continuam existindo em UMA ÚNICA cópia no
+// DOM (não são duplicados) — abrirAba() apenas MOVE o node do painel
+// pro container do slot que pediu (appendChild), o que implica que a
+// MESMA aba nunca pode estar aberta nos dois slots ao mesmo tempo (ver
+// abaIndisponivelNoOutroSlot). A escolha (categoria/aba ativa em cada
+// slot, e se o split está ligado) é salva por aparelho (localStorage),
+// igual já era com o sistema antigo de fixar/arrastar abas.
+
+function lerLS(chave) {
+    try { return localStorage.getItem(chave); } catch { return null; }
+}
+function escreverLS(chave, valor) {
+    try { localStorage.setItem(chave, valor); } catch { /* localStorage indisponível (modo privado etc.) */ }
+}
+function lerAbaPorCategoriaSalva() {
+    try {
+        const bruto = JSON.parse(lerLS(CHAVE_ABA_POR_CATEGORIA) || "{}");
+        return {
+            principal: bruto.principal || {},
+            secundario: bruto.secundario || {}
+        };
+    } catch { return { principal: {}, secundario: {} }; }
+}
+let _abaPorCategoriaCache = lerAbaPorCategoriaSalva();
+function lembrarAbaDaCategoria(slot, categoria, dataTab) {
+    _abaPorCategoriaCache[slot][categoria] = dataTab;
+    escreverLS(CHAVE_ABA_POR_CATEGORIA, JSON.stringify(_abaPorCategoriaCache));
+}
+
+// Estado de qual aba está ativa em cada slot agora mesmo (fonte da
+// verdade em memória — o DOM/localStorage só refletem isso).
+const estadoSlots = { principal: null, secundario: null };
+
+function navDoSlot(slot) {
+    return slot === "secundario"
+        ? { nav: el.navSecundaria, categorias: el.categoriasNavSecundaria, tabs: el.tabsNavSecundaria, painelContainer: el.tabPanelsSecundario }
+        : { nav: el.navPrincipal, categorias: el.categoriasNavPrincipal, tabs: el.tabsNavPrincipal, painelContainer: el.tabPanelsPrincipal };
+}
+function outroSlot(slot) { return slot === "principal" ? "secundario" : "principal"; }
+
+// Abre `dataTab` no `slot` pedido: move o <section class="tab-panel">
+// certo pro container daquele slot, marca a categoria/sub-aba certas
+// como .active nos botões daquele slot, e lembra a escolha. Recusa se
+// a aba já estiver aberta no OUTRO slot (não dá pra abrir a mesma aba
+// duas vezes — é o mesmo elemento do DOM).
+function abrirAba(dataTab, slot = "principal") {
+    if (slot === "secundario" && !splitAtivo) return; // slot secundário só existe com split ligado
+    if (estadoSlots[outroSlot(slot)] === dataTab) {
+        toast("Essa aba já está aberta na outra metade da tela.", "erro");
+        return;
+    }
+    const painel = document.querySelector(`.tab-panel[data-tab="${dataTab}"]`);
+    if (!painel) return;
+    const { tabs, categorias, painelContainer } = navDoSlot(slot);
+    const categoria = categoriaDaAba(dataTab);
+
+    // Painel: tira o .active de qualquer painel que estivesse ativo
+    // NESTE slot (pode ser um painel diferente, já que só um fica
+    // visível por slot de cada vez) e move o novo pra dentro do container.
+    if (painelContainer) {
+        [...painelContainer.children].forEach(p => p.classList.remove("active"));
+        painelContainer.appendChild(painel);
+    }
+    painel.classList.add("active");
+
+    // Botões de sub-aba e categoria, só dentro do bloco de nav deste slot.
+    if (tabs) {
+        tabs.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === dataTab));
+    }
+    if (categorias) {
+        categorias.querySelectorAll(".categoria-btn").forEach(b => b.classList.toggle("active", b.dataset.categoria === categoria));
+    }
+    if (tabs) {
+        tabs.querySelectorAll(".tab-btn[data-categoria]").forEach(b => {
+            b.classList.toggle("categoria-oculta", b.dataset.categoria !== categoria);
+        });
+    }
+
+    estadoSlots[slot] = dataTab;
+    lembrarAbaDaCategoria(slot, categoria, dataTab);
+    atualizarBotoesIndisponiveis();
+}
+
+// Marca (visualmente, com opacidade reduzida e sem clique) a sub-aba
+// que está aberta num slot dentro do bloco de nav do OUTRO slot — só
+// importa enquanto o split está ligado.
+function atualizarBotoesIndisponiveis() {
+    ["principal", "secundario"].forEach(slot => {
+        const { tabs } = navDoSlot(slot);
+        if (!tabs) return;
+        const abaDoOutro = estadoSlots[outroSlot(slot)];
+        tabs.querySelectorAll(".tab-btn").forEach(b => {
+            b.classList.toggle("indisponivel-na-outra-metade", splitAtivo && b.dataset.tab === abaDoOutro);
         });
     });
 }
 
-// =====================================================================
-// LAYOUT DAS ABAS: modo "fileira" (tudo visível, como sempre foi) vs.
-// modo "compacto" (o jogador escolhe quais ficam sempre fixas e o resto
-// vai pro menu "Mais"), com arrastar-e-soltar pra mover abas entre as
-// duas zonas. Funciona com mouse e touch (Pointer Events). A escolha é
-// salva no navegador (localStorage), por isso é por aparelho/navegador,
-// não por personagem.
-// =====================================================================
-function gerenciarLayoutAbas() {
-    if (!el.tabsNav || !el.tabsFixadas || !el.tabsMaisMenu || !el.tabsMaisWrap || !el.tabsEditarBtn || !el.tabsModoBtn) return;
+// Abre, dentro de um slot, a categoria pedida — e junto a última aba
+// lembrada daquela categoria naquele slot (ou a primeira da lista, se
+// nunca foi aberta antes, ou se a lembrada não existe mais).
+function abrirCategoria(categoriaChave, slot = "principal") {
+    const cat = CATEGORIAS_ABAS.find(c => c.chave === categoriaChave);
+    if (!cat) return;
+    const lembrada = _abaPorCategoriaCache[slot] && _abaPorCategoriaCache[slot][categoriaChave];
+    const dataTab = (lembrada && cat.abas.includes(lembrada)) ? lembrada : cat.abas[0];
+    abrirAba(dataTab, slot);
+}
 
-    const todosBotoes = [...el.tabsNav.querySelectorAll(".tab-btn[data-tab]")];
-    const mapaBotoes = {};
-    todosBotoes.forEach(b => { mapaBotoes[b.dataset.tab] = b; });
-    let modoAtual = "fileira";
+let splitAtivo = false;
 
-    function lerLS(chave) {
-        try { return localStorage.getItem(chave); } catch { return null; }
+function alternarTelaDividida(ligar) {
+    splitAtivo = ligar;
+    escreverLS(CHAVE_SPLIT_ATIVO, ligar ? "1" : "0");
+    if (el.paineisArea) el.paineisArea.classList.toggle("split-ativo", ligar);
+    if (el.slotSecundario) el.slotSecundario.hidden = !ligar;
+    if (el.btnTelaDividida) {
+        el.btnTelaDividida.classList.toggle("ativo", ligar);
+        el.btnTelaDividida.innerHTML = ligar
+            ? '<i data-lucide="rows-2"></i> Desligar tela dividida'
+            : '<i data-lucide="rows-2"></i> Tela dividida';
+        atualizarIcones();
     }
-    function lerListaSalva(chave, padrao) {
-        const bruto = lerLS(chave);
-        if (!bruto) return padrao;
-        try {
-            const lista = JSON.parse(bruto);
-            return Array.isArray(lista) ? lista.filter(k => mapaBotoes[k]) : padrao;
-        } catch { return padrao; }
+    if (ligar && !estadoSlots.secundario) {
+        // Primeira vez ligando: abre uma categoria/aba diferente da que
+        // já está no slot principal, senão a checagem de "já aberta no
+        // outro slot" bloquearia a abertura inicial.
+        const categoriaPrincipal = categoriaDaAba(estadoSlots.principal);
+        const categoriaAlternativa = CATEGORIAS_ABAS.find(c => c.chave !== categoriaPrincipal) || CATEGORIAS_ABAS[0];
+        abrirCategoria(categoriaAlternativa.chave, "secundario");
     }
-    function salvar() {
-        try {
-            localStorage.setItem(CHAVE_ABAS_MODO, modoAtual);
-            localStorage.setItem(CHAVE_ABAS_FIXADAS, JSON.stringify([...el.tabsFixadas.children].map(b => b.dataset.tab)));
-            localStorage.setItem(CHAVE_ABAS_MAIS, JSON.stringify([...el.tabsMaisMenu.children].map(b => b.dataset.tab)));
-        } catch { /* localStorage indisponível (modo privado etc.) — só não persiste */ }
-    }
-
-    function atualizarVisibilidadeMais() {
-        el.tabsMaisWrap.style.display = (modoAtual === "compacto" && el.tabsMaisMenu.children.length) ? "" : "none";
-    }
-
-    // A caixa "Mais", quando vazia, não tinha nenhum conteúdo visual
-    // além do min-height do CSS — o que podia deixá-la sem área real
-    // pra soltar uma aba (o elemento sob o ponteiro deixava de ser
-    // ela). Esse placeholder garante que ela sempre tenha algo visível
-    // e "pegável" mesmo com zero abas dentro.
-    function atualizarPlaceholderMais() {
-        const temAbas = !!el.tabsMaisMenu.querySelector(".tab-btn[data-tab]");
-        let placeholder = el.tabsMaisMenu.querySelector(".tabs-mais-vazio");
-        if (!temAbas) {
-            if (!placeholder) {
-                placeholder = document.createElement("span");
-                placeholder.className = "tabs-mais-vazio";
-                placeholder.textContent = "Arraste uma aba pra cá pra escondê-la no menu \"Mais\"";
-                el.tabsMaisMenu.appendChild(placeholder);
+    if (!ligar) {
+        // Devolve o painel que estava ativo no secundário pro container
+        // principal (sem marcar .active — ele já não é mais o painel em
+        // foco de ninguém) e limpa o estado do slot, senão ele continua
+        // "reservado" (bloqueando reabrir aquela aba em qualquer lugar)
+        // mesmo com a Tela Dividida desligada.
+        if (estadoSlots.secundario) {
+            const painel = document.querySelector(`.tab-panel[data-tab="${estadoSlots.secundario}"]`);
+            if (painel && el.tabPanelsPrincipal) {
+                painel.classList.remove("active");
+                el.tabPanelsPrincipal.appendChild(painel);
             }
-        } else if (placeholder) {
-            placeholder.remove();
         }
+        estadoSlots.secundario = null;
+        atualizarBotoesIndisponiveis();
     }
-
-    function sairModoEdicao() {
-        el.tabsNav.classList.remove("editando");
-        el.tabsEditarBtn.innerHTML = '<i data-lucide="move"></i> Organizar';
-        el.tabsEditarBtn.classList.remove("ativo");
-        el.tabsMaisWrap.classList.remove("aberto");
-        el.tabsMaisWrap.style.removeProperty("display");
-        atualizarVisibilidadeMais();
-        atualizarIcones();
-    }
-
-    function aplicarModo(modo) {
-        modoAtual = modo;
-        sairModoEdicao();
-
-        if (modo === "fileira") {
-            [...el.tabsMaisMenu.children].forEach(b => b.classList.contains("tab-btn") && el.tabsFixadas.appendChild(b));
-            el.tabsEditarBtn.disabled = true;
-            el.tabsModoBtn.innerHTML = '<i data-lucide="layout-grid"></i> Compacto';
-            el.tabsModoBtn.classList.add("ativo");
-        } else {
-            const fixadasSalvas = lerListaSalva(CHAVE_ABAS_FIXADAS, ABAS_FIXADAS_PADRAO);
-            const maisSalvas = lerListaSalva(
-                CHAVE_ABAS_MAIS,
-                todosBotoes.map(b => b.dataset.tab).filter(k => !fixadasSalvas.includes(k))
-            );
-            fixadasSalvas.forEach(k => mapaBotoes[k] && el.tabsFixadas.appendChild(mapaBotoes[k]));
-            maisSalvas.forEach(k => { if (mapaBotoes[k] && !fixadasSalvas.includes(k)) el.tabsMaisMenu.appendChild(mapaBotoes[k]); });
-            // Qualquer aba que não caiu em nenhuma das duas listas salvas
-            // (ex.: uma aba nova que não existia quando o jogador salvou a
-            // preferência) cai no "Mais" por padrão, pra não sumir.
-            todosBotoes.forEach(b => {
-                if (!el.tabsFixadas.contains(b) && !el.tabsMaisMenu.contains(b)) el.tabsMaisMenu.appendChild(b);
-            });
-            el.tabsEditarBtn.disabled = false;
-            el.tabsModoBtn.innerHTML = '<i data-lucide="rows-3"></i> Fileira';
-            el.tabsModoBtn.classList.remove("ativo");
-        }
-        atualizarPlaceholderMais();
-        atualizarVisibilidadeMais();
-        aplicarVisibilidadeAbasNpc();
-        salvar();
-        atualizarIcones();
-    }
-
-    el.tabsModoBtn.addEventListener("click", () => {
-        aplicarModo(modoAtual === "fileira" ? "compacto" : "fileira");
-    });
-
-    el.tabsEditarBtn.addEventListener("click", () => {
-        if (modoAtual !== "compacto") return;
-        if (el.tabsNav.classList.contains("editando")) {
-            sairModoEdicao();
-            salvar();
-        } else {
-            el.tabsNav.classList.add("editando");
-            el.tabsMaisWrap.classList.remove("aberto");
-            // Força a exibição da caixa "Mais" direto via JS (em vez de
-            // depender só da cascata do CSS) — remove qualquer chance
-            // de ela ficar com display:none herdado do estado inicial.
-            el.tabsMaisWrap.style.setProperty("display", "block", "important");
-            atualizarPlaceholderMais();
-            el.tabsEditarBtn.innerHTML = '<i data-lucide="check"></i> Concluir';
-            el.tabsEditarBtn.classList.add("ativo");
-            atualizarIcones();
-        }
-    });
-
-
-    // Dropdown do "Mais" (só relevante fora do modo de organizar, onde a
-    // caixa fica sempre aberta via CSS pra dar pra soltar abas nela).
-    el.tabsMaisBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        el.tabsMaisWrap.classList.toggle("aberto");
-    });
-    el.tabsMaisMenu.addEventListener("click", (e) => {
-        if (e.target.closest(".tab-btn")) el.tabsMaisWrap.classList.remove("aberto");
-    });
-    document.addEventListener("click", (e) => {
-        if (!el.tabsMaisWrap.classList.contains("aberto")) return;
-        if (el.tabsMaisWrap.contains(e.target)) return;
-        el.tabsMaisWrap.classList.remove("aberto");
-    });
-
-    // ---- Arrastar-e-soltar (mouse + touch, via Pointer Events) ----
-    let arrastando = null, arrastoIniciado = false, xInicial = 0, yInicial = 0;
-
-    function containerNoPonto(x, y) {
-        const alvo = document.elementFromPoint(x, y);
-        if (!alvo) return null;
-        if (alvo === el.tabsFixadas || alvo === el.tabsMaisMenu) return alvo;
-        return alvo.closest(".tabs-fixadas, .tabs-mais-menu");
-    }
-    function posicaoDeInsercao(container, x, y) {
-        const itens = [...container.children].filter(c => c !== arrastando && c.classList.contains("tab-btn"));
-        if (!itens.length) return null;
-
-        // Agrupa os itens por linha (mesmo "top" aproximado) antes de
-        // comparar X. Sem isso, o item mais próximo em linha reta podia
-        // estar numa linha diferente da que o ponteiro está sobre —
-        // já que os containers usam flex-wrap — fazendo a aba pular
-        // pra um lugar bem diferente de onde foi solta.
-        const linhas = [];
-        itens.forEach(item => {
-            const r = item.getBoundingClientRect();
-            let linha = linhas.find(l => Math.abs(l.top - r.top) < r.height / 2);
-            if (!linha) { linha = { top: r.top, bottom: r.bottom, itens: [] }; linhas.push(linha); }
-            linha.itens.push({ item, rect: r });
-            linha.top = Math.min(linha.top, r.top);
-            linha.bottom = Math.max(linha.bottom, r.bottom);
-        });
-
-        // Linha mais próxima do ponteiro no eixo Y: a que contém o Y,
-        // ou (se estiver acima da primeira/abaixo da última) a mais
-        // perto de todas.
-        let linhaAlvo = linhas.find(l => y >= l.top && y <= l.bottom);
-        if (!linhaAlvo) {
-            linhaAlvo = linhas.reduce((melhor, l) => {
-                const distAtual = Math.min(Math.abs(y - l.top), Math.abs(y - l.bottom));
-                const distMelhor = Math.min(Math.abs(y - melhor.top), Math.abs(y - melhor.bottom));
-                return distAtual < distMelhor ? l : melhor;
-            }, linhas[0]);
-        }
-
-        // Dentro da linha escolhida, decide antes/depois de cada item
-        // olhando só o X (ordem visual da esquerda pra direita).
-        const itensLinha = linhaAlvo.itens.sort((a, b) => a.rect.left - b.rect.left);
-        for (const { item, rect } of itensLinha) {
-            const cx = rect.left + rect.width / 2;
-            if (x < cx) return item;
-        }
-        return itensLinha[itensLinha.length - 1].item.nextElementSibling;
-    }
-    function onPointerMoveArrastar(e) {
-        if (!arrastando) return;
-        if (!arrastoIniciado) {
-            if (Math.hypot(e.clientX - xInicial, e.clientY - yInicial) < 6) return;
-            arrastoIniciado = true;
-            arrastando.classList.add("arrastando");
-        }
-        const container = containerNoPonto(e.clientX, e.clientY) || arrastando.parentElement;
-        const ref = posicaoDeInsercao(container, e.clientX, e.clientY);
-        if (ref) container.insertBefore(arrastando, ref); else container.appendChild(arrastando);
-        atualizarPlaceholderMais();
-    }
-    function onPointerUpArrastar(e) {
-        if (!arrastando) return;
-        const btn = arrastando;
-        if (arrastoIniciado) {
-            // Engole o próximo clique (soltar o botão dispara "click" em
-            // seguida) pra não trocar de aba sem querer só por causa do arrasto.
-            btn.addEventListener("click", (ce) => { ce.stopPropagation(); ce.preventDefault(); }, { once: true, capture: true });
-        }
-        btn.classList.remove("arrastando");
-        btn.releasePointerCapture?.(e.pointerId);
-        btn.removeEventListener("pointermove", onPointerMoveArrastar);
-        btn.removeEventListener("pointerup", onPointerUpArrastar);
-        btn.removeEventListener("pointercancel", onPointerUpArrastar);
-        arrastando = null;
-        arrastoIniciado = false;
-        atualizarPlaceholderMais();
-        atualizarVisibilidadeMais();
-        salvar();
-    }
-    el.tabsNav.addEventListener("pointerdown", (e) => {
-        if (!el.tabsNav.classList.contains("editando")) return;
-        const btn = e.target.closest(".tab-btn[data-tab]");
-        if (!btn) return;
-        arrastando = btn;
-        arrastoIniciado = false;
-        xInicial = e.clientX;
-        yInicial = e.clientY;
-        btn.setPointerCapture(e.pointerId);
-        btn.addEventListener("pointermove", onPointerMoveArrastar);
-        btn.addEventListener("pointerup", onPointerUpArrastar);
-        btn.addEventListener("pointercancel", onPointerUpArrastar);
-    });
-
-    aplicarModo(lerLS(CHAVE_ABAS_MODO) || "fileira");
+    aplicarVisibilidadeAbasNpc();
 }
 
-// Abas que não fazem sentido pra um NPC (finanças, treinamento/estudo,
-// dark net, veículos) somem enquanto o Mestre estiver "atuando como"
-// ele — o resto (Perfil, Atributos, Perícias, Inventário, Combate,
-// Vantagens/Desvantagens, Especializações, Notas) continua igual à
-// ficha normal.
-const ABAS_OCULTAS_NPC = ["financas", "treinamento", "darknet", "veiculos", "saude"];
-function aplicarVisibilidadeAbasNpc() {
-    if (!el.tabsNav) return;
-    const abaAtivaOculta = modoNpc && ABAS_OCULTAS_NPC.includes(
-        el.tabsNav.querySelector(".tab-btn.active")?.dataset.tab
-    );
-    ABAS_OCULTAS_NPC.forEach(tab => {
-        const btn = el.tabsNav.querySelector(`.tab-btn[data-tab="${tab}"]`);
-        if (btn) btn.style.display = modoNpc ? "none" : "";
+function montarNavegacaoAbas() {
+    if (!el.navPrincipal) return;
+
+    ["principal", "secundario"].forEach(slot => {
+        const { nav, categorias, tabs } = navDoSlot(slot);
+        if (!categorias || !tabs) return;
+        categorias.querySelectorAll(".categoria-btn").forEach(btn => {
+            btn.addEventListener("click", () => abrirCategoria(btn.dataset.categoria, slot));
+        });
+        tabs.querySelectorAll(".tab-btn[data-tab]").forEach(btn => {
+            btn.addEventListener("click", () => abrirAba(btn.dataset.tab, slot));
+        });
     });
-    if (abaAtivaOculta) {
-        const btnPericias = el.tabsNav.querySelector('.tab-btn[data-tab="pericias"]');
-        if (btnPericias) btnPericias.click();
+
+    if (el.btnTelaDividida) {
+        el.btnTelaDividida.addEventListener("click", () => alternarTelaDividida(!splitAtivo));
     }
+
+    // Estado inicial: abre a categoria/aba já marcada como .active no
+    // HTML (perfil, no slot principal) e restaura o modo split salvo.
+    abrirAba("perfil", "principal");
+    if (lerLS(CHAVE_SPLIT_ATIVO) === "1") alternarTelaDividida(true);
+}
+
+// NPCs mostram as mesmas 15 abas que uma ficha de jogador enquanto o
+// Mestre estiver "atuando como" ele — nenhuma some. (Antes finanças,
+// treinamento/estudo, dark net, veículos e saúde ficavam ocultas; a
+// lista abaixo continua existindo, vazia, só pra não precisar reescrever
+// aplicarVisibilidadeAbasNpc() caso alguma aba precise voltar a ficar
+// oculta no futuro.)
+const ABAS_OCULTAS_NPC = [];
+function aplicarVisibilidadeAbasNpc() {
+    if (!el.navPrincipal) return;
+    ["principal", "secundario"].forEach(slot => {
+        const { tabs } = navDoSlot(slot);
+        if (!tabs) return;
+        const abaAtivaOculta = modoNpc && ABAS_OCULTAS_NPC.includes(estadoSlots[slot]);
+        ABAS_OCULTAS_NPC.forEach(tab => {
+            const btn = tabs.querySelector(`.tab-btn[data-tab="${tab}"]`);
+            if (btn) btn.classList.toggle("npc-oculta", modoNpc);
+        });
+        if (abaAtivaOculta && (slot === "principal" || splitAtivo)) {
+            abrirAba("pericias", slot);
+        }
+    });
 }
 
 function montarGridsEstaticas() {
@@ -9539,7 +9482,7 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-ir-inventario").addEventListener("click", () => {
         modal.remove();
-        document.querySelector('.tab-btn[data-tab="inventario"]')?.click();
+        abrirAba("inventario", "principal");
     });
 
     btnConfirmar.addEventListener("click", async () => {

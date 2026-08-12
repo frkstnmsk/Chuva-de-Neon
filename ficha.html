@@ -214,39 +214,48 @@
             </div>
 
             <!-- ===================== ABAS ===================== -->
-            <!-- Estrutura em 2 zonas (fixadas / "Mais") pra dar pra
-                 arrastar abas entre elas — ver gerenciarLayoutAbas() em
-                 ficha.js. O botão "Fileira" desliga essa separação e
-                 volta a mostrar tudo numa fileira só, como era antes. -->
-            <nav class="tabs-nav panel" id="tabs-nav">
-                <div class="tabs-fixadas" id="tabs-fixadas">
-                    <button class="tab-btn active" data-tab="perfil" type="button">Perfil</button>
-                    <button class="tab-btn" data-tab="financas" type="button">Finanças</button>
-                    <button class="tab-btn" data-tab="atributos" type="button">Atributos</button>
-                    <button class="tab-btn" data-tab="pericias" type="button">Perícias</button>
-                    <button class="tab-btn" data-tab="inventario" type="button">Inventário</button>
-                    <button class="tab-btn" data-tab="combate" type="button">Combate</button>
-                    <button class="tab-btn" data-tab="saude" type="button">Saúde</button>
-                    <button class="tab-btn" data-tab="veiculos" type="button">Veículos</button>
-                    <button class="tab-btn" data-tab="cenario" type="button">Cenário</button>
-                    <button class="tab-btn" data-tab="vant-desv" type="button">Vantagens / Desvantagens</button>
-                    <button class="tab-btn" data-tab="especializacoes" type="button">Especializações</button>
-                    <button class="tab-btn" data-tab="treinamento" type="button">Treinamento / Estudo</button>
-                    <button class="tab-btn" data-tab="receitas" type="button">Receitas</button>
-                    <button class="tab-btn" data-tab="darknet" type="button">Dark Net</button>
-                    <button class="tab-btn" data-tab="notas" type="button">Determinações / Notas</button>
-                </div>
-                <div class="tabs-mais-wrap" id="tabs-mais-wrap" style="display:none;">
-                    <button class="tabs-mais-btn" id="tabs-mais-btn" type="button">Mais <i data-lucide="chevron-down" class="tabs-mais-seta"></i></button>
-                    <div class="tabs-mais-menu" id="tabs-mais-menu"></div>
-                </div>
-                <div class="tabs-controles">
-                    <button class="tabs-controle-btn" id="tabs-editar-btn" type="button" title="Arraste as abas pra fixar ou esconder em &quot;Mais&quot;"><i data-lucide="move"></i> Organizar</button>
-                    <button class="tabs-controle-btn" id="tabs-modo-btn" type="button" title="Alternar entre abas organizadas e todas em fileira"><i data-lucide="rows-3"></i> Fileira</button>
-                </div>
-            </nav>
+            <!-- Duas camadas: categoria (grupo) + sub-aba dentro da
+                 categoria — ver montarNavegacaoAbas()/CATEGORIAS_ABAS em
+                 ficha.js. Cada metade da tela (normal = só "principal";
+                 com Tela Dividida ligada = "principal" + "secundaria")
+                 tem seu próprio bloco de navegação, independente um do
+                 outro. -->
+            <div class="paineis-controles">
+                <button class="tabs-controle-btn" id="btn-tela-dividida" type="button" title="Mostrar duas abas ao mesmo tempo, uma em cima e outra embaixo">
+                    <i data-lucide="rows-2"></i> Tela dividida
+                </button>
+            </div>
 
-            <main class="tab-panels">
+            <div class="paineis-area" id="paineis-area">
+
+                <div class="painel-slot" id="slot-principal">
+                    <nav class="tabs-nav-bloco panel" id="nav-principal" data-slot="principal">
+                        <div class="categorias-nav" id="categorias-nav-principal">
+                            <button class="categoria-btn active" data-categoria="personagem" type="button">Personagem</button>
+                            <button class="categoria-btn" data-categoria="recursos" type="button">Recursos</button>
+                            <button class="categoria-btn" data-categoria="jogo" type="button">Jogo</button>
+                            <button class="categoria-btn" data-categoria="progresso" type="button">Progresso</button>
+                        </div>
+                        <div class="tabs-nav" id="tabs-nav-principal">
+                            <button class="tab-btn active" data-tab="perfil" data-categoria="personagem" type="button">Perfil</button>
+                            <button class="tab-btn" data-tab="atributos" data-categoria="personagem" type="button">Atributos</button>
+                            <button class="tab-btn" data-tab="pericias" data-categoria="personagem" type="button">Perícias</button>
+                            <button class="tab-btn" data-tab="vant-desv" data-categoria="personagem" type="button">Vantagens / Desvantagens</button>
+                            <button class="tab-btn" data-tab="especializacoes" data-categoria="personagem" type="button">Especializações</button>
+                            <button class="tab-btn" data-tab="inventario" data-categoria="recursos" type="button">Inventário</button>
+                            <button class="tab-btn" data-tab="financas" data-categoria="recursos" type="button">Finanças</button>
+                            <button class="tab-btn" data-tab="receitas" data-categoria="recursos" type="button">Receitas</button>
+                            <button class="tab-btn" data-tab="darknet" data-categoria="recursos" type="button">Dark Net</button>
+                            <button class="tab-btn" data-tab="combate" data-categoria="jogo" type="button">Combate</button>
+                            <button class="tab-btn" data-tab="saude" data-categoria="jogo" type="button">Saúde</button>
+                            <button class="tab-btn" data-tab="veiculos" data-categoria="jogo" type="button">Veículos</button>
+                            <button class="tab-btn" data-tab="cenario" data-categoria="jogo" type="button">Cenário</button>
+                            <button class="tab-btn" data-tab="treinamento" data-categoria="progresso" type="button">Treinamento / Estudo</button>
+                            <button class="tab-btn" data-tab="notas" data-categoria="progresso" type="button">Determinações / Notas</button>
+                        </div>
+                    </nav>
+
+                    <main class="tab-panels" id="tab-panels-principal">
 
                 <!-- ===================== PERFIL ===================== -->
                 <section class="tab-panel active panel" data-tab="perfil">
@@ -544,6 +553,40 @@
                 </section>
 
             </main>
+
+                </div>
+
+                <div class="painel-slot" id="slot-secundario" hidden>
+                    <nav class="tabs-nav-bloco panel" id="nav-secundaria" data-slot="secundario">
+                        <div class="categorias-nav" id="categorias-nav-secundaria">
+                            <button class="categoria-btn" data-categoria="personagem" type="button">Personagem</button>
+                            <button class="categoria-btn active" data-categoria="recursos" type="button">Recursos</button>
+                            <button class="categoria-btn" data-categoria="jogo" type="button">Jogo</button>
+                            <button class="categoria-btn" data-categoria="progresso" type="button">Progresso</button>
+                        </div>
+                        <div class="tabs-nav" id="tabs-nav-secundaria">
+                            <button class="tab-btn" data-tab="perfil" data-categoria="personagem" type="button">Perfil</button>
+                            <button class="tab-btn" data-tab="atributos" data-categoria="personagem" type="button">Atributos</button>
+                            <button class="tab-btn" data-tab="pericias" data-categoria="personagem" type="button">Perícias</button>
+                            <button class="tab-btn" data-tab="vant-desv" data-categoria="personagem" type="button">Vantagens / Desvantagens</button>
+                            <button class="tab-btn" data-tab="especializacoes" data-categoria="personagem" type="button">Especializações</button>
+                            <button class="tab-btn active" data-tab="inventario" data-categoria="recursos" type="button">Inventário</button>
+                            <button class="tab-btn" data-tab="financas" data-categoria="recursos" type="button">Finanças</button>
+                            <button class="tab-btn" data-tab="receitas" data-categoria="recursos" type="button">Receitas</button>
+                            <button class="tab-btn" data-tab="darknet" data-categoria="recursos" type="button">Dark Net</button>
+                            <button class="tab-btn" data-tab="combate" data-categoria="jogo" type="button">Combate</button>
+                            <button class="tab-btn" data-tab="saude" data-categoria="jogo" type="button">Saúde</button>
+                            <button class="tab-btn" data-tab="veiculos" data-categoria="jogo" type="button">Veículos</button>
+                            <button class="tab-btn" data-tab="cenario" data-categoria="jogo" type="button">Cenário</button>
+                            <button class="tab-btn" data-tab="treinamento" data-categoria="progresso" type="button">Treinamento / Estudo</button>
+                            <button class="tab-btn" data-tab="notas" data-categoria="progresso" type="button">Determinações / Notas</button>
+                        </div>
+                    </nav>
+
+                    <main class="tab-panels" id="tab-panels-secundario"></main>
+                </div>
+
+            </div>
 
             <div class="save-bar">
                 <span id="save-status" class="save-status">sincronizado em tempo real</span>

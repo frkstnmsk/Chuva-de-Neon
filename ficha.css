@@ -334,82 +334,13 @@
 .aviso-criacao p { font-size: 0.82rem; color: var(--text-dim); }
 .aviso-criacao button { align-self: flex-start; }
 
-/* ---------- Abas ---------- */
-.tabs-nav {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 4px;
-    padding: 8px;
-    position: relative;
-}
-.tab-btn {
-    border: none;
-    background: transparent;
-    color: var(--text-dim);
-    border-radius: 2px;
-}
-.tab-btn:hover { background: rgba(255,255,255,0.06); box-shadow: none; color: var(--text-main); }
-.tab-btn.active {
-    background: var(--neon-purple);
-    color: #fff;
-    box-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
-}
+/* ---------- Abas: categoria (grupo) + sub-aba ---------- */
 
-/* Zona das abas fixadas — em modo "fileira" recebe todas as 12; em modo
-   "compacto" só as que o jogador escolheu deixar sempre à vista. */
-.tabs-fixadas {
+/* Botão "Tela dividida", sozinho numa fileira acima da navegação. */
+.paineis-controles {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    flex: 1;
-}
-
-/* Menu "Mais" — dropdown com as abas que não estão fixadas. Some sozinho
-   em modo fileira (não faz sentido escondendo nada). */
-.tabs-mais-wrap { position: relative; }
-.tabs-mais-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: none;
-    background: transparent;
-    color: var(--text-dim);
-    border-radius: 2px;
-    padding: 10px 18px;
-    font-family: var(--font-display);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 0.75rem;
-}
-.tabs-mais-btn:hover { background: rgba(255,255,255,0.06); box-shadow: none; color: var(--text-main); }
-.tabs-mais-wrap.aberto .tabs-mais-btn { background: rgba(139, 92, 246, 0.15); color: var(--text-main); }
-.tabs-mais-seta { width: 12px; height: 12px; transition: transform 0.15s ease; }
-.tabs-mais-wrap.aberto .tabs-mais-seta { transform: rotate(180deg); }
-.tabs-mais-menu {
-    display: none;
-    flex-direction: column;
-    gap: 2px;
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    min-width: 220px;
-    padding: 6px;
-    background: var(--panel-bg);
-    border: var(--border-style);
-    border-radius: 4px;
-    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
-    z-index: 40;
-}
-.tabs-mais-menu .tab-btn { text-align: left; width: 100%; }
-.tabs-mais-wrap.aberto .tabs-mais-menu { display: flex; }
-
-/* Botões de controle (Organizar / Fileira) — sempre no canto da barra */
-.tabs-controles {
-    display: flex;
-    gap: 4px;
-    margin-left: auto;
+    justify-content: flex-end;
+    margin-bottom: 6px;
 }
 .tabs-controle-btn {
     display: inline-flex;
@@ -427,52 +358,89 @@
     color: var(--neon-lime);
     background: rgba(163, 230, 53, 0.08);
 }
-.tabs-controle-btn:disabled { opacity: 0.3; }
 
-/* Modo de organizar (arrastar abas) — as duas zonas ficam visíveis e
-   marcadas com borda tracejada, o menu "Mais" vira uma faixa fixa (não
-   um dropdown) pra dar pra soltar as abas nela. */
-.tabs-nav.editando .tabs-fixadas,
-.tabs-nav.editando .tabs-mais-menu {
-    border: 1px dashed rgba(163, 230, 53, 0.5);
+/* Área que contém o(s) slot(s) de painel. Fora do modo split é só uma
+   coluna normal (altura de conteúdo); com split ligado (.split-ativo)
+   vira duas metades empilhadas, cada uma com scroll próprio. */
+.paineis-area { display: block; }
+.paineis-area.split-ativo {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 220px);
+    min-height: 480px;
+    gap: 10px;
+}
+.painel-slot { display: flex; flex-direction: column; min-width: 0; }
+.paineis-area.split-ativo .painel-slot {
+    flex: 1 1 50%;
+    min-height: 0;
+    overflow-y: auto;
+    border: 1px solid rgba(255,255,255,0.08);
     border-radius: 6px;
+}
+.paineis-area.split-ativo .painel-slot .tabs-nav-bloco { position: sticky; top: 0; z-index: 5; }
+
+/* Bloco de navegação (categoria + sub-abas) de um slot. */
+.tabs-nav-bloco {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     padding: 8px;
-    min-height: 42px;
 }
-.tabs-nav.editando .tabs-mais-menu {
-    display: flex !important;
-    flex-direction: row;
+.categorias-nav {
+    display: flex;
     flex-wrap: wrap;
-    position: static;
-    width: 100%;
-    min-width: 0;
-    box-shadow: none;
-    order: 3;
+    gap: 6px;
 }
-.tabs-nav.editando .tabs-mais-menu .tab-btn { width: auto; text-align: center; }
-.tabs-nav.editando .tabs-mais-wrap { display: block !important; flex-basis: 100%; }
-.tabs-nav.editando .tabs-mais-btn { display: none; }
-.tabs-nav.editando::before {
-    content: "Arraste as abas entre as duas caixas pra escolher quais ficam sempre à vista";
-    flex-basis: 100%;
-    order: -1;
-    font-size: 0.68rem;
-    color: var(--neon-lime);
-    padding: 0 2px 4px;
-}
-.tabs-nav.editando .tab-btn { cursor: grab; }
-.tab-btn.arrastando { opacity: 0.45; cursor: grabbing; }
-.tabs-mais-vazio {
-    display: inline-flex;
-    align-items: center;
-    font-size: 0.68rem;
+.categoria-btn {
+    border: none;
+    background: rgba(255,255,255,0.04);
     color: var(--text-dim);
-    font-style: italic;
-    padding: 4px 2px;
+    border-radius: 3px;
+    padding: 9px 16px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-size: 0.78rem;
 }
+.categoria-btn:hover { background: rgba(255,255,255,0.08); box-shadow: none; color: var(--text-main); }
+.categoria-btn.active {
+    background: var(--neon-lime);
+    color: #000;
+    box-shadow: 0 0 10px rgba(163, 230, 53, 0.4);
+}
+.tabs-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-left: 2px;
+}
+.tab-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 2px;
+}
+.tab-btn:hover { background: rgba(255,255,255,0.06); box-shadow: none; color: var(--text-main); }
+.tab-btn.active {
+    background: var(--neon-purple);
+    color: #fff;
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
+}
+/* Aba já aberta na OUTRA metade da tela (modo split) — não pode ser
+   escolhida de novo aqui (ver montarNavegacaoAbas em ficha.js). */
+.tab-btn.indisponivel-na-outra-metade { opacity: 0.35; cursor: not-allowed; }
+.tab-btn.indisponivel-na-outra-metade:hover { background: transparent; color: var(--text-dim); }
+/* Fora da categoria atualmente selecionada nesse slot, ou escondida
+   porque o Mestre está atuando como NPC (ver abrirAba/
+   aplicarVisibilidadeAbasNpc em ficha.js). Duas classes independentes
+   que só escondem — nunca reaparecem uma por cima da outra. */
+.tab-btn.categoria-oculta,
+.tab-btn.npc-oculta { display: none; }
 
 @media (max-width: 600px) {
-    .tabs-controles { margin-left: 0; flex-basis: 100%; }
+    .categoria-btn { padding: 8px 12px; font-size: 0.7rem; }
 }
 
 .tab-panel { display: none; padding: 26px; flex-direction: column; gap: 4px; }
