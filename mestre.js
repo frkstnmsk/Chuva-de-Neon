@@ -98,10 +98,37 @@ export function ouvirTodasAsFichas(callback) {
 // ---------------------------------------------------------------------
 // Dar XP
 // ---------------------------------------------------------------------
-export async function darXp(fichaId, quantidade) {
+// `titulo` (opcional, texto livre — ex: "Sessão 12: venceram os capangas
+// do Kessler") fica registrado junto com o valor e a data em
+// fichas/{id}/xpHistorico, pro Mestre conseguir olhar depois "já dei XP
+// dessa sessão pra esse jogador?" sem depender de memória (ver
+// montarPainelXpMultiplo, ficha.js). Edições diretas no campo XP da
+// ficha (fora deste fluxo) continuam possíveis pro Mestre, mas não
+// passam por aqui — não geram registro no histórico.
+export async function darXp(fichaId, quantidade, titulo = "") {
     const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados/xp`)));
     const xpAtual = snap.exists() ? Number(snap.val()) : 0;
     await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { xp: xpAtual + Number(quantidade) });
+    const novaRef = push(ref(db, caminhoMesa(`fichas/${fichaId}/xpHistorico`)));
+    await set(novaRef, {
+        valor: Number(quantidade),
+        titulo: (titulo || "").trim(),
+        data: Date.now()
+    });
+}
+
+// Listener em tempo real do histórico de XP de UMA ficha — usado tanto
+// pela caixa de histórico na aba Perfil (visível pro Mestre e pro
+// jogador dono da ficha) quanto por qualquer outro lugar que precise
+// saber o que já foi concedido. Mais recente primeiro.
+export function ouvirXpHistorico(fichaId, callback) {
+    return onValue(ref(db, caminhoMesa(`fichas/${fichaId}/xpHistorico`)), (snap) => {
+        if (!snap.exists()) { callback([]); return; }
+        const valores = snap.val();
+        const registros = Object.entries(valores).map(([id, v]) => ({ id, ...v }));
+        registros.sort((a, b) => (b.data || 0) - (a.data || 0));
+        callback(registros);
+    });
 }
 
 // ---------------------------------------------------------------------

@@ -302,6 +302,17 @@
                         </div>
                     </div>
                     <div class="hint" id="hint-nivel-xp" style="display:none;">Nível e XP são ajustados pelo Mestre.</div>
+
+                    <!-- Histórico de XP (plano-registro-xp.txt): registros de
+                         cada "Dar XP" feito pelo Mestre, com título, valor e
+                         data — visível pro Mestre e pro jogador dono da
+                         ficha, pra responder "já dei o XP dessa sessão?" sem
+                         depender de memória. Preenchido em tempo real por
+                         configurarXpHistorico (ficha.js). -->
+                    <details class="xp-historico">
+                        <summary>Histórico de XP (<span id="xp-historico-contador">0</span>)</summary>
+                        <ul id="xp-historico-lista"></ul>
+                    </details>
                 </section>
 
                 <!-- ===================== FINANÇAS ===================== -->
@@ -1067,7 +1078,7 @@
     <div class="modificador-row">
         <select class="mod-alvo"></select>
         <input type="number" class="mod-valor" placeholder="+/-" value="0">
-        <label class="checkbox-inline mod-ocasional-label" title="Em vez de valer sempre, esse modificador vira um checkbox na própria perícia — o jogador liga só quando a situação especial da especialização/vantagem realmente se aplica.">
+        <label class="checkbox-inline mod-ocasional-label" title="Em vez de valer sempre, esse modificador vira um checkbox — na própria perícia (se o alvo for uma perícia) ou na tela do teste específico (ex: Testar Infecção) — que só entra na conta quando marcado, pra situações especiais descritas na especialização/vantagem/item.">
             <input type="checkbox" class="mod-ocasional"> Ocasião especial
         </label>
         <button class="mod-remover btn-red" type="button" title="Remover">×</button>

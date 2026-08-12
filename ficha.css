@@ -2482,3 +2482,20 @@ select.select-guardar-dentro {
 }
 .ferida-historico summary { cursor: pointer; }
 .ferida-historico ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* Histórico de XP (plano-registro-xp.txt) — mesmo molde do
+   .ferida-historico acima, só um pouco mais respirado por ficar sozinho
+   na seção "Progressão" em vez de dentro de um card apertado. */
+.xp-historico {
+    margin-top: 4px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+.xp-historico summary {
+    cursor: pointer;
+    color: var(--neon-lime);
+}
+.xp-historico ul { margin: 8px 0 0; padding-left: 18px; }
+.xp-historico li { margin-bottom: 4px; }
+.xp-historico .xp-historico-titulo { color: #fff; }
+.xp-historico .xp-historico-vazio { color: var(--text-dim); font-style: italic; }

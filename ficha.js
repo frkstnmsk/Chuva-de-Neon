@@ -9,6 +9,7 @@ import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS,
     listaAlvosModificador, rotuloAlvo, modificadoresQueAfetam, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA,
     coletarModificadores, calcularDerivados, calcularTotalPericia, modificadoresOcasionaisDaPericia,
+    modificadoresOcasionaisDoAlvo,
     rolarD20, rolarDado,
     atributoDefesaPorPericia, calcularDificuldadeDefesaJogador, calcularDanoTotalArma,
     calcularDanoDesarmado, calcularDificuldadeArmaFogo, MAX_ATRIBUTO_JOGO,
@@ -101,7 +102,7 @@ import {
 } from "./calendario.js";
 import {
     PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal, limiteRecuperacaoSemTratamento,
-    ouvirTodasAsFichas, darXp, ouvirGodmode, definirGodmode,
+    ouvirTodasAsFichas, darXp, ouvirXpHistorico, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
     ouvirFatorPrecoMateriaisVeiculo, definirFatorPrecoMateriaisVeiculo,
     mestreRolarDado, aplicarDano, causarDanoVeiculo, testarSangramento, testarSangramentoProfundo,
@@ -270,6 +271,13 @@ let perseguicaoAtivaCache = { ativo: false, participantes: {} }; // Gerenciador 
 let feridasCache = [];
 let unsubFeridas = null;
 let feridasFichaIdOuvida = null;
+
+// Histórico de XP da ficha atualmente aberta (plano-registro-xp.txt) —
+// mesmo padrão de feridasCache/unsubFeridas acima: listener próprio,
+// re-registrado só quando a ficha ativa muda de verdade.
+let xpHistoricoCache = [];
+let unsubXpHistorico = null;
+let xpHistoricoFichaIdOuvida = null;
 
 // Limpeza do listener local "ao vivo" de qualquer painel do Mestre que
 // tenha um (Painel de NPCs, Biblioteca de Itens, Biblioteca de Receitas
@@ -459,6 +467,8 @@ const el = {
     treinoGrid: document.getElementById("treino-grid"),
     receitasLista: document.getElementById("receitas-lista"),
     hintNivelXp: document.getElementById("hint-nivel-xp"),
+    xpHistoricoContador: document.getElementById("xp-historico-contador"),
+    xpHistoricoLista: document.getElementById("xp-historico-lista"),
     avisoCriacaoPendente: document.getElementById("aviso-criacao-pendente"),
     btnContinuarCriacao: document.getElementById("btn-continuar-criacao"),
     modal: document.getElementById("modal-entidade"),
@@ -985,6 +995,7 @@ function ativarSincronizacao() {
 
         aplicarVisibilidadeAbasNpc();
         configurarSaude();
+        configurarXpHistorico();
 
         verificarCriacaoPendente();
         verificarLevelUpPendente();
@@ -1352,7 +1363,7 @@ function montarGridsEstaticas() {
         card.querySelector(`[data-rolar-attr="${attr.key}"]`).addEventListener("click", async () => {
             if (!fichaAtual) { toast("Nenhuma ficha carregada ainda.", "erro"); return; }
             const valor = Number(fichaAtual.dados[attr.key]) || 0;
-            await rolarERegistrar(attr.label, valor);
+            await rolarComPossibilidadeDeOcasionais(attr.label, `atributo:${attr.key}`, valor);
         });
         el.gridAtributosPrimarios.appendChild(card);
     });
@@ -1391,7 +1402,7 @@ function montarGridsEstaticas() {
         card.querySelector(`[data-rolar-secundario="${attr.key}"]`).addEventListener("click", async (e) => {
             e.stopPropagation();
             const total = window._ultimosDerivados ? Math.round(window._ultimosDerivados.secundarios[attr.key].total) : 0;
-            await rolarERegistrar(attr.label, total);
+            await rolarComPossibilidadeDeOcasionais(attr.label, `secundario:${attr.key}`, total);
         });
         el.gridAtributosSecundarios.appendChild(card);
     });
@@ -2930,7 +2941,7 @@ function renderizarPericias(modificadoresPlanos) {
         `;
         li.querySelector(".btn-rolar").addEventListener("click", async (e) => {
             e.stopPropagation();
-            await rolarERegistrar(p.nome, calc.total, p.nome === "CQC");
+            await rolarComPossibilidadeDeOcasionais(p.nome, `pericia:${p.nome}`, calc.total, p.nome === "CQC");
         });
         li.querySelectorAll(".pericia-ocasional-check").forEach(chk => {
             chk.addEventListener("click", (e) => e.stopPropagation());
@@ -3034,7 +3045,19 @@ async function executarManobraEsquivar(modificadoresPlanos) {
     const participanteIdParaGastarAcao = consumo.participanteId;
 
     const derivados = calcularDerivados(fichaAtual.dados, modificadoresPlanos);
-    const modAgilidade = derivados.secundarios.agilidade.total + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
+    const modAgilidadeBase = derivados.secundarios.agilidade.total + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
+
+    // Ocasião Especial (ver abrirModalDeltaOcasionais acima): Esquivar
+    // rola Agilidade (secundario:agilidade) — se algum modificador
+    // situacional mirar esse alvo, abre o mesmo passo de confirmação com
+    // checkbox antes de rolar; sem nenhum, segue direto (comportamento
+    // antigo). Fica ANTES do d20 pra não gastar o dado se o jogador
+    // fechar o modal sem confirmar.
+    const ocasionaisEsquivar = modificadoresOcasionaisDoAlvo(fichaAtual, "secundario:agilidade");
+    const { confirmado, delta } = await abrirModalDeltaOcasionais("Esquivar (Agilidade)", ocasionaisEsquivar);
+    if (!confirmado) return;
+    const modAgilidade = modAgilidadeBase + delta;
+
     const bruto = rolarD20();
     const resultado = bruto + modAgilidade;
     const quem = isMestre
@@ -3489,6 +3512,70 @@ function abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, 
         await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
     });
     document.body.appendChild(modal);
+}
+
+// ---------------------------------------------------------------------
+// Helper "base": abre o modal de checkboxes de Ocasião Especial e resolve
+// com o delta escolhido (0 se não tiver ocasional nenhum ou se o jogador
+// fechar sem confirmar — quem chama decide se cancela ou rola com delta
+// 0 nesse caso). Reaproveitado por rolarComPossibilidadeDeOcasionais
+// (rolagem simples) e por qualquer rolagem com lógica própria depois do
+// resultado (ex.: executarManobraEsquivar, que ainda guarda uma esquiva
+// extra) que não pode simplesmente delegar tudo pra rolarERegistrar.
+// ---------------------------------------------------------------------
+function abrirModalDeltaOcasionais(nomeAlvo, ocasionais) {
+    if (!ocasionais.length) return Promise.resolve({ confirmado: true, delta: 0 });
+    return new Promise((resolve) => {
+        let modal = document.getElementById("modal-ocasionais-rolagem");
+        if (!modal) {
+            modal = document.createElement("div");
+            modal.id = "modal-ocasionais-rolagem";
+            modal.className = "panel combate-painel-jogador";
+            document.body.appendChild(modal);
+        }
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">${escapeHtml(nomeAlvo)}</span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <p class="hint">Marque as Ocasiões Especiais que se aplicam a esta rolagem antes de rolar.</p>
+            <div id="ocasionais-rolagem-lista">${htmlCheckboxesOcasionais(ocasionais, nomeAlvo)}</div>
+            <div class="modal-btns">
+                <button type="button" class="btn-lime" id="btn-confirmar-ocasionais-rolagem">Rolar ${escapeHtml(nomeAlvo)}</button>
+            </div>
+        `;
+        const fechar = () => { modal.remove(); resolve({ confirmado: false, delta: 0 }); };
+        modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+        modal.querySelector("#btn-confirmar-ocasionais-rolagem").addEventListener("click", () => {
+            const delta = lerDeltaOcasionais(modal.querySelector("#ocasionais-rolagem-lista"), ocasionais);
+            modal.remove();
+            resolve({ confirmado: true, delta });
+        });
+        document.body.appendChild(modal);
+    });
+}
+
+// ---------------------------------------------------------------------
+// Versão "genérica" do passo de confirmação acima (abrirModalConfirmarOcasionaisUso
+// é só pro uso de item) — reaproveitada por QUALQUER rolagem solta de
+// perícia ou atributo (primário/secundário) feita fora do fluxo de item:
+// botão "🎲" da lista de Perícias e dos cards de Atributos. Se o alvo
+// rolado (`pericia:X`, `atributo:X`, `secundario:X`...) tiver algum
+// modificador de Ocasião Especial cadastrado (especialização/vantagem
+// que aumenta ou diminui a dificuldade/modificador só numa situação
+// pontual), abre o mesmo modal de "aperte pra rolar" com os checkboxes
+// antes de rolar de fato — sem nenhum ocasional pro alvo, rola direto,
+// sem esse passo a mais no meio (comportamento antigo preservado).
+// `modificadorBase` já deve vir pronto do jeito que já era calculado
+// antes (inclui os modificadores permanentes e os ocasionais que já
+// estejam ligados) — o delta aqui cobre só o que mudar de estado nesta
+// tela antes de confirmar, igual lerDeltaOcasionais já faz pro uso de item.
+// ---------------------------------------------------------------------
+async function rolarComPossibilidadeDeOcasionais(nomeAlvo, alvoModificador, modificadorBase, ehCQC = false, dificuldade = null) {
+    const ocasionais = modificadoresOcasionaisDoAlvo(fichaAtual, alvoModificador);
+    const { confirmado, delta } = await abrirModalDeltaOcasionais(nomeAlvo, ocasionais);
+    if (!confirmado) return undefined;
+    return rolarERegistrar(nomeAlvo, modificadorBase + delta, ehCQC, dificuldade);
 }
 
 async function rolarUsoItem(it, modificadoresPlanos) {
@@ -4185,6 +4272,12 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
     );
     if (!opcoes.length) { toast("Não há outros participantes no combate pra arremessar.", "erro"); return; }
 
+    // Ocasião Especial da perícia usada (ver htmlCheckboxesOcasionais/
+    // lerDeltaOcasionais acima): mesma checagem que já vale pra
+    // Agarrar/Desarmar/Derrubar/Delimitar/Retomar/Imobilizar — Arremessar
+    // não passava por isso ainda.
+    const ocasionaisArremessar = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
+
     let modal = document.getElementById("modal-arremessar-cqc");
     if (!modal) {
         modal = document.createElement("div");
@@ -4206,6 +4299,7 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
         <h4>Escolha até 3 alvos</h4>
         <p class="hint">Arremessa cada alvo marcado (dano Força [escala C], contusão). Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
         <div class="combate-lista">${linhas}</div>
+        <div id="arremessar-ocasionais-lista">${htmlCheckboxesOcasionais(ocasionaisArremessar, nomePericia)}</div>
         <button type="button" class="btn-lime" id="btn-confirmar-arremessar" style="margin-top:10px;width:100%;">Arremessar</button>
     `;
     const checks = () => Array.from(modal.querySelectorAll("[data-arremessar-alvo]"));
@@ -4219,8 +4313,9 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
     modal.querySelector("#btn-confirmar-arremessar").addEventListener("click", async () => {
         const alvosIds = checks().filter(c => c.checked).map(c => c.dataset.arremessarAlvo);
         if (!alvosIds.length) { toast("Marque pelo menos 1 alvo.", "erro"); return; }
+        const deltaOcasional = lerDeltaOcasionais(modal.querySelector("#arremessar-ocasionais-lista"), ocasionaisArremessar);
         modal.remove();
-        await resolverArremessar(nomePericia, modificadorBase, alvosIds);
+        await resolverArremessar(nomePericia, modificadorBase + deltaOcasional, alvosIds);
     });
 }
 
@@ -5774,8 +5869,14 @@ async function tentarLibertarImobilizado(participanteId) {
     const dificuldade = Number(statusImobilizado.dificuldadeEscape) || 10;
     const modDestreza = Number(fichaAtual?.dados?.destreza) || 0;
     const penalidade = penalidadeTestesAtual();
+    // Ocasião Especial (ver abrirModalDeltaOcasionais acima): teste de
+    // Destreza (atributo:destreza) pra se libertar — mesma checagem de
+    // qualquer outra rolagem, antes de gastar o d20.
+    const ocasionaisLibertar = modificadoresOcasionaisDoAlvo(fichaAtual, "atributo:destreza");
+    const { confirmado, delta: deltaOcasionalLibertar } = await abrirModalDeltaOcasionais("Destreza — Libertar-se do Imobilizado", ocasionaisLibertar);
+    if (!confirmado) return;
     const bruto = rolarD20();
-    const modTotal = modDestreza + penalidade;
+    const modTotal = modDestreza + penalidade + deltaOcasionalLibertar;
     const resultado = bruto + modTotal;
     const detalheRolagem = `rolagem: ${bruto}\nDestreza: ${modDestreza >= 0 ? "+" : ""}${modDestreza}${penalidade ? ` ${penalidade >= 0 ? "+" : ""}${penalidade} (penalidade de saúde/energia)` : ""}\nresultado: ${resultado}`;
     const conseguiu = resultado >= dificuldade;
@@ -7047,13 +7148,13 @@ function renderizarManobrasCombate() {
                         const dadoTexto = danoCalc.dadoMultiplicador > 1
                             ? `1d${danoCalc.faces}×${danoCalc.dadoMultiplicador}: ${danoCalc.dado}×${danoCalc.dadoMultiplicador}=${danoCalc.dadoTotal}`
                             : `1d${danoCalc.faces}: ${danoCalc.dado}`;
-                        await rolarERegistrar(`${m.nome} (${nomePericia}) · dano potencial ${danoCalc.total} (${dadoTexto} + ${danoCalc.bonusEscala})`, modificador, nomePericia === "CQC");
+                        await rolarComPossibilidadeDeOcasionais(`${m.nome} (${nomePericia}) · dano potencial ${danoCalc.total} (${dadoTexto} + ${danoCalc.bonusEscala})`, `pericia:${nomePericia}`, modificador, nomePericia === "CQC");
                     }
                     return;
                 }
 
                 const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
-                await rolarERegistrar(`${m.nome} (${nomePericia})`, modificador, nomePericia === "CQC");
+                await rolarComPossibilidadeDeOcasionais(`${m.nome} (${nomePericia})`, `pericia:${nomePericia}`, modificador, nomePericia === "CQC");
             });
         });
 
@@ -7674,7 +7775,7 @@ async function testarAcessorioVeiculo(veiculoId, key) {
     if (!cat || cat.mecanica !== "teste_dif_fixa") return;
     const modificadoresPlanos = modificadoresAtuais();
     const modificador = modificadorDePericiaComPenalidade(cat.periciaTeste, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(cat.periciaTeste));
-    const resultado = await rolarERegistrar(`${cat.nome} (${cat.periciaTeste})`, modificador, false, cat.dificuldade);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`${cat.nome} (${cat.periciaTeste})`, `pericia:${cat.periciaTeste}`, modificador, false, cat.dificuldade);
     if (!resultado) return;
 
     if (key === "oleo") {
@@ -8132,7 +8233,7 @@ async function testarDirigirVeiculosPerseguicao(participanteId, lado) {
     const bairro = bairroPerseguicao(perseguicaoAtivaCache.bairro);
     if (bairro && lado === "perseguidor") modificador += Number(bairro.penalidadePerseguidor) || 0;
 
-    const resultado = await rolarERegistrar(`Perseguição — Testar Dirigir Veículos (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, modificador, false, null);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`Perseguição — Testar Dirigir Veículos (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, "pericia:Dirigir Veículos", modificador, false, null);
     if (!resultado) return;
 
     const pontos = pontosPorResultadoTesteFuga(resultado.resultado);
@@ -8177,7 +8278,7 @@ async function tentarRotaFugaPerseguicao(participanteId, lado) {
     let modificador = velocidadeAjustada.total + penalidadeEnergiaPara("fisica");
     if (lado === "perseguidor") modificador += Number(bairro.penalidadePerseguidor) || 0;
 
-    const resultado = await rolarERegistrar(`Perseguição — Tentar Rota de Fuga (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, modificador, false, bairro.dificuldadeRotaFuga);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`Perseguição — Tentar Rota de Fuga (volta ${perseguicaoAtivaCache.voltaAtual || 1})`, "secundario:velocidade", modificador, false, bairro.dificuldadeRotaFuga);
     if (!resultado) return;
 
     try {
@@ -8529,7 +8630,7 @@ async function resolverMecanicoVeiculo(veiculoId, atributoKey, modo, custo, difi
         ? `Melhorar veículo: ${rotuloAtributo} (nível ${Math.min(5, nivelAtualBase + 1)})`
         : `Reparar veículo: ${rotuloAtributo}`;
 
-    const resultado = await rolarERegistrar(`${rotuloAcao} (${nomePericia})`, modificador, false, dificuldade);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`${rotuloAcao} (${nomePericia})`, `pericia:${nomePericia}`, modificador, false, dificuldade);
     if (!resultado) return;
 
     if (!resultado.sucesso) {
@@ -8685,7 +8786,7 @@ async function resolverMecanicoVeiculoTerceiro(fichaAlvoId, veiculoId, veiculoNo
         ? `Melhorar veículo de terceiro: "${veiculoNome}" — ${rotuloAtributo}`
         : `Reparar veículo de terceiro: "${veiculoNome}" — ${rotuloAtributo}`;
 
-    const resultado = await rolarERegistrar(`${rotuloAcao} (${nomePericia})`, modificador, false, dificuldade);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`${rotuloAcao} (${nomePericia})`, `pericia:${nomePericia}`, modificador, false, dificuldade);
     if (!resultado) return;
 
     if (!resultado.sucesso) {
@@ -8848,7 +8949,7 @@ async function resolverManobraVeiculo(veiculoId, manobraChave, dificuldade, pers
         }
     }
 
-    const resultado = await rolarERegistrar(`Manobra: ${manobra.nome} (Dirigir Veículos)${perseguicaoContext ? ` — Perseguição, volta ${perseguicaoAtivaCache.voltaAtual || 1}` : ""}`, modificador, false, dificuldade);
+    const resultado = await rolarComPossibilidadeDeOcasionais(`Manobra: ${manobra.nome} (Dirigir Veículos)${perseguicaoContext ? ` — Perseguição, volta ${perseguicaoAtivaCache.voltaAtual || 1}` : ""}`, "pericia:Dirigir Veículos", modificador, false, dificuldade);
     if (!resultado) return;
 
     const textoEfeito = resultado.criticoNegativo && manobra.efeitoFalhaCritica
@@ -9345,6 +9446,10 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
     const ingredientes = Array.isArray(receita.ingredientes) ? receita.ingredientes : [];
     const nivelItem = Number(receita.nivel) || 1;
     const tierMinimo = tierMinimoExigidoPeloNivel(nivelItem);
+    // Ocasião Especial da perícia usada na criação (ver
+    // htmlCheckboxesOcasionais/lerDeltaOcasionais acima) — mesma checagem
+    // de qualquer outra rolagem de perícia.
+    const ocasionaisReceita = modificadoresOcasionaisDaPericia(fichaAtual, periciaNome);
 
     modal.innerHTML = `
         <div class="combate-painel-topo">
@@ -9356,6 +9461,7 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
             : `<p class="hint">Materiais são descontados automaticamente do inventário ao confirmar. Material abaixo da qualidade mínima do nível ${nivelItem} não pode ser usado nesta receita; qualidade ACIMA do mínimo reduz -1 na dificuldade por tipo de material usado.</p>
                <div id="materiais-escolha-lista"></div>`
         }
+        <div id="materiais-ocasionais-lista">${htmlCheckboxesOcasionais(ocasionaisReceita, periciaNome)}</div>
         <div class="modal-btns">
             <button type="button" class="btn-ghost" id="btn-ir-inventario">Ir pro Inventário</button>
             <button type="button" class="btn-lime" id="btn-confirmar-materiais">🎲 Rolar</button>
@@ -9478,8 +9584,9 @@ function abrirModalEscolherMateriais(receita, periciaNome, modificadorBase) {
         // de material de nível maior usado"). Isso importa porque o
         // modificador do teste de perícia tem um teto (+10) que essa
         // redução não deve competir com nem ficar sujeita.
+        const deltaOcasionalReceita = lerDeltaOcasionais(modal.querySelector("#materiais-ocasionais-lista"), ocasionaisReceita);
         modal.remove();
-        await resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorBase);
+        await resolverCriacaoReceita(receita, escolhas, bonusQualidade, modificadorBase + deltaOcasionalReceita);
     });
 }
 
@@ -13686,6 +13793,49 @@ function configurarSaude() {
     });
 }
 
+// =====================================================================
+// HISTÓRICO DE XP (plano-registro-xp.txt): registros de cada "Dar XP"
+// feito pelo Mestre (título + valor + data) da ficha atualmente aberta.
+// Mesmo padrão de configurarSaude acima — listener próprio por ficha,
+// re-registrado só quando a ficha ativa muda de verdade. Visível pro
+// Mestre e pro jogador dono da ficha (renderizarXpHistorico não checa
+// isMestre em nenhum momento — é só leitura, sem ação nenhuma pro
+// jogador fazer ali). Escopo: só ficha de jogador, igual Saúde — XP de
+// NPC não existe hoje (ver darXp, mestre.js).
+// =====================================================================
+function configurarXpHistorico() {
+    const alvo = !modoNpc && fichaAtualId ? fichaAtualId : null;
+    if (alvo === xpHistoricoFichaIdOuvida) return;
+    xpHistoricoFichaIdOuvida = alvo;
+    if (unsubXpHistorico) { unsubXpHistorico(); unsubXpHistorico = null; }
+    if (!alvo) {
+        xpHistoricoCache = [];
+        renderizarXpHistorico();
+        return;
+    }
+    unsubXpHistorico = ouvirXpHistorico(alvo, (lista) => {
+        xpHistoricoCache = lista || [];
+        renderizarXpHistorico();
+    });
+}
+
+function renderizarXpHistorico() {
+    if (!el.xpHistoricoLista || !el.xpHistoricoContador) return;
+    el.xpHistoricoContador.innerText = xpHistoricoCache.length;
+    if (!xpHistoricoCache.length) {
+        el.xpHistoricoLista.innerHTML = `<li class="xp-historico-vazio">Nenhum XP registrado ainda.</li>`;
+        return;
+    }
+    el.xpHistoricoLista.innerHTML = xpHistoricoCache.map(r => {
+        const data = r.data ? new Date(r.data).toLocaleDateString("pt-BR") : "—";
+        const sinal = Number(r.valor) >= 0 ? "+" : "";
+        const tituloHtml = r.titulo
+            ? `<span class="xp-historico-titulo">${escapeHtml(r.titulo)}</span> — `
+            : "";
+        return `<li>${tituloHtml}${sinal}${r.valor ?? 0} XP <span class="hint-inline">(${data})</span></li>`;
+    }).join("");
+}
+
 function tituloTipoFerida(tipo) {
     return {
         sangramento: "Sangramento", corte: "Corte", projetil: "Projétil alojado",
@@ -13975,6 +14125,24 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
     if (!ferida) { toast("Essa ferida não existe mais.", "erro"); return; }
     const nomeFicha = fichaAtual?.dados?.nome || fichaAtualId;
 
+    // Modificadores estruturados que miram "dificuldade:infeccao" (ver
+    // regras.js, listaAlvosModificador): mesma ideia do checkbox de
+    // Ocasião Especial já usado nas perícias, só que aplicado a essa
+    // dificuldade em vez de somar na rolagem. O que já está permanente
+    // (não-ocasional) ou já ligado no cadastro entra automaticamente na
+    // conta; os "ocasionais" ganham um checkbox aqui no modal pra ligar/
+    // desligar antes de rolar, sem precisar abrir o item/vantagem/
+    // especialização de origem.
+    const modificadoresPlanos = modificadoresAtuais();
+    const somaAtual = somaModificadoresPara("dificuldade:infeccao", modificadoresPlanos);
+    const ocasionaisInfeccao = modificadoresOcasionaisDoAlvo(fichaAtual, "dificuldade:infeccao");
+    const somaOcasionaisJaLigados = ocasionaisInfeccao.filter(o => o.ativo).reduce((acc, o) => acc + o.valor, 0);
+    // Parte permanente = tudo que soma independente do checkbox (itens/
+    // vantagens sem "Ocasião especial" marcada) — serve de base pra
+    // recalcular ao vivo quando o Mestre mexe nos checkboxes abaixo, sem
+    // precisar esperar o round-trip do Firebase.
+    const basePermanenteInfeccao = somaAtual - somaOcasionaisJaLigados;
+
     let modal = document.getElementById("modal-testar-infeccao-ferida");
     if (!modal) {
         modal = document.createElement("div");
@@ -13982,6 +14150,19 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
         modal.className = "panel combate-painel-jogador";
         document.body.appendChild(modal);
     }
+    const ocasionaisHtml = ocasionaisInfeccao.length ? `
+        <div class="pericia-ocasionais" style="margin-top:10px;">
+            ${ocasionaisInfeccao.map((o, idx) => {
+                const efeito = o.valor >= 0 ? `reduz a dificuldade em ${o.valor}` : `aumenta a dificuldade em ${Math.abs(o.valor)}`;
+                return `
+                <label class="checkbox-inline pericia-ocasional-item" title="${escapeHtml(o.origem)} — só entra na conta enquanto marcado">
+                    <input type="checkbox" class="infeccao-ocasional-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                    ${escapeHtml(o.origem)} (${efeito})
+                </label>
+            `;
+            }).join("")}
+        </div>
+    ` : "";
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Infecção — ${escapeHtml(nomeFicha)} — ${tituloTipoFerida(ferida.tipo)}${ferida.local ? ` (${tituloLocalFerida(ferida.local)})` : ""}</span>
@@ -13992,8 +14173,10 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
             <input type="number" id="ferida-infeccao-dificuldade" value="${DIFICULDADE_INFECCAO_MINIMA}" min="1" style="width:100%;">
         </label>
         <label style="display:block;margin-top:10px;">Modificador de itens/tratamento (ex: -2 com Soro Fisiológico)
-            <input type="number" id="ferida-infeccao-modificador" value="0" style="width:100%;">
+            <input type="number" id="ferida-infeccao-modificador" value="${basePermanenteInfeccao + somaOcasionaisJaLigados}" style="width:100%;">
+            <span class="hint" style="display:block;">Pré-preenchido a partir dos modificadores cadastrados na ficha (vantagens/especializações/itens mirando "Dificuldade: Resistir a Infecção") — ainda editável à mão se precisar ajustar.</span>
         </label>
+        ${ocasionaisHtml}
         <label style="display:block;margin-top:10px;">Origem / observação
             <input type="text" id="ferida-infeccao-origem" placeholder="Ex: ferimento de bala no torso, tratado sem esterilizar" style="width:100%;">
         </label>
@@ -14001,6 +14184,21 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
     `;
     const fechar = () => modal.remove();
     modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+
+    const campoModificador = modal.querySelector("#ferida-infeccao-modificador");
+    modal.querySelectorAll(".infeccao-ocasional-check").forEach(chk => {
+        chk.addEventListener("change", () => {
+            const o = ocasionaisInfeccao[Number(chk.dataset.idx)];
+            o.ativo = chk.checked;
+            // Persiste o toggle (mesma função usada pelas perícias — ver
+            // alternarModificadorOcasional) e recalcula o campo na hora,
+            // sem esperar o listener em tempo real re-renderizar a ficha.
+            alternarModificadorOcasional(o, chk.checked);
+            const somaOcasionaisAgora = ocasionaisInfeccao.filter(x => x.ativo).reduce((acc, x) => acc + x.valor, 0);
+            campoModificador.value = basePermanenteInfeccao + somaOcasionaisAgora;
+        });
+    });
+
     modal.querySelector("#btn-rolar-teste-infeccao-ferida").addEventListener("click", async () => {
         const dificuldadeBase = Number(modal.querySelector("#ferida-infeccao-dificuldade").value) || DIFICULDADE_INFECCAO_MINIMA;
         const modificadorItens = Number(modal.querySelector("#ferida-infeccao-modificador").value) || 0;
@@ -14191,12 +14389,29 @@ function renderizarReacaoPendente(r) {
                         ${opcoesPericiaAparar.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
                     </select>
                 </div>
+                <div id="reacao-aparar-ocasionais"></div>
                 <button id="reacao-aparar-confirmar" class="btn-lime" type="button">Rolar Aparar</button>
             `;
+            const selectPericiaAparar = painelAparar.querySelector("#reacao-aparar-select");
+            const ocasionaisApararDiv = painelAparar.querySelector("#reacao-aparar-ocasionais");
+            // Ocasião Especial (ver htmlCheckboxesOcasionais acima): a
+            // perícia escolhida pra aparar pode mudar no select, então a
+            // lista de checkboxes é recalculada a cada troca — mesma
+            // convenção do resto do arquivo (fichaAtual é sempre quem
+            // está reagindo nesta tela).
+            let ocasionaisAparar = [];
+            const atualizarOcasionaisAparar = () => {
+                ocasionaisAparar = modificadoresOcasionaisDaPericia(fichaAtual, selectPericiaAparar.value);
+                ocasionaisApararDiv.innerHTML = htmlCheckboxesOcasionais(ocasionaisAparar, selectPericiaAparar.value);
+            };
+            selectPericiaAparar.addEventListener("change", atualizarOcasionaisAparar);
+            atualizarOcasionaisAparar();
             painelAparar.querySelector("#reacao-aparar-confirmar").addEventListener("click", async () => {
-                const periciaEscolhida = painelAparar.querySelector("#reacao-aparar-select").value;
+                const periciaEscolhida = selectPericiaAparar.value;
                 painelAparar.querySelector("#reacao-aparar-confirmar").disabled = true;
-                const modDado = await calcularModApararParticipante(r.alvoTipo, r.alvoRefId, periciaEscolhida);
+                const modBase = await calcularModApararParticipante(r.alvoTipo, r.alvoRefId, periciaEscolhida);
+                const deltaOcasional = lerDeltaOcasionais(ocasionaisApararDiv, ocasionaisAparar);
+                const modDado = modBase + deltaOcasional;
                 const brutoDado = rolarD20();
                 const resultadoDado = brutoDado + modDado;
                 await responder("aparar", { periciaEscolhida, brutoDado, modDado, resultadoDado });
@@ -15421,17 +15636,29 @@ function montarPainelXpMultiplo(corpo) {
     const input = document.createElement("input");
     input.type = "number"; input.placeholder = "Quantidade de XP"; input.value = 50;
 
+    // Título do XP (opcional, mas recomendado) — fica salvo junto no
+    // histórico de cada ficha (ver darXp/ouvirXpHistorico, mestre.js),
+    // pra responder depois "já dei o XP dessa sessão?" sem depender de
+    // memória. Ex.: "Sessão 12 — venceram os capangas do Kessler".
+    const inputTitulo = document.createElement("input");
+    inputTitulo.type = "text";
+    inputTitulo.placeholder = "Título do XP (ex.: Sessão 12 — venceram os capangas)";
+
     const btnEnviar = document.createElement("button");
     btnEnviar.className = "btn-lime"; btnEnviar.type = "button"; btnEnviar.innerText = "Enviar XP às fichas marcadas";
     btnEnviar.addEventListener("click", async () => {
         const marcadas = [...lista.querySelectorAll(".xp-checkbox:checked")].map(c => c.value);
         if (!marcadas.length) { toast("Marque pelo menos uma ficha.", "erro"); return; }
         const quantidade = Number(input.value) || 0;
-        await Promise.all(marcadas.map(id => darXp(id, quantidade)));
+        const titulo = inputTitulo.value.trim();
+        await Promise.all(marcadas.map(id => darXp(id, quantidade, titulo)));
         toast(`XP enviado para ${marcadas.length} ficha${marcadas.length > 1 ? "s" : ""}.`);
+        // Limpa só o título — a quantidade costuma se repetir entre
+        // envios da mesma sessão, o título quase nunca.
+        inputTitulo.value = "";
     });
 
-    corpo.append(acoesTopo, lista, input, btnEnviar);
+    corpo.append(acoesTopo, lista, input, inputTitulo, btnEnviar);
 }
 
 // prefillValue (opcional): pré-seleciona um valor (formato "ficha::{id}"

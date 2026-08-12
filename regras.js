@@ -64,7 +64,18 @@ export function listaAlvosModificador(pericias = []) {
         { value: "defesa", label: "Defesa / redução de dano" },
         { value: "testes_sociais", label: "Testes sociais (geral)" },
         { value: "testes_mentais", label: "Testes mentais (geral)" },
-        { value: "testes_fisicos", label: "Testes físicos (geral)" }
+        { value: "testes_fisicos", label: "Testes físicos (geral)" },
+        // Redução de dificuldade em teste específico (ver
+        // modificadoresOcasionaisDoAlvo mais abaixo e
+        // abrirModalTestarInfeccaoFerida em ficha.js): diferente dos alvos
+        // acima, aqui o `valor` cadastrado NÃO se soma à rolagem — ele é
+        // SUBTRAÍDO da dificuldade daquele teste específico (positivo =
+        // mais fácil, mesma convenção do campo "Modificador de itens/
+        // tratamento" que já existia). Igual qualquer outro modificador,
+        // pode ficar sempre ativo (ex: uma Vantagem permanente) ou marcado
+        // "Ocasião especial" (ex: um item consumível, só quando usado
+        // naquele teste específico).
+        { value: "dificuldade:infeccao", label: "Dificuldade: Resistir a Infecção (valor reduz a dificuldade)" }
     ];
     const nomesCatalogo = new Set(PERICIAS_MANUAL.map(p => p.nome));
     const nomesExtras = pericias
@@ -182,18 +193,18 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
 }
 
 // ---------------------------------------------------------------------
-// Modificadores de Ocasião Especial de uma perícia — varre as mesmas
-// fontes de coletarModificadores procurando modificadores com
-// `ocasional: true` mirando `pericia:<nomePericia>`. Diferente de
-// coletarModificadores (que só soma o que já está ligado),
-// devolve TODOS os candidatos (ligados ou não) com o suficiente pra
-// montar um checkbox por perícia (ficha.js) e togglear cada um
-// individualmente sem abrir o cadastro da especialização/vantagem de
-// origem: `lista` (nome do nó no Firebase), `entidadeId` e `modIndex`
-// (posição dentro do array `modificadores` daquela entidade).
+// Modificadores de Ocasião Especial de UM alvo qualquer — varre as
+// mesmas fontes de coletarModificadores procurando modificadores com
+// `ocasional: true` mirando exatamente esse `alvo` (ex: "pericia:Furtividade",
+// "dificuldade:infeccao"). Diferente de coletarModificadores (que só soma
+// o que já está ligado), devolve TODOS os candidatos daquele alvo
+// (ligados ou não) com o suficiente pra montar um checkbox por item
+// (ficha.js) e togglear cada um individualmente sem abrir o cadastro da
+// especialização/vantagem/item de origem: `lista` (nome do nó no
+// Firebase), `entidadeId` e `modIndex` (posição dentro do array
+// `modificadores` daquela entidade).
 // ---------------------------------------------------------------------
-export function modificadoresOcasionaisDaPericia(ficha, nomePericia) {
-    const alvo = `pericia:${nomePericia}`;
+export function modificadoresOcasionaisDoAlvo(ficha, alvo) {
     const resultado = [];
     for (const fonte of FONTES_MODIFICADOR) {
         const lista = (ficha && ficha[fonte.lista]) || {};
@@ -217,6 +228,15 @@ export function modificadoresOcasionaisDaPericia(ficha, nomePericia) {
         }
     }
     return resultado;
+}
+
+// Perícia específica (alvo = "pericia:<nomePericia>") — mantida como
+// função própria porque é de longe o uso mais comum (renderizarPericias
+// e toda a cadeia de rolarERegistrar em ficha.js chamam por nome de
+// perícia, não pelo alvo cru), mas por baixo dos panos é só
+// modificadoresOcasionaisDoAlvo com o alvo já montado.
+export function modificadoresOcasionaisDaPericia(ficha, nomePericia) {
+    return modificadoresOcasionaisDoAlvo(ficha, `pericia:${nomePericia}`);
 }
 
 // ---------------------------------------------------------------------
