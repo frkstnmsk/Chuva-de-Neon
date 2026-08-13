@@ -29,7 +29,8 @@ import {
     pontosPorResultadoTesteFuga,
     slotsAcessoriosVeiculo, slotsAcessoriosUsados, slotsAcessoriosLivres, podeInstalarAcessorio,
     efeitoOleoVeiculo, efeitoCospePregoVeiculo,
-    itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO
+    itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO,
+    modificadorDarknet
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -324,6 +325,14 @@ const DARKNET_SITES = [
     { id: "blackprint", nome: "BlackPrint" }
 ];
 const CAMPOS_DARKNET_NOTAS = DARKNET_SITES.map(s => s.id);
+// Sites com fórmula de modificador definida (ver plano-darknet-credenciais.txt,
+// Parte 2/regras.js:modificadorDarknet) — decide o que o card de cada
+// credencial mostra/edita: P2K usa pontuação numérica; Creators/
+// RabbitHole/BlackPrint usam avaliações em estrelas escritas pelo
+// Mestre. Os demais sites (Dm, Void, P2C, DarkArt) não têm fórmula —
+// card fica simples, sem badge de modificador nem botão de rolar.
+const DARKNET_SITES_PONTUACAO = ["p2k"];
+const DARKNET_SITES_AVALIACAO = ["creators", "rabbithole", "blackprint"];
 const TITULOS_MODAL = {
     pericias: "Perícia", inventario: "Item de inventário", vantagens: "Vantagem",
     desvantagens: "Desvantagem", fatosUniversais: "Fato universal",
@@ -10426,15 +10435,23 @@ function montarGradeDarknetSeNecessario() {
     }
 }
 
-// Credenciais da Dark Net: cada site guarda uma lista de anotações de
-// texto livre (usuário/senha/nota — sem campos fixos, ver decisão do
-// jogador). Fica em fichaAtual.darknetCredenciais = { [siteId]: [""...] },
-// salvo inteiro a cada alteração (mesmo padrão de fichaAtual.determinacoes).
+// Credenciais da Dark Net: cada site guarda uma lista de CARDS — objetos
+// { id, nome, pontuacao, avaliacoes[] } (ver plano-darknet-credenciais.txt
+// e normalizarDarknetCredenciais em normalizacao.js, que já garante essa
+// forma pra qualquer ficha, antiga ou nova, ao carregar). Fica em
+// fichaAtual.darknetCredenciais = { [siteId]: [...] }, salvo inteiro a
+// cada alteração (mesmo padrão de fichaAtual.determinacoes).
 function credenciaisDoSite(siteId) {
     if (!fichaAtual.darknetCredenciais) fichaAtual.darknetCredenciais = {};
     if (!Array.isArray(fichaAtual.darknetCredenciais[siteId])) fichaAtual.darknetCredenciais[siteId] = [];
     return fichaAtual.darknetCredenciais[siteId];
 }
+
+// Conjunto (em memória, não salvo no Firebase — cada jogador/Mestre abre
+// o que quiser sem afetar o outro) de cards expandidos, guardando
+// `${siteId}:${credencialId}`. Mesmo padrão de
+// containersInventarioAbertos (inventário) — ver criarLiItem.
+const credenciaisDarknetAbertas = new Set();
 
 const darknetCredenciaisContagemRenderizada = {};
 function renderizarCredenciaisDarknet() {
@@ -10451,55 +10468,378 @@ function renderizarCredenciaisDarknet() {
                 vazio.textContent = "Nenhuma credencial cadastrada.";
                 lista.appendChild(vazio);
             } else {
-                valores.forEach((_, idx) => lista.appendChild(criarLinhaCredencialDarknet(site.id, idx)));
+                valores.forEach(credencial => lista.appendChild(criarCardCredencialDarknet(site, credencial)));
             }
             darknetCredenciaisContagemRenderizada[site.id] = valores.length;
+        } else {
+            // Contagem não mudou — atualiza os cards existentes no lugar
+            // (nome se não estiver focado, badge de modificador e resumo
+            // do corpo expandido, que dependem de pontuação/avaliações
+            // que podem ter mudado sem alterar a quantidade de cards).
+            valores.forEach(credencial => atualizarCardCredencialDarknet(site, credencial));
         }
-
-        lista.querySelectorAll("input[data-darknet-credencial-index]").forEach(inp => {
-            const idx = Number(inp.dataset.darknetCredencialIndex);
-            if (document.activeElement !== inp) inp.value = valores[idx] || "";
-        });
     });
 }
 
-function criarLinhaCredencialDarknet(siteId, idx) {
-    const linha = document.createElement("div");
-    linha.className = "darknet-credencial-item";
+// Card fechado: nome/nick editável direto + badge de modificador (só
+// pra sites com fórmula — ver DARKNET_SITES_PONTUACAO/_AVALIACAO) +
+// botão de expandir (mostra um resumo somente-leitura do cálculo do
+// modificador — edição de pontuação/avaliação vem numa próxima etapa)
+// + botão de rolar (1d20 + modificador, só sites com fórmula) + botão
+// de remover.
+function criarCardCredencialDarknet(site, credencial) {
+    const card = document.createElement("div");
+    card.className = "darknet-credencial-card";
+    card.dataset.darknetCard = `${site.id}:${credencial.id}`;
+
+    const temFormula = DARKNET_SITES_PONTUACAO.includes(site.id) || DARKNET_SITES_AVALIACAO.includes(site.id);
+
+    const header = document.createElement("div");
+    header.className = "darknet-credencial-card-header";
 
     const input = document.createElement("input");
     input.type = "text";
-    input.dataset.darknetCredencial = siteId;
-    input.dataset.darknetCredencialIndex = String(idx);
-    input.placeholder = "usuário, senha, nota...";
+    input.dataset.darknetCredencialNome = site.id;
+    input.dataset.darknetCredencialId = credencial.id;
+    input.placeholder = "nick/usuário...";
+    input.value = credencial.nome || "";
+    header.appendChild(input);
+
+    if (temFormula) {
+        const badge = document.createElement("span");
+        badge.className = "mod-pill darknet-credencial-badge-mod";
+        badge.dataset.darknetBadge = `${site.id}:${credencial.id}`;
+        header.appendChild(badge);
+    }
+
+    const btnExpandir = document.createElement("button");
+    btnExpandir.type = "button";
+    btnExpandir.className = "btn-ghost darknet-credencial-btn";
+    btnExpandir.title = "Expandir";
+    btnExpandir.textContent = "▼";
+    btnExpandir.addEventListener("click", () => alternarCardCredencialDarknet(site, credencial, card));
+    header.appendChild(btnExpandir);
+
+    if (temFormula) {
+        const btnRolar = document.createElement("button");
+        btnRolar.type = "button";
+        btnRolar.className = "btn-ghost darknet-credencial-btn";
+        btnRolar.title = "Rolar d20 + modificador";
+        btnRolar.textContent = "🎲";
+        btnRolar.addEventListener("click", () => rolarDarknet(site, credencial));
+        header.appendChild(btnRolar);
+    }
 
     const remover = document.createElement("button");
     remover.type = "button";
-    remover.className = "btn-ghost darknet-credencial-remover";
+    remover.className = "btn-ghost darknet-credencial-remover darknet-credencial-btn";
     remover.title = "Remover credencial";
     remover.textContent = "✕";
-    remover.addEventListener("click", () => removerCredencialDarknet(siteId, idx));
+    remover.addEventListener("click", () => removerCredencialDarknet(site.id, credencial.id));
+    header.appendChild(remover);
 
+    card.appendChild(header);
+
+    if (temFormula) {
+        const corpo = document.createElement("div");
+        corpo.className = "darknet-credencial-corpo";
+        corpo.dataset.darknetCorpo = `${site.id}:${credencial.id}`;
+        if (credenciaisDarknetAbertas.has(`${site.id}:${credencial.id}`)) corpo.classList.add("aberto");
+
+        const resumo = document.createElement("div");
+        resumo.className = "darknet-credencial-resumo";
+        resumo.dataset.darknetResumo = `${site.id}:${credencial.id}`;
+        resumo.textContent = resumoModificadorDarknet(site.id, credencial);
+        corpo.appendChild(resumo);
+
+        if (DARKNET_SITES_PONTUACAO.includes(site.id)) {
+            corpo.appendChild(criarCampoPontuacaoDarknet(site, credencial));
+        }
+
+        if (DARKNET_SITES_AVALIACAO.includes(site.id)) {
+            const lista = document.createElement("div");
+            lista.className = "darknet-avaliacoes-lista";
+            lista.dataset.darknetAvaliacoesLista = `${site.id}:${credencial.id}`;
+            renderizarAvaliacoesDarknet(site, credencial, lista);
+            corpo.appendChild(lista);
+        }
+
+        card.appendChild(corpo);
+    }
+
+    atualizarBadgeCredencialDarknet(site, credencial, header.querySelector("[data-darknet-badge]"));
+    return card;
+}
+
+// Atualiza SÓ o que pode ter mudado sem alterar a contagem de cards
+// (nome se não estiver focado, badge e resumo) — evita recriar o DOM
+// inteiro (perderia o foco de quem tá digitando).
+function atualizarCardCredencialDarknet(site, credencial) {
+    const input = document.querySelector(`input[data-darknet-credencial-nome="${site.id}"][data-darknet-credencial-id="${credencial.id}"]`);
+    if (input && document.activeElement !== input) input.value = credencial.nome || "";
+
+    const badge = document.querySelector(`[data-darknet-badge="${site.id}:${credencial.id}"]`);
+    atualizarBadgeCredencialDarknet(site, credencial, badge);
+
+    const resumo = document.querySelector(`[data-darknet-resumo="${site.id}:${credencial.id}"]`);
+    if (resumo) resumo.textContent = resumoModificadorDarknet(site.id, credencial);
+
+    if (DARKNET_SITES_PONTUACAO.includes(site.id)) {
+        const inputPontuacao = document.querySelector(`input[data-darknet-credencial-pontuacao="${site.id}"][data-darknet-credencial-id="${credencial.id}"]`);
+        if (inputPontuacao && document.activeElement !== inputPontuacao) {
+            inputPontuacao.value = Number(credencial.pontuacao) || 0;
+        }
+    }
+
+    if (DARKNET_SITES_AVALIACAO.includes(site.id)) {
+        const lista = document.querySelector(`[data-darknet-avaliacoes-lista="${site.id}:${credencial.id}"]`);
+        if (lista) renderizarAvaliacoesDarknet(site, credencial, lista);
+    }
+}
+
+function atualizarBadgeCredencialDarknet(site, credencial, badgeEl) {
+    if (!badgeEl) return;
+    const mod = modificadorDarknet(site.id, credencial);
+    badgeEl.textContent = `🎲 ${mod >= 0 ? "+" : ""}${mod}`;
+    badgeEl.classList.toggle("positivo", mod > 0);
+    badgeEl.classList.remove("negativo");
+}
+
+// Texto explicando o cálculo por trás do modificador atual — mesmo
+// texto tanto no resumo expandido quanto reaproveitável se precisar em
+// outro lugar (ex. tooltip futuro).
+function resumoModificadorDarknet(siteId, credencial) {
+    const mod = modificadorDarknet(siteId, credencial);
+    if (siteId === "p2k") {
+        const pontuacao = Number(credencial.pontuacao) || 0;
+        return `Pontuação: ${pontuacao} → ${mod >= 0 ? "+" : ""}${mod} na rolagem (a cada 15 pontos)`;
+    }
+    if (DARKNET_SITES_AVALIACAO.includes(siteId)) {
+        const avaliacoes = Array.isArray(credencial.avaliacoes) ? credencial.avaliacoes : [];
+        const positivas = avaliacoes.filter(a => (Number(a?.estrelas) || 0) >= 4).length;
+        const negativas = avaliacoes.filter(a => {
+            const e = Number(a?.estrelas) || 0;
+            return e >= 1 && e <= 3;
+        }).length;
+        return `${avaliacoes.length} avaliação(ões): ${positivas} positiva(s), ${negativas} negativa(s) → ${mod >= 0 ? "+" : ""}${mod} na rolagem`;
+    }
+    return "";
+}
+
+// Input numérico editável de pontuação (só site "p2k" — ver
+// DARKNET_SITES_PONTUACAO). Editável tanto pelo jogador dono da ficha
+// quanto pelo Mestre, já que ainda não há automação que calcule isso
+// sozinha (mesmo padrão de outros contadores soltos da ficha).
+function criarCampoPontuacaoDarknet(site, credencial) {
+    const linha = document.createElement("label");
+    linha.className = "darknet-credencial-pontuacao-linha";
+
+    const texto = document.createElement("span");
+    texto.textContent = "Pontuação:";
+    linha.appendChild(texto);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.step = "1";
+    input.className = "darknet-credencial-pontuacao-input";
+    input.dataset.darknetCredencialPontuacao = site.id;
+    input.dataset.darknetCredencialId = credencial.id;
+    input.value = Number(credencial.pontuacao) || 0;
     linha.appendChild(input);
-    linha.appendChild(remover);
+
     return linha;
+}
+
+// Lista de avaliações já registradas (somente-leitura pro jogador; o
+// Mestre também vê um botão "✕" em cada uma pra corrigir lançamento
+// errado) + formulário de nova avaliação, só visível/habilitado pro
+// Mestre (mesmo padrão de outras travas isMestre já existentes no
+// arquivo — jogador só lê, não lança avaliação).
+function renderizarAvaliacoesDarknet(site, credencial, container) {
+    container.innerHTML = "";
+    const avaliacoes = Array.isArray(credencial.avaliacoes) ? credencial.avaliacoes : [];
+
+    if (avaliacoes.length === 0) {
+        const vazio = document.createElement("div");
+        vazio.className = "darknet-avaliacoes-vazio hint-inline";
+        vazio.textContent = "Nenhuma avaliação registrada ainda.";
+        container.appendChild(vazio);
+    } else {
+        avaliacoes.forEach(av => container.appendChild(criarItemAvaliacaoDarknet(site, credencial, av)));
+    }
+
+    if (isMestre) {
+        container.appendChild(criarFormAvaliacaoDarknet(site, credencial));
+    }
+}
+
+function criarItemAvaliacaoDarknet(site, credencial, avaliacao) {
+    const item = document.createElement("div");
+    item.className = "darknet-avaliacao-item";
+
+    const linha = document.createElement("div");
+    linha.className = "darknet-avaliacao-linha";
+
+    const estrelas = document.createElement("div");
+    estrelas.className = "darknet-avaliacao-estrelas";
+    const n = Math.min(5, Math.max(1, Number(avaliacao?.estrelas) || 1));
+    estrelas.textContent = "★".repeat(n) + "☆".repeat(5 - n);
+    estrelas.classList.toggle("positiva", n >= 4);
+    estrelas.classList.toggle("negativa", n < 4);
+    linha.appendChild(estrelas);
+
+    if (isMestre) {
+        const remover = document.createElement("button");
+        remover.type = "button";
+        remover.className = "btn-ghost darknet-avaliacao-remover";
+        remover.title = "Remover avaliação";
+        remover.textContent = "✕";
+        remover.addEventListener("click", () => removerAvaliacaoDarknet(site.id, credencial.id, avaliacao.id));
+        linha.appendChild(remover);
+    }
+
+    item.appendChild(linha);
+
+    if (avaliacao?.texto) {
+        const texto = document.createElement("div");
+        texto.className = "darknet-avaliacao-texto";
+        texto.textContent = avaliacao.texto;
+        item.appendChild(texto);
+    }
+
+    const rodape = document.createElement("div");
+    rodape.className = "darknet-avaliacao-rodape hint-inline";
+    const dataFormatada = avaliacao?.data ? new Date(avaliacao.data).toLocaleDateString("pt-BR") : "—";
+    rodape.textContent = `${avaliacao?.autor || "Mestre"} · ${dataFormatada}`;
+    item.appendChild(rodape);
+
+    return item;
+}
+
+// Formulário "Nova avaliação" — só criado quando isMestre (o jogador
+// nem vê o formulário, não é só desabilitado). Select 1-5 estrelas +
+// textarea + botão de lançar, que chama adicionarAvaliacaoDarknet e
+// limpa os campos em seguida.
+function criarFormAvaliacaoDarknet(site, credencial) {
+    const form = document.createElement("div");
+    form.className = "darknet-form-avaliacao";
+
+    const linhaEstrelas = document.createElement("div");
+    linhaEstrelas.className = "darknet-form-avaliacao-linha";
+
+    const labelEstrelas = document.createElement("span");
+    labelEstrelas.textContent = "Nova avaliação:";
+    linhaEstrelas.appendChild(labelEstrelas);
+
+    const select = document.createElement("select");
+    [5, 4, 3, 2, 1].forEach(n => {
+        const opt = document.createElement("option");
+        opt.value = String(n);
+        opt.textContent = "★".repeat(n) + "☆".repeat(5 - n);
+        select.appendChild(opt);
+    });
+    linhaEstrelas.appendChild(select);
+    form.appendChild(linhaEstrelas);
+
+    const textarea = document.createElement("textarea");
+    textarea.placeholder = "Comentário do Mestre sobre o trabalho...";
+    textarea.rows = 2;
+    form.appendChild(textarea);
+
+    const btnLancar = document.createElement("button");
+    btnLancar.type = "button";
+    btnLancar.className = "btn-ghost";
+    btnLancar.textContent = "Lançar avaliação";
+    btnLancar.addEventListener("click", () => {
+        adicionarAvaliacaoDarknet(site.id, credencial.id, Number(select.value), textarea.value.trim());
+        textarea.value = "";
+        select.value = "5";
+    });
+    form.appendChild(btnLancar);
+
+    return form;
+}
+
+// Só o Mestre lança avaliação — autor = nome de quem tá logado como
+// Mestre (sessao.nome), data = ISO string (formatada na exibição via
+// toLocaleDateString). Mesmo padrão "set no array inteiro" usado no
+// resto de darknetCredenciais.
+function adicionarAvaliacaoDarknet(siteId, credencialId, estrelas, texto) {
+    if (!isMestre || !fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    if (!Array.isArray(credencial.avaliacoes)) credencial.avaliacoes = [];
+
+    credencial.avaliacoes.push({
+        id: gerarIdLocal(),
+        estrelas: Math.min(5, Math.max(1, Math.floor(Number(estrelas) || 1))),
+        texto: texto || "",
+        autor: sessao.nome || "Mestre",
+        data: new Date().toISOString()
+    });
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    renderizarCredenciaisDarknet();
+}
+
+// Idem, só Mestre — corrige avaliação lançada errada.
+function removerAvaliacaoDarknet(siteId, credencialId, avaliacaoId) {
+    if (!isMestre || !fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial || !Array.isArray(credencial.avaliacoes)) return;
+    const idx = credencial.avaliacoes.findIndex(a => a.id === avaliacaoId);
+    if (idx === -1) return;
+    credencial.avaliacoes.splice(idx, 1);
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    renderizarCredenciaisDarknet();
+}
+
+function alternarCardCredencialDarknet(site, credencial, card) {
+    const chave = `${site.id}:${credencial.id}`;
+    const corpo = card.querySelector(`[data-darknet-corpo="${chave}"]`);
+    if (!corpo) return;
+    const abrir = !credenciaisDarknetAbertas.has(chave);
+    if (abrir) {
+        credenciaisDarknetAbertas.add(chave);
+        corpo.classList.add("aberto");
+    } else {
+        credenciaisDarknetAbertas.delete(chave);
+        corpo.classList.remove("aberto");
+    }
+}
+
+// Rola 1d20 + modificador da credencial e registra no Log de Dados —
+// reaproveita 100% o rolarERegistrar já existente (mesmo Log/toast de
+// qualquer outra rolagem da ficha).
+async function rolarDarknet(site, credencial) {
+    const mod = modificadorDarknet(site.id, credencial);
+    const nomeCred = credencial.nome ? ` — ${credencial.nome}` : "";
+    await rolarERegistrar(`${site.nome}${nomeCred}`, mod, false, null);
 }
 
 function adicionarCredencialDarknet(siteId) {
     if (!fichaAtual || !idAtivo()) return;
-    credenciaisDoSite(siteId).push("");
+    credenciaisDoSite(siteId).push({ id: gerarIdLocal(), nome: "", pontuacao: 0, avaliacoes: [] });
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
     renderizarCredenciaisDarknet();
     setTimeout(() => {
-        const campos = document.querySelectorAll(`input[data-darknet-credencial="${siteId}"]`);
+        const campos = document.querySelectorAll(`input[data-darknet-credencial-nome="${siteId}"]`);
         const ultimo = campos[campos.length - 1];
         if (ultimo) ultimo.focus();
     }, 0);
 }
 
-function removerCredencialDarknet(siteId, idx) {
+function removerCredencialDarknet(siteId, credencialId) {
     if (!fichaAtual || !idAtivo()) return;
-    credenciaisDoSite(siteId).splice(idx, 1);
+    const lista = credenciaisDoSite(siteId);
+    const idx = lista.findIndex(c => c.id === credencialId);
+    if (idx === -1) return;
+    lista.splice(idx, 1);
+    credenciaisDarknetAbertas.delete(`${siteId}:${credencialId}`);
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
     renderizarCredenciaisDarknet();
 }
@@ -10510,16 +10850,46 @@ document.getElementById("btn-add-credencial-darknet")?.addEventListener("click",
     adicionarCredencialDarknet(select.value);
 });
 
-// Grava o texto de cada credencial (mesmo padrão "set no array inteiro"
-// usado pelas caixas de Determinação).
+// Grava o nome/nick de cada credencial (mesmo padrão "set no array
+// inteiro" usado pelas caixas de Determinação). Recalcula o card na
+// hora (badge/resumo não dependem do nome, mas mantém tudo consistente
+// e reaproveita a mesma função de atualização).
 document.addEventListener("input", (e) => {
-    const siteCred = e.target.dataset && e.target.dataset.darknetCredencial;
-    const idxRaw = e.target.dataset && e.target.dataset.darknetCredencialIndex;
-    if (siteCred === undefined || idxRaw === undefined || !idAtivo()) return;
-    const idx = Number(idxRaw);
+    const siteCred = e.target.dataset && e.target.dataset.darknetCredencialNome;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    if (siteCred === undefined || credId === undefined || !idAtivo()) return;
     const lista = credenciaisDoSite(siteCred);
-    lista[idx] = e.target.value;
+    const credencial = lista.find(c => c.id === credId);
+    if (!credencial) return;
+    credencial.nome = e.target.value;
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+});
+
+// Grava a pontuação (só site "p2k") — sempre inteiro >= 0. Atualiza o
+// badge e o resumo na hora (sem recriar o card, pra não perder o foco
+// de quem tá digitando).
+function atualizarPontuacaoDarknet(siteId, credencialId, novoValor) {
+    if (!fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    credencial.pontuacao = Math.max(0, Math.floor(Number(novoValor) || 0));
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (site) {
+        const badge = document.querySelector(`[data-darknet-badge="${siteId}:${credencialId}"]`);
+        atualizarBadgeCredencialDarknet(site, credencial, badge);
+        const resumo = document.querySelector(`[data-darknet-resumo="${siteId}:${credencialId}"]`);
+        if (resumo) resumo.textContent = resumoModificadorDarknet(siteId, credencial);
+    }
+}
+
+document.addEventListener("input", (e) => {
+    const siteId = e.target.dataset && e.target.dataset.darknetCredencialPontuacao;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    if (siteId === undefined || credId === undefined) return;
+    atualizarPontuacaoDarknet(siteId, credId, e.target.value);
 });
 
 // Quantidade de slots de Determinação liberados pelo Nível do

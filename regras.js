@@ -927,6 +927,45 @@ export function dificuldadeInfeccao(dificuldadeBase = DIFICULDADE_INFECCAO_MINIM
 }
 
 // ---------------------------------------------------------------------
+// Dark Net — modificador de rolagem por credencial (ver
+// plano-darknet-credenciais.txt, Parte 2). Função pura, sem tocar
+// Firebase, pra ser fácil de testar isolada e reaproveitável tanto por
+// ficha.js (botão de rolar) quanto por qualquer outro lugar que precise
+// só do número.
+//
+// P2K (manual, seção Dark Net): ranking de pontuação — a cada 15
+// pontos acumulados, +1 no modificador da rolagem pra conseguir
+// trabalho.
+//
+// Creators / RabbitHole / BlackPrint (regra da mesa, não fixada pelo
+// manual): avaliações de 1 a 5 estrelas escritas pelo Mestre após cada
+// trabalho. 4-5 estrelas conta como POSITIVA, 1-3 como NEGATIVA. Cada
+// negativa antes de tudo ANULA uma positiva (não é penalidade direta) —
+// só o que sobrar de positivas líquidas (nunca abaixo de zero) forma
+// pares que valem +1 cada. Ex.: 2 positivas + 1 negativa → sobra 1
+// positiva líquida → não fecha par → +0 (exemplo confirmado com o
+// jogador).
+//
+// Sites sem fórmula definida (Dm, Void, P2C, DarkArt, ou qualquer outro
+// fora da lista) devolvem 0 — não fica sem número, só não bonifica.
+export function modificadorDarknet(siteId, credencial = {}) {
+    if (siteId === "p2k") {
+        return Math.floor((Number(credencial.pontuacao) || 0) / 15);
+    }
+    if (siteId === "creators" || siteId === "rabbithole" || siteId === "blackprint") {
+        const avaliacoes = Array.isArray(credencial.avaliacoes) ? credencial.avaliacoes : [];
+        const positivas = avaliacoes.filter(a => (Number(a?.estrelas) || 0) >= 4).length;
+        const negativas = avaliacoes.filter(a => {
+            const e = Number(a?.estrelas) || 0;
+            return e >= 1 && e <= 3;
+        }).length;
+        const liquido = Math.max(0, positivas - negativas);
+        return Math.floor(liquido / 2);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------
 // Gerenciador de Combate — dificuldade defensiva do alvo.
 //
 // O manual não define uma fórmula fechada pra "esquivar/resistir" a um

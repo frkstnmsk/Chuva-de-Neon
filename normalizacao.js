@@ -121,7 +121,8 @@ export function normalizarFicha(raw) {
         // plano-veiculos.txt): só os 5 atributos com escala fixa. Ver
         // normalizarVeiculos abaixo.
         veiculos: normalizarVeiculos(raw.veiculos),
-        // Credenciais da Dark Net (texto livre por site) — ver
+        // Credenciais da Dark Net (cards por site — nome, pontuação e
+        // avaliações; ver plano-darknet-credenciais.txt) — ver
         // credenciaisDoSite/renderizarCredenciaisDarknet em ficha.js.
         // Aceita só objeto; qualquer coisa fora do formato vira {}.
         darknetCredenciais: normalizarDarknetCredenciais(raw.darknetCredenciais),
@@ -142,17 +143,61 @@ export function normalizarFicha(raw) {
 // strings; fichas já migradas (raw já é array) passam direto, e o
 // texto livre antigo é quebrado por linha, descartando a numeração
 // manual que o próprio jogador digitava.
-// Credenciais da Dark Net: objeto { [siteId]: string[] }. Realtime
-// Database pode entregar `null`/tipos inesperados se o nó nunca foi
-// escrito ou foi corrompido manualmente — aqui filtramos pra garantir
-// sempre um objeto de arrays de string, nunca quebrando o render.
+// Credenciais da Dark Net — modelo novo (ver plano-darknet-credenciais.txt,
+// Parte 1): cada credencial passou de string solta pra um objeto com
+// nome + pontuação (só usada por sites com fórmula tipo P2K — ver
+// DARKNET_SITES_PONTUACAO em ficha.js) + avaliações (só usada por sites
+// tipo Creators/RabbitHole/BlackPrint — ver DARKNET_SITES_AVALIACAO).
+// Sites sem fórmula (Dm, Void, P2C, DarkArt) recebem o mesmo formato de
+// objeto, só que pontuacao/avaliacoes nunca são lidos/editados neles.
+//
+// Aceita as DUAS formas que podem chegar do Realtime Database:
+//   - formato ANTIGO: { [siteId]: string[] } — cada string vira uma
+//     credencial nova com pontuacao 0 e avaliacoes [].
+//   - formato NOVO: { [siteId]: object[] } — cada objeto é limpo campo
+//     a campo (nunca confia cegamente no que veio do banco).
+// Qualquer outra coisa (null, tipo errado, item corrompido dentro da
+// lista) é descartada sem quebrar o resto — mesmo espírito defensivo
+// das outras normalizações deste arquivo.
+function gerarIdCredencialDarknet() {
+    return "cred_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function normalizarAvaliacaoDarknet(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const estrelas = Math.max(1, Math.min(5, Math.round(Number(raw.estrelas)) || 1));
+    return {
+        id: (typeof raw.id === "string" && raw.id) ? raw.id : gerarIdCredencialDarknet(),
+        estrelas,
+        texto: typeof raw.texto === "string" ? raw.texto : "",
+        autor: typeof raw.autor === "string" ? raw.autor : "",
+        data: typeof raw.data === "string" ? raw.data : ""
+    };
+}
+
+function normalizarCredencialDarknet(raw) {
+    // Formato antigo: a própria credencial era uma string.
+    if (typeof raw === "string") {
+        return { id: gerarIdCredencialDarknet(), nome: raw, pontuacao: 0, avaliacoes: [] };
+    }
+    if (!raw || typeof raw !== "object") return null;
+    return {
+        id: (typeof raw.id === "string" && raw.id) ? raw.id : gerarIdCredencialDarknet(),
+        nome: typeof raw.nome === "string" ? raw.nome : String(raw.nome ?? ""),
+        pontuacao: Math.max(0, Number(raw.pontuacao) || 0),
+        avaliacoes: Array.isArray(raw.avaliacoes)
+            ? raw.avaliacoes.map(normalizarAvaliacaoDarknet).filter(Boolean)
+            : []
+    };
+}
+
 function normalizarDarknetCredenciais(raw) {
     const saida = {};
     if (!raw || typeof raw !== "object") return saida;
     for (const [siteId, lista] of Object.entries(raw)) {
-        if (Array.isArray(lista)) {
-            saida[siteId] = lista.map(v => (typeof v === "string" ? v : String(v ?? "")));
-        }
+        saida[siteId] = Array.isArray(lista)
+            ? lista.map(normalizarCredencialDarknet).filter(Boolean)
+            : [];
     }
     return saida;
 }

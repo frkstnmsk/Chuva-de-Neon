@@ -536,6 +536,126 @@
 .darknet-credenciais-vazio {
     font-style: italic;
 }
+.darknet-credencial-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
+}
+.darknet-credencial-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.darknet-credencial-card-header input {
+    flex: 1;
+    min-width: 0;
+}
+.darknet-credencial-badge-mod {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.darknet-credencial-btn {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.darknet-credencial-corpo {
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 4px 2px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.darknet-credencial-corpo.aberto {
+    display: flex;
+}
+.darknet-credencial-resumo {
+    font-size: 0.74rem;
+    color: var(--text-dim);
+}
+.darknet-credencial-pontuacao-linha {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.76rem;
+    color: var(--text-dim);
+}
+.darknet-credencial-pontuacao-input {
+    width: 70px;
+    flex-shrink: 0;
+}
+.darknet-avaliacoes-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.darknet-avaliacoes-vazio {
+    font-size: 0.74rem;
+}
+.darknet-avaliacao-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.02);
+}
+.darknet-avaliacao-linha {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.darknet-avaliacao-remover {
+    padding: 1px 6px;
+    font-size: 0.68rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.darknet-avaliacao-estrelas {
+    font-size: 0.9rem;
+    letter-spacing: 1px;
+}
+.darknet-avaliacao-estrelas.positiva { color: var(--neon-lime); }
+.darknet-avaliacao-estrelas.negativa { color: var(--neon-red); }
+.darknet-avaliacao-texto {
+    font-size: 0.78rem;
+    color: var(--text-main);
+    white-space: pre-wrap;
+}
+.darknet-avaliacao-rodape {
+    font-size: 0.68rem;
+}
+.darknet-form-avaliacao {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.darknet-form-avaliacao-linha {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.76rem;
+    color: var(--text-dim);
+}
+.darknet-form-avaliacao textarea {
+    font-size: 0.78rem;
+    resize: vertical;
+}
+.darknet-form-avaliacao button {
+    align-self: flex-start;
+    font-size: 0.72rem;
+    padding: 4px 10px;
+}
 
 /* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
 .determinacoes-rolagem {
