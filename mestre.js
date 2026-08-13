@@ -177,6 +177,23 @@ export async function definirFatorPrecoMateriaisVeiculo(percentual) {
 }
 
 // ---------------------------------------------------------------------
+// Fator de preço da Dark Net (Creators/BlackPrint) — toggle por mesa,
+// mesmo padrão do fator de veículos acima. Define quantos CN$ de
+// diferença em relação ao item mais barato cadastrado equivalem a +1 de
+// dificuldade no sorteio (ver dificuldadeItemDarknet em regras.js,
+// plano-darknet-passo9.txt Parte 4). 0 = sem fórmula ainda configurada
+// (dificuldadeItemDarknet trata 0 como "todo item cai na base, 15").
+// Valor padrão sugerido pelo plano: 50.
+// ---------------------------------------------------------------------
+export function ouvirFatorPrecoDarknet(callback) {
+    return onValue(ref(db, caminhoMesa("fatorPrecoDarknet")), (snap) => callback(snap.exists() ? (Number(snap.val()) || 0) : 50));
+}
+
+export async function definirFatorPrecoDarknet(valor) {
+    await set(ref(db, caminhoMesa("fatorPrecoDarknet")), Number(valor) || 0);
+}
+
+// ---------------------------------------------------------------------
 // Rolar dado (Mestre) — vai direto pro Log de Dados.
 // ---------------------------------------------------------------------
 export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mestre", detalhe = "" }) {

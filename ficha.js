@@ -30,7 +30,7 @@ import {
     slotsAcessoriosVeiculo, slotsAcessoriosUsados, slotsAcessoriosLivres, podeInstalarAcessorio,
     efeitoOleoVeiculo, efeitoCospePregoVeiculo,
     itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO,
-    modificadorDarknet
+    modificadorDarknet, dificuldadeItemDarknet, sortearItemPorResultado
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -107,6 +107,7 @@ import {
     ouvirTodasAsFichas, darXp, ouvirXpHistorico, ouvirGodmode, definirGodmode,
     ouvirIgnorarPenalidadeSaude, definirIgnorarPenalidadeSaude,
     ouvirFatorPrecoMateriaisVeiculo, definirFatorPrecoMateriaisVeiculo,
+    ouvirFatorPrecoDarknet, definirFatorPrecoDarknet,
     mestreRolarDado, aplicarDano, causarDanoVeiculo, testarSangramento, testarSangramentoProfundo,
     ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
@@ -226,6 +227,12 @@ let ignorarPenalidadeSaudeAtivo = false;
 // valor certo sem precisar de leitura extra no banco. Ver
 // configurarFatorPrecoMateriaisVeiculo.
 let fatorPrecoMateriaisVeiculoAtivo = 0;
+// CN$ por ponto de dificuldade no sorteio de itens da Dark Net
+// (Creators/BlackPrint — ver dificuldadeItemDarknet em regras.js,
+// plano-darknet-passo9.txt Parte 4). Mesmo padrão de cache local do
+// fator de veículos acima. Padrão 50 até o primeiro valor chegar do
+// Firebase (ver ouvirFatorPrecoDarknet).
+let fatorPrecoDarknetAtivo = 50;
 let calendarioAtual = null;
 let todasAsFichasCache = {};
 // Guarda { pvPerdidos, diasNecessarios } calculados no último render dos
@@ -333,6 +340,16 @@ const CAMPOS_DARKNET_NOTAS = DARKNET_SITES.map(s => s.id);
 // card fica simples, sem badge de modificador nem botão de rolar.
 const DARKNET_SITES_PONTUACAO = ["p2k"];
 const DARKNET_SITES_AVALIACAO = ["creators", "rabbithole", "blackprint"];
+// Sites sem fórmula de modificador, mas com corpo expandido próprio
+// (plano-darknet-passo9.txt, Parte 2) — Dm mostra contatos salvos, Void
+// mostra stats de seguidores/posts/seguindo. Nenhum dos dois tem badge
+// de modificador nem botão de rolar, só o corpo expandido.
+const DARKNET_SITES_CONTATOS = ["dm"];
+const DARKNET_SITES_STATS = ["void"];
+// Creators e BlackPrint continuam usando avaliações em estrelas pro
+// modificador (DARKNET_SITES_AVALIACAO acima não muda) e ganham,
+// adicionalmente, cadastro de itens à venda + sorteio por dificuldade.
+const DARKNET_SITES_ITENS = ["creators", "blackprint"];
 const TITULOS_MODAL = {
     pericias: "Perícia", inventario: "Item de inventário", vantagens: "Vantagem",
     desvantagens: "Desvantagem", fatosUniversais: "Fato universal",
@@ -667,6 +684,7 @@ const el = {
     chkGodmode: document.getElementById("chk-godmode"),
     chkGodmodeIgnorarSaude: document.getElementById("chk-godmode-ignorar-saude"),
     inputFatorPrecoMateriaisVeiculo: document.getElementById("input-fator-preco-materiais-veiculo"),
+    inputFatorPrecoDarknet: document.getElementById("input-fator-preco-darknet"),
     modalCustoVida: document.getElementById("modal-custo-vida"),
     custoVidaResumo: document.getElementById("custo-vida-resumo"),
     custoVidaOrigem: document.getElementById("custo-vida-origem"),
@@ -825,6 +843,7 @@ async function init() {
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
     tentarOuAvisar("godmode", configurarGodmode);
     tentarOuAvisar("fator de preço de materiais (veículos)", configurarFatorPrecoMateriaisVeiculo);
+    tentarOuAvisar("fator de preço da Dark Net", configurarFatorPrecoDarknet);
     tentarOuAvisar("gerenciador de combate", configurarCombateAtivo);
     tentarOuAvisar("cenários", configurarCenarios);
     tentarOuAvisar("gerenciador de perseguição", configurarPerseguicaoAtiva);
@@ -10493,6 +10512,14 @@ function criarCardCredencialDarknet(site, credencial) {
     card.dataset.darknetCard = `${site.id}:${credencial.id}`;
 
     const temFormula = DARKNET_SITES_PONTUACAO.includes(site.id) || DARKNET_SITES_AVALIACAO.includes(site.id);
+    // Corpo expandido também existe pra sites sem fórmula que têm
+    // informação própria (Dm: contatos; Void: stats) e pros que ganham
+    // itens à venda (Creators/BlackPrint) — só não têm badge/botão de
+    // rolar vindos de temFormula (Dm/Void), ver plano-darknet-passo9.txt.
+    const temCorpo = temFormula
+        || DARKNET_SITES_CONTATOS.includes(site.id)
+        || DARKNET_SITES_STATS.includes(site.id)
+        || DARKNET_SITES_ITENS.includes(site.id);
 
     const header = document.createElement("div");
     header.className = "darknet-credencial-card-header";
@@ -10540,17 +10567,19 @@ function criarCardCredencialDarknet(site, credencial) {
 
     card.appendChild(header);
 
-    if (temFormula) {
+    if (temCorpo) {
         const corpo = document.createElement("div");
         corpo.className = "darknet-credencial-corpo";
         corpo.dataset.darknetCorpo = `${site.id}:${credencial.id}`;
         if (credenciaisDarknetAbertas.has(`${site.id}:${credencial.id}`)) corpo.classList.add("aberto");
 
-        const resumo = document.createElement("div");
-        resumo.className = "darknet-credencial-resumo";
-        resumo.dataset.darknetResumo = `${site.id}:${credencial.id}`;
-        resumo.textContent = resumoModificadorDarknet(site.id, credencial);
-        corpo.appendChild(resumo);
+        if (temFormula) {
+            const resumo = document.createElement("div");
+            resumo.className = "darknet-credencial-resumo";
+            resumo.dataset.darknetResumo = `${site.id}:${credencial.id}`;
+            resumo.textContent = resumoModificadorDarknet(site.id, credencial);
+            corpo.appendChild(resumo);
+        }
 
         if (DARKNET_SITES_PONTUACAO.includes(site.id)) {
             corpo.appendChild(criarCampoPontuacaoDarknet(site, credencial));
@@ -10562,6 +10591,22 @@ function criarCardCredencialDarknet(site, credencial) {
             lista.dataset.darknetAvaliacoesLista = `${site.id}:${credencial.id}`;
             renderizarAvaliacoesDarknet(site, credencial, lista);
             corpo.appendChild(lista);
+        }
+
+        if (DARKNET_SITES_CONTATOS.includes(site.id)) {
+            criarListaContatosDm(site, credencial, corpo);
+        }
+
+        if (DARKNET_SITES_STATS.includes(site.id)) {
+            criarPainelStatsVoid(site, credencial, corpo);
+        }
+
+        if (DARKNET_SITES_ITENS.includes(site.id)) {
+            const listaItens = document.createElement("div");
+            listaItens.className = "darknet-itens-lista";
+            listaItens.dataset.darknetItensLista = `${site.id}:${credencial.id}`;
+            renderizarItensVendaDarknet(site, credencial, listaItens);
+            corpo.appendChild(listaItens);
         }
 
         card.appendChild(corpo);
@@ -10594,6 +10639,25 @@ function atualizarCardCredencialDarknet(site, credencial) {
     if (DARKNET_SITES_AVALIACAO.includes(site.id)) {
         const lista = document.querySelector(`[data-darknet-avaliacoes-lista="${site.id}:${credencial.id}"]`);
         if (lista) renderizarAvaliacoesDarknet(site, credencial, lista);
+    }
+
+    if (DARKNET_SITES_CONTATOS.includes(site.id)) {
+        const listaContatos = document.querySelector(`[data-darknet-contatos-lista="${site.id}:${credencial.id}"]`);
+        if (listaContatos) renderizarContatosDm(site, credencial, listaContatos);
+    }
+
+    if (DARKNET_SITES_STATS.includes(site.id)) {
+        ["seguidores", "posts", "seguindo"].forEach(campo => {
+            const inputStat = document.querySelector(`input[data-darknet-stat="${campo}"][data-darknet-stat-site="${site.id}"][data-darknet-credencial-id="${credencial.id}"]`);
+            if (inputStat && document.activeElement !== inputStat) {
+                inputStat.value = Number(credencial.stats?.[campo]) || 0;
+            }
+        });
+    }
+
+    if (DARKNET_SITES_ITENS.includes(site.id)) {
+        const listaItens = document.querySelector(`[data-darknet-itens-lista="${site.id}:${credencial.id}"]`);
+        if (listaItens) renderizarItensVendaDarknet(site, credencial, listaItens);
     }
 }
 
@@ -10798,6 +10862,311 @@ function removerAvaliacaoDarknet(siteId, credencialId, avaliacaoId) {
     renderizarCredenciaisDarknet();
 }
 
+// Corpo expandido do site Dm (plano-darknet-passo9.txt, Parte 3): lista
+// de contatos salvos (número + nome, ambos editáveis por qualquer um com
+// acesso à ficha — mesmo padrão do nome da credencial em si, sem trava de
+// isMestre, já que não é um "lançamento" do Mestre como as avaliações) +
+// formulário pra adicionar um contato novo + botão de remover por linha.
+function criarListaContatosDm(site, credencial, container) {
+    const lista = document.createElement("div");
+    lista.className = "darknet-contatos-lista";
+    lista.dataset.darknetContatosLista = `${site.id}:${credencial.id}`;
+    renderizarContatosDm(site, credencial, lista);
+    container.appendChild(lista);
+}
+
+function renderizarContatosDm(site, credencial, container) {
+    container.innerHTML = "";
+    const contatos = Array.isArray(credencial.contatos) ? credencial.contatos : [];
+
+    if (contatos.length === 0) {
+        const vazio = document.createElement("div");
+        vazio.className = "darknet-contatos-vazio hint-inline";
+        vazio.textContent = "Nenhum contato salvo ainda.";
+        container.appendChild(vazio);
+    } else {
+        contatos.forEach(contato => container.appendChild(criarItemContatoDm(site, credencial, contato)));
+    }
+
+    container.appendChild(criarFormNovoContatoDm(site, credencial));
+}
+
+function criarItemContatoDm(site, credencial, contato) {
+    const item = document.createElement("div");
+    item.className = "darknet-contato-item";
+
+    const inputNumero = document.createElement("input");
+    inputNumero.type = "text";
+    inputNumero.className = "darknet-contato-numero";
+    inputNumero.placeholder = "Número";
+    inputNumero.value = contato.numero || "";
+    inputNumero.dataset.darknetContatoCampo = "numero";
+    inputNumero.dataset.darknetContatoSite = site.id;
+    inputNumero.dataset.darknetCredencialId = credencial.id;
+    inputNumero.dataset.darknetContatoId = contato.id;
+    item.appendChild(inputNumero);
+
+    const inputNome = document.createElement("input");
+    inputNome.type = "text";
+    inputNome.className = "darknet-contato-nome";
+    inputNome.placeholder = "Nome do contato";
+    inputNome.value = contato.nome || "";
+    inputNome.dataset.darknetContatoCampo = "nome";
+    inputNome.dataset.darknetContatoSite = site.id;
+    inputNome.dataset.darknetCredencialId = credencial.id;
+    inputNome.dataset.darknetContatoId = contato.id;
+    item.appendChild(inputNome);
+
+    const remover = document.createElement("button");
+    remover.type = "button";
+    remover.className = "btn-ghost darknet-contato-remover";
+    remover.title = "Remover contato";
+    remover.textContent = "✕";
+    remover.addEventListener("click", () => removerContatoDm(site.id, credencial.id, contato.id));
+    item.appendChild(remover);
+
+    return item;
+}
+
+function criarFormNovoContatoDm(site, credencial) {
+    const form = document.createElement("div");
+    form.className = "darknet-form-contato";
+
+    const inputNumero = document.createElement("input");
+    inputNumero.type = "text";
+    inputNumero.placeholder = "Número...";
+    form.appendChild(inputNumero);
+
+    const inputNome = document.createElement("input");
+    inputNome.type = "text";
+    inputNome.placeholder = "Nome do contato...";
+    form.appendChild(inputNome);
+
+    const btnAdd = document.createElement("button");
+    btnAdd.type = "button";
+    btnAdd.className = "btn-ghost";
+    btnAdd.textContent = "Adicionar contato";
+    btnAdd.addEventListener("click", () => {
+        adicionarContatoDm(site.id, credencial.id, inputNumero.value.trim(), inputNome.value.trim());
+        inputNumero.value = "";
+        inputNome.value = "";
+        inputNumero.focus();
+    });
+    form.appendChild(btnAdd);
+
+    return form;
+}
+
+// Ignora clique em "Adicionar contato" com os dois campos vazios — evita
+// lançar uma linha totalmente em branco por engano.
+function adicionarContatoDm(siteId, credencialId, numero, nome) {
+    if (!fichaAtual || !idAtivo()) return;
+    if (!numero && !nome) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    if (!Array.isArray(credencial.contatos)) credencial.contatos = [];
+    credencial.contatos.push({ id: gerarIdLocal(), numero, nome });
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    const container = document.querySelector(`[data-darknet-contatos-lista="${siteId}:${credencialId}"]`);
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (container && site) renderizarContatosDm(site, credencial, container);
+}
+
+function removerContatoDm(siteId, credencialId, contatoId) {
+    if (!fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial || !Array.isArray(credencial.contatos)) return;
+    const idx = credencial.contatos.findIndex(c => c.id === contatoId);
+    if (idx === -1) return;
+    credencial.contatos.splice(idx, 1);
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    const container = document.querySelector(`[data-darknet-contatos-lista="${siteId}:${credencialId}"]`);
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (container && site) renderizarContatosDm(site, credencial, container);
+}
+
+// Corpo expandido do site Void (plano-darknet-passo9.txt, Parte 3): 3
+// contadores numéricos lado a lado, sem badge de modificador e sem botão
+// de rolar (Void não tem fórmula, ver DARKNET_SITES_AVALIACAO/_PONTUACAO).
+function criarPainelStatsVoid(site, credencial, container) {
+    const grid = document.createElement("div");
+    grid.className = "darknet-stats-grid";
+    grid.dataset.darknetStatsGrid = `${site.id}:${credencial.id}`;
+
+    [
+        { chave: "seguidores", rotulo: "Seguidores" },
+        { chave: "posts", rotulo: "Posts" },
+        { chave: "seguindo", rotulo: "Seguindo" }
+    ].forEach(({ chave, rotulo }) => {
+        const campo = document.createElement("label");
+        campo.className = "darknet-stat-campo";
+
+        const texto = document.createElement("span");
+        texto.textContent = rotulo;
+        campo.appendChild(texto);
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.step = "1";
+        input.dataset.darknetStat = chave;
+        input.dataset.darknetStatSite = site.id;
+        input.dataset.darknetCredencialId = credencial.id;
+        input.value = Number(credencial.stats?.[chave]) || 0;
+        campo.appendChild(input);
+
+        grid.appendChild(campo);
+    });
+
+    container.appendChild(grid);
+}
+
+function atualizarStatVoid(siteId, credencialId, campo, novoValor) {
+    if (!fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    if (!credencial.stats || typeof credencial.stats !== "object") {
+        credencial.stats = { seguidores: 0, posts: 0, seguindo: 0 };
+    }
+    credencial.stats[campo] = Math.max(0, Math.floor(Number(novoValor) || 0));
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+}
+
+// Corpo expandido de Creators/BlackPrint (plano-darknet-passo9.txt,
+// Parte 3 e 5): lista de itens à venda cadastrados (nome + valor em
+// CN$), editável por qualquer um com acesso à ficha (mesmo espírito sem
+// trava de isMestre dos contatos do Dm — cadastrar item não é um
+// "lançamento" do Mestre) + form pra adicionar item novo + remover por
+// item. Fica dentro do mesmo corpo expandido do card, ao lado do bloco
+// de avaliações em estrelas já existente (renderizarAvaliacoesDarknet).
+function renderizarItensVendaDarknet(site, credencial, container) {
+    container.innerHTML = "";
+    const itens = Array.isArray(credencial.itens) ? credencial.itens : [];
+
+    const titulo = document.createElement("div");
+    titulo.className = "darknet-itens-titulo hint-inline";
+    titulo.textContent = "Itens à venda:";
+    container.appendChild(titulo);
+
+    if (itens.length === 0) {
+        const vazio = document.createElement("div");
+        vazio.className = "darknet-itens-vazio hint-inline";
+        vazio.textContent = "Nenhum item cadastrado ainda.";
+        container.appendChild(vazio);
+    } else {
+        itens.forEach(item => container.appendChild(criarItemVendaDarknet(site, credencial, item)));
+    }
+
+    container.appendChild(criarFormNovoItemVenda(site, credencial));
+}
+
+function criarItemVendaDarknet(site, credencial, item) {
+    const linha = document.createElement("div");
+    linha.className = "darknet-item-venda";
+
+    const inputNome = document.createElement("input");
+    inputNome.type = "text";
+    inputNome.className = "darknet-item-venda-nome";
+    inputNome.placeholder = "Nome do item";
+    inputNome.value = item.nome || "";
+    inputNome.dataset.darknetItemCampo = "nome";
+    inputNome.dataset.darknetItemSite = site.id;
+    inputNome.dataset.darknetCredencialId = credencial.id;
+    inputNome.dataset.darknetItemId = item.id;
+    linha.appendChild(inputNome);
+
+    const inputValor = document.createElement("input");
+    inputValor.type = "number";
+    inputValor.min = "0";
+    inputValor.step = "1";
+    inputValor.className = "darknet-item-venda-valor";
+    inputValor.placeholder = "CN$";
+    inputValor.value = Number(item.valor) || 0;
+    inputValor.dataset.darknetItemCampo = "valor";
+    inputValor.dataset.darknetItemSite = site.id;
+    inputValor.dataset.darknetCredencialId = credencial.id;
+    inputValor.dataset.darknetItemId = item.id;
+    linha.appendChild(inputValor);
+
+    const remover = document.createElement("button");
+    remover.type = "button";
+    remover.className = "btn-ghost darknet-item-venda-remover";
+    remover.title = "Remover item";
+    remover.textContent = "✕";
+    remover.addEventListener("click", () => removerItemVendaDarknet(site.id, credencial.id, item.id));
+    linha.appendChild(remover);
+
+    return linha;
+}
+
+function criarFormNovoItemVenda(site, credencial) {
+    const form = document.createElement("div");
+    form.className = "darknet-form-item-venda";
+
+    const inputNome = document.createElement("input");
+    inputNome.type = "text";
+    inputNome.placeholder = "Nome do item...";
+    form.appendChild(inputNome);
+
+    const inputValor = document.createElement("input");
+    inputValor.type = "number";
+    inputValor.min = "0";
+    inputValor.step = "1";
+    inputValor.placeholder = "CN$";
+    form.appendChild(inputValor);
+
+    const btnAdd = document.createElement("button");
+    btnAdd.type = "button";
+    btnAdd.className = "btn-ghost";
+    btnAdd.textContent = "Adicionar item";
+    btnAdd.addEventListener("click", () => {
+        adicionarItemVendaDarknet(site.id, credencial.id, inputNome.value.trim(), inputValor.value);
+        inputNome.value = "";
+        inputValor.value = "";
+        inputNome.focus();
+    });
+    form.appendChild(btnAdd);
+
+    return form;
+}
+
+// Ignora clique com nome vazio — evita item sem identificação nenhuma
+// (valor 0 é aceitável, ex. item de graça/promoção).
+function adicionarItemVendaDarknet(siteId, credencialId, nome, valor) {
+    if (!fichaAtual || !idAtivo()) return;
+    if (!nome) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    if (!Array.isArray(credencial.itens)) credencial.itens = [];
+    credencial.itens.push({ id: gerarIdLocal(), nome, valor: Math.max(0, Number(valor) || 0) });
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    const container = document.querySelector(`[data-darknet-itens-lista="${siteId}:${credencialId}"]`);
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (container && site) renderizarItensVendaDarknet(site, credencial, container);
+}
+
+function removerItemVendaDarknet(siteId, credencialId, itemId) {
+    if (!fichaAtual || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial || !Array.isArray(credencial.itens)) return;
+    const idx = credencial.itens.findIndex(it => it.id === itemId);
+    if (idx === -1) return;
+    credencial.itens.splice(idx, 1);
+
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    const container = document.querySelector(`[data-darknet-itens-lista="${siteId}:${credencialId}"]`);
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (container && site) renderizarItensVendaDarknet(site, credencial, container);
+}
+
 function alternarCardCredencialDarknet(site, credencial, card) {
     const chave = `${site.id}:${credencial.id}`;
     const corpo = card.querySelector(`[data-darknet-corpo="${chave}"]`);
@@ -10814,16 +11183,55 @@ function alternarCardCredencialDarknet(site, credencial, card) {
 
 // Rola 1d20 + modificador da credencial e registra no Log de Dados —
 // reaproveita 100% o rolarERegistrar já existente (mesmo Log/toast de
-// qualquer outra rolagem da ficha).
+// qualquer outra rolagem da ficha). Em Creators/BlackPrint (ver
+// DARKNET_SITES_ITENS), a rolagem passa a ter dificuldade base 15 e, em
+// caso de sucesso, sorteia um item cadastrado com base no resultado
+// (plano-darknet-passo9.txt, Parte 5) — os demais sites continuam sem
+// dificuldade, só o número mesmo.
 async function rolarDarknet(site, credencial) {
     const mod = modificadorDarknet(site.id, credencial);
     const nomeCred = credencial.nome ? ` — ${credencial.nome}` : "";
-    await rolarERegistrar(`${site.nome}${nomeCred}`, mod, false, null);
+    const nomeAlvo = `${site.nome}${nomeCred}`;
+
+    if (!DARKNET_SITES_ITENS.includes(site.id)) {
+        await rolarERegistrar(nomeAlvo, mod, false, null);
+        return;
+    }
+
+    const resultadoRolagem = await rolarERegistrar(nomeAlvo, mod, false, 15);
+    if (!resultadoRolagem) return; // ação bloqueada (ex.: fora do turno em combate)
+    if (!resultadoRolagem.sucesso) return; // falhou na dificuldade base, sem sorteio
+
+    const itens = Array.isArray(credencial.itens) ? credencial.itens : [];
+    if (itens.length === 0) {
+        toast(`${nomeAlvo}: sucesso, mas nenhum item cadastrado pra sortear.`, "erro");
+        return;
+    }
+
+    const valorMin = Math.min(...itens.map(it => Number(it.valor) || 0));
+    const item = sortearItemPorResultado(itens, resultadoRolagem.resultado, valorMin, fatorPrecoDarknetAtivo);
+
+    if (!item) {
+        toast(`${nomeAlvo}: sucesso, mas nenhum item disponível nesse resultado.`, "erro");
+        return;
+    }
+
+    toast(`Item sorteado: ${item.nome} (CN$ ${Number(item.valor) || 0})`, "ok");
+    await registrarRolagem({
+        quem: isMestre ? `Mestre (${modoNpc ? (fichaAtual?.config?.nomeExibicao || npcAtualId) : (nomeDeFicha(fichaAtualId) || "—")})` : (fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador"),
+        modificador: 0,
+        resultado: resultadoRolagem.resultado,
+        detalhe: `${nomeAlvo}: item sorteado — ${item.nome} (CN$ ${Number(item.valor) || 0})`,
+        critico: null
+    });
 }
 
 function adicionarCredencialDarknet(siteId) {
     if (!fichaAtual || !idAtivo()) return;
-    credenciaisDoSite(siteId).push({ id: gerarIdLocal(), nome: "", pontuacao: 0, avaliacoes: [] });
+    credenciaisDoSite(siteId).push({
+        id: gerarIdLocal(), nome: "", pontuacao: 0, avaliacoes: [],
+        contatos: [], stats: { seguidores: 0, posts: 0, seguindo: 0 }, itens: []
+    });
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
     renderizarCredenciaisDarknet();
     setTimeout(() => {
@@ -10890,6 +11298,48 @@ document.addEventListener("input", (e) => {
     const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
     if (siteId === undefined || credId === undefined) return;
     atualizarPontuacaoDarknet(siteId, credId, e.target.value);
+});
+
+// Edição de contato existente do Dm (número/nome) — mesmo padrão "set
+// direto no objeto do array" das outras caixas de texto da ficha.
+document.addEventListener("input", (e) => {
+    const campo = e.target.dataset && e.target.dataset.darknetContatoCampo;
+    const siteId = e.target.dataset && e.target.dataset.darknetContatoSite;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    const contatoId = e.target.dataset && e.target.dataset.darknetContatoId;
+    if (!campo || siteId === undefined || credId === undefined || contatoId === undefined || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credId);
+    if (!credencial || !Array.isArray(credencial.contatos)) return;
+    const contato = credencial.contatos.find(c => c.id === contatoId);
+    if (!contato) return;
+    contato[campo] = e.target.value;
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+});
+
+// Edição dos contadores do Void (seguidores/posts/seguindo).
+document.addEventListener("input", (e) => {
+    const campo = e.target.dataset && e.target.dataset.darknetStat;
+    const siteId = e.target.dataset && e.target.dataset.darknetStatSite;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    if (!campo || siteId === undefined || credId === undefined) return;
+    atualizarStatVoid(siteId, credId, campo, e.target.value);
+});
+
+// Edição de item de venda já cadastrado (nome/valor) — Creators/BlackPrint.
+document.addEventListener("input", (e) => {
+    const campo = e.target.dataset && e.target.dataset.darknetItemCampo;
+    const siteId = e.target.dataset && e.target.dataset.darknetItemSite;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    const itemId = e.target.dataset && e.target.dataset.darknetItemId;
+    if (!campo || siteId === undefined || credId === undefined || itemId === undefined || !idAtivo()) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credId);
+    if (!credencial || !Array.isArray(credencial.itens)) return;
+    const item = credencial.itens.find(it => it.id === itemId);
+    if (!item) return;
+    item[campo] = campo === "valor" ? Math.max(0, Number(e.target.value) || 0) : e.target.value;
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
 });
 
 // Quantidade de slots de Determinação liberados pelo Nível do
@@ -14010,6 +14460,33 @@ function configurarFatorPrecoMateriaisVeiculo() {
         };
         el.inputFatorPrecoMateriaisVeiculo.addEventListener("blur", salvar);
         el.inputFatorPrecoMateriaisVeiculo.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); e.target.blur(); }
+        });
+    }
+}
+
+// =====================================================================
+// FATOR DE PREÇO DA DARK NET — CN$ por ponto de dificuldade usado no
+// sorteio de itens de Creators/BlackPrint (ver dificuldadeItemDarknet em
+// regras.js). Mesmo padrão de configurarFatorPrecoMateriaisVeiculo acima:
+// listener em tempo real + gravação só no blur/Enter.
+// =====================================================================
+
+function configurarFatorPrecoDarknet() {
+    ouvirFatorPrecoDarknet((fator) => {
+        fatorPrecoDarknetAtivo = fator;
+        if (isMestre && el.inputFatorPrecoDarknet && document.activeElement !== el.inputFatorPrecoDarknet) {
+            el.inputFatorPrecoDarknet.value = fator;
+        }
+    });
+
+    if (el.inputFatorPrecoDarknet) {
+        const salvar = async (e) => {
+            const valor = Number(e.target.value);
+            await definirFatorPrecoDarknet(Number.isFinite(valor) ? valor : 0);
+        };
+        el.inputFatorPrecoDarknet.addEventListener("blur", salvar);
+        el.inputFatorPrecoDarknet.addEventListener("keydown", (e) => {
             if (e.key === "Enter") { e.preventDefault(); e.target.blur(); }
         });
     }

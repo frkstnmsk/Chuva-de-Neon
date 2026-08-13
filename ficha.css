@@ -657,6 +657,128 @@
     padding: 4px 10px;
 }
 
+/* ---------- Dm: contatos salvos ---------- */
+.darknet-contatos-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.darknet-contatos-vazio {
+    font-size: 0.74rem;
+}
+.darknet-contato-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.darknet-contato-numero {
+    width: 90px;
+    flex-shrink: 0;
+}
+.darknet-contato-nome {
+    flex: 1;
+    min-width: 0;
+}
+.darknet-contato-remover {
+    padding: 1px 6px;
+    font-size: 0.68rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.darknet-form-contato {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.darknet-form-contato input:first-child {
+    width: 90px;
+    flex-shrink: 0;
+}
+.darknet-form-contato input:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+}
+.darknet-form-contato button {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    padding: 4px 10px;
+}
+
+/* ---------- Void: stats de seguidores/posts/seguindo ---------- */
+.darknet-stats-grid {
+    display: flex;
+    gap: 10px;
+}
+.darknet-stat-campo {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+.darknet-stat-campo input {
+    width: 80px;
+}
+
+/* ---------- Creators/BlackPrint: itens à venda + sorteio ---------- */
+.darknet-itens-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.darknet-itens-titulo {
+    font-size: 0.72rem;
+}
+.darknet-itens-vazio {
+    font-size: 0.74rem;
+}
+.darknet-item-venda {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.darknet-item-venda-nome {
+    flex: 1;
+    min-width: 0;
+}
+.darknet-item-venda-valor {
+    width: 80px;
+    flex-shrink: 0;
+}
+.darknet-item-venda-remover {
+    padding: 1px 6px;
+    font-size: 0.68rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.darknet-form-item-venda {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.darknet-form-item-venda input:first-child {
+    flex: 1;
+    min-width: 0;
+}
+.darknet-form-item-venda input:nth-child(2) {
+    width: 80px;
+    flex-shrink: 0;
+}
+.darknet-form-item-venda button {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    padding: 4px 10px;
+}
+
 /* ---------- Determinações (caixas de texto por slot, liberadas por Nível) ---------- */
 .determinacoes-rolagem {
     display: flex;

@@ -966,6 +966,41 @@ export function modificadorDarknet(siteId, credencial = {}) {
 }
 
 // ---------------------------------------------------------------------
+// Dark Net — sorteio de item por dificuldade (Creators/BlackPrint, ver
+// plano-darknet-passo9.txt Parte 4 e 5). Funções puras, sem tocar
+// Firebase, mesmo espírito de modificadorDarknet acima.
+//
+// Item mais barato cadastrado = dificuldade base 15. Itens mais caros
+// somam dificuldade proporcionalmente à diferença de preço em relação ao
+// mais barato, usando um fator "CN$ por ponto de dificuldade" ajustável
+// pelo Mestre por mesa (fatorPrecoDarknet, mesmo padrão de
+// fatorPrecoMateriaisVeiculo). fatorCnPorPonto <= 0 é tratado como "sem
+// fórmula configurada" — todo item cai na base, 15.
+// ---------------------------------------------------------------------
+export function dificuldadeItemDarknet(valor, valorMin, fatorCnPorPonto) {
+    if (fatorCnPorPonto <= 0) return 15;
+    return 15 + Math.floor((Number(valor) - Number(valorMin)) / fatorCnPorPonto);
+}
+
+// Dado o resultado de uma rolagem (1d20 + modificadorDarknet) já
+// aprovada na dificuldade base 15, sorteia o item mais caro cadastrado
+// cuja dificuldade (calculada por dificuldadeItemDarknet) ainda é <=
+// resultado — ou seja, quanto melhor a rolagem, mais caro/raro pode ser
+// o item entregue. Devolve null se a lista de itens estiver vazia ou se
+// nenhum item tiver dificuldade <= resultado (não deveria acontecer já
+// que o mais barato é sempre 15, a mesma dificuldade base do sucesso,
+// mas fica protegido mesmo assim).
+export function sortearItemPorResultado(itens, resultado, valorMin, fator) {
+    if (!Array.isArray(itens) || itens.length === 0) return null;
+    const ordenados = [...itens].sort((a, b) => (Number(a.valor) || 0) - (Number(b.valor) || 0));
+    const comDificuldade = ordenados.map(it => ({
+        ...it,
+        dificuldade: dificuldadeItemDarknet(Number(it.valor) || 0, valorMin, fator)
+    }));
+    return [...comDificuldade].reverse().find(it => resultado >= it.dificuldade) || null;
+}
+
+// ---------------------------------------------------------------------
 // Gerenciador de Combate — dificuldade defensiva do alvo.
 //
 // O manual não define uma fórmula fechada pra "esquivar/resistir" a um

@@ -175,10 +175,54 @@ function normalizarAvaliacaoDarknet(raw) {
     };
 }
 
+// Contato salvo de uma credencial do site Dm (plano-darknet-passo9.txt,
+// Parte 1). Só lido/editado pelo site "dm" — nos demais sites o array
+// existe mas fica vazio e ignorado, mesmo espírito de pontuacao/avaliacoes.
+function normalizarContatoDm(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    return {
+        id: (typeof raw.id === "string" && raw.id) ? raw.id : gerarIdCredencialDarknet(),
+        numero: typeof raw.numero === "string" ? raw.numero : String(raw.numero ?? ""),
+        nome: typeof raw.nome === "string" ? raw.nome : String(raw.nome ?? "")
+    };
+}
+
+// Item à venda cadastrado numa credencial do site Creators ou BlackPrint
+// (plano-darknet-passo9.txt, Parte 1 e 5). Usado depois pelo sorteio por
+// dificuldade em regras.js (dificuldadeItemDarknet / sortearItemPorResultado).
+function normalizarItemVendaDarknet(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    return {
+        id: (typeof raw.id === "string" && raw.id) ? raw.id : gerarIdCredencialDarknet(),
+        nome: typeof raw.nome === "string" ? raw.nome : String(raw.nome ?? ""),
+        valor: Math.max(0, Number(raw.valor) || 0)
+    };
+}
+
+// Stats do site Void (seguidores / posts / seguindo). Sempre presente no
+// objeto normalizado, mas só editado pelo site "void" (ver
+// DARKNET_SITES_STATS em ficha.js).
+function normalizarStatsVoidDarknet(raw) {
+    const r = (raw && typeof raw === "object") ? raw : {};
+    return {
+        seguidores: Math.max(0, Math.round(Number(r.seguidores)) || 0),
+        posts: Math.max(0, Math.round(Number(r.posts)) || 0),
+        seguindo: Math.max(0, Math.round(Number(r.seguindo)) || 0)
+    };
+}
+
 function normalizarCredencialDarknet(raw) {
     // Formato antigo: a própria credencial era uma string.
     if (typeof raw === "string") {
-        return { id: gerarIdCredencialDarknet(), nome: raw, pontuacao: 0, avaliacoes: [] };
+        return {
+            id: gerarIdCredencialDarknet(),
+            nome: raw,
+            pontuacao: 0,
+            avaliacoes: [],
+            contatos: [],
+            stats: normalizarStatsVoidDarknet(null),
+            itens: []
+        };
     }
     if (!raw || typeof raw !== "object") return null;
     return {
@@ -187,6 +231,13 @@ function normalizarCredencialDarknet(raw) {
         pontuacao: Math.max(0, Number(raw.pontuacao) || 0),
         avaliacoes: Array.isArray(raw.avaliacoes)
             ? raw.avaliacoes.map(normalizarAvaliacaoDarknet).filter(Boolean)
+            : [],
+        contatos: Array.isArray(raw.contatos)
+            ? raw.contatos.map(normalizarContatoDm).filter(Boolean)
+            : [],
+        stats: normalizarStatsVoidDarknet(raw.stats),
+        itens: Array.isArray(raw.itens)
+            ? raw.itens.map(normalizarItemVendaDarknet).filter(Boolean)
             : []
     };
 }

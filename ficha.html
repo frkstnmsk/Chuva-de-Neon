@@ -53,6 +53,10 @@
                 Ajuste de preço de materiais — veículos (%)
                 <input type="number" id="input-fator-preco-materiais-veiculo" value="0" step="1" style="width:70px;margin-left:8px;" title="Percentual somado/subtraído ao CN$ de referência de Melhorar/Reparar veículo (Fase 3). 0 = preço padrão do manual. Ex.: 20 = +20%, -10 = -10%. Não muda os materiais consumidos, só o valor em dinheiro mostrado como referência.">
             </label>
+            <label class="godmode-toggle">
+                Fator de preço — Dark Net (CN$ por ponto de dificuldade)
+                <input type="number" id="input-fator-preco-darknet" value="50" min="0" step="1" style="width:70px;margin-left:8px;" title="Quantos CN$ de diferença em relação ao item mais barato cadastrado em Creators/BlackPrint equivalem a +1 de dificuldade no sorteio (botão 🎲 dessas credenciais). Padrão sugerido: 50.">
+            </label>
         </div>
         <div id="mestre-corpo-topo" class="mestre-corpo-topo" style="display:none;">
             <span id="mestre-corpo-titulo"></span>
