@@ -604,6 +604,19 @@ export function normalizarInventario(lista) {
             // saúde/complicações): default false pra itens/armas
             // antigos que ainda não têm esses dois campos.
             arma: it.arma ? { ...it.arma, dilacera: it.arma.dilacera ?? false, dilaceraEmGolpeNormal: it.arma.dilaceraEmGolpeNormal ?? false } : null,
+            // Produto Químico (tag "produto_quimico" — ver plano-quimicos-
+            // cenario.txt): mesmo padrão de `it.arma`, só relevante pra essa
+            // tag. Item com essa tag sem `it.quimico` ainda preenchido
+            // (recém-criado ou item antigo) normaliza pro objeto default
+            // (raio 0, sem dificuldade, sem tipo) em vez de null, já que pra
+            // essa tag o bloco sempre é relevante.
+            quimico: it.tag === "produto_quimico"
+                ? {
+                    raio: Number(it.quimico?.raio) || 0,
+                    dificuldadeUsar: it.quimico?.dificuldadeUsar ?? null,
+                    tipoEfeito: it.quimico?.tipoEfeito || ""
+                  }
+                : (it.quimico || null),
             periciaUso: it.periciaUso || null,
             // Carteira digital (Eletrônico ou Dinheiro físico — ver
             // ehTagQuePodeSerSaldo em dados-manual.js): saldoValor só

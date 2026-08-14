@@ -35,7 +35,7 @@ import {
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehExplosivo, ehArmaOuExplosivo, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
+    ehArma, ehExplosivo, ehArmaOuExplosivo, ehDroga, ehProdutoQuimico, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
     ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
@@ -132,6 +132,8 @@ import {
     adicionarDinheiroCenario, removerDinheiroCenario,
     adicionarExplosivoCenario, removerExplosivoCenario,
     detonarExplosivoCenario,
+    adicionarQuimicoCenario, removerQuimicoCenario,
+    liberarQuimicoCenario, aplicarEfeitoQuimicoAlvo,
     ouvirPerseguicaoAtiva, iniciarPerseguicao, removerParticipantePerseguicao, encerrarPerseguicao,
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
@@ -611,6 +613,10 @@ const el = {
     modalExplosivoDificuldadeArmar: document.getElementById("modal-explosivo-dificuldade-armar"),
     modalExplosivoRaio: document.getElementById("modal-explosivo-raio"),
     modalExplosivoModulo: document.getElementById("modal-explosivo-modulo"),
+    modalConfigQuimico: document.getElementById("modal-config-quimico"),
+    modalQuimicoRaio: document.getElementById("modal-quimico-raio"),
+    modalQuimicoDificuldadeUsar: document.getElementById("modal-quimico-dificuldade-usar"),
+    modalQuimicoTipoEfeito: document.getElementById("modal-quimico-tipo-efeito"),
     modalConfigArmaFogo: document.getElementById("modal-config-arma-fogo"),
     modalArmaCapacidade: document.getElementById("modal-arma-capacidade"),
     modalArmaDisparosTurno: document.getElementById("modal-arma-disparos-turno"),
@@ -3705,6 +3711,16 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
         abrirModalArmarExplosivo(it, modificadoresPlanos);
         return;
     }
+    // Produto Químico (ver plano-quimicos-cenario.txt): "Usar" = LIBERAR
+    // EM ÁREA — mesma lógica de "Armar" explosivo (teste de dificuldade
+    // fixa gravada no item, sem seleção de alvo), mas afeta quem estiver
+    // na área quando o Mestre liberar, não quem usou. ehDroga(it.tag) não
+    // precisa de tratamento aqui — continua caindo no fluxo normal de
+    // sempre (botão "Consumir", ver consumirDroga), sem nenhuma mudança.
+    if (ehProdutoQuimico(it.tag)) {
+        abrirModalUsarQuimicoArea(it, modificadoresPlanos);
+        return;
+    }
     if (ehArma(it.tag) && combateTemParticipantes()) {
         // Contra-ataque imediato do Aparar (manual: "pode atacar
         // imediatamente com modificador -1") — se este personagem tem um
@@ -3818,6 +3834,86 @@ function abrirModalArmarExplosivo(it, modificadoresPlanos) {
         toast(modulo
             ? `💣 Módulo de detonação ativado: ${modulo.nome} — ${modulo.efeito}. Armado em "${cenario.titulo}".`
             : `💣 ${it.nome} armado em "${cenario.titulo}".`);
+    });
+    document.body.appendChild(modal);
+}
+
+// "Usar" um item Produto Químico = LIBERAR EM ÁREA (manual pág. 91-93,
+// ver plano-quimicos-cenario.txt): cópia quase literal de
+// abrirModalArmarExplosivo — teste de dificuldade FIXA gravada no item
+// (dificuldadeUsar) contra a perícia vinculada (normalmente Química), sem
+// oposição de defesa nem seleção de alvo. Diferente de explosivo, o efeito
+// não é dano — são os modificadores automáticos do item (mesmo mecanismo
+// de efeitosDrogas que já existe pra autoconsumo), aplicados depois em
+// quem estiver na área (o Mestre decide quem via pendência "quimico_area",
+// ver liberarQuimicoCenario em mestre.js).
+function abrirModalUsarQuimicoArea(it, modificadoresPlanos) {
+    // Usar SEM estar em nenhum cenário ativo é bloqueado (mesma decisão
+    // de explosivo) — não tem onde gravar o químico nem quem fica na área
+    // depois.
+    const cenario = cenarioAtualDoPersonagem();
+    if (!cenario) {
+        toast(`"${it.nome}" só pode ser usado dentro de um cenário — peça ao Mestre pra te colocar em um antes de usar.`, "erro");
+        return;
+    }
+    let modal = document.getElementById("modal-usar-quimico-area");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-usar-quimico-area";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const cfg = it.quimico || {};
+    const nomePericia = it.periciaUso || "Química";
+    const ocasionaisQuimico = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Usar em área: ${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">
+            ${cfg.tipoEfeito ? `Tipo de efeito: <strong>${escapeHtml(cfg.tipoEfeito)}</strong><br>` : ""}
+            ${cfg.raio ? `Raio: <strong>${cfg.raio}m</strong> — aplique manualmente a quem estiver na área quando o Mestre liberar.<br>` : ""}
+            Dificuldade de uso: <strong>${cfg.dificuldadeUsar || "não definida"}</strong> (perícia ${escapeHtml(nomePericia)}).
+        </p>
+        <div id="quimico-ocasionais-lista">${htmlCheckboxesOcasionais(ocasionaisQuimico, nomePericia)}</div>
+        <div class="modal-btns">
+            <button type="button" class="btn-lime" id="btn-confirmar-usar-quimico">Usar (rolar ${escapeHtml(nomePericia)})</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-confirmar-usar-quimico").addEventListener("click", async () => {
+        const deltaOcasional = lerDeltaOcasionais(modal.querySelector("#quimico-ocasionais-lista"), ocasionaisQuimico);
+        modal.remove();
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual()) + deltaOcasional;
+        const rotuloDif = cfg.dificuldadeUsar ? ` (dif. uso: ${cfg.dificuldadeUsar})` : "";
+        // dificuldadeUsar vai como 4º argumento pra rolarERegistrar
+        // sinalizar Sucesso/Falhou no Log de Dados e no toast — mesmo
+        // padrão de "Armar" explosivo: não trava nada automaticamente, o
+        // químico continua sendo gravado no cenário mesmo numa falha; quem
+        // decide o que acontece na falha continua sendo o Mestre.
+        await rolarERegistrar(`${it.nome} — Usar em área${rotuloDif}`, modificadorFinal, false, cfg.dificuldadeUsar || null);
+
+        // Grava o químico no cenário e tira o item do inventário DIRETO —
+        // igual "Armar" de explosivo, "Usar" de um item de área não
+        // devolve, então não passa pela fila de aprovação do Mestre.
+        const nomeAtacanteOuNpc = fichaAtual?.config?.nomeExibicao || sessao?.nome || (modoNpc ? npcAtualId : fichaAtualId);
+        const modificadoresDoItem = (it.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
+        await adicionarQuimicoCenario(cenario.id, {
+            nome: it.nome,
+            raio: cfg.raio || 0,
+            tipoEfeito: cfg.tipoEfeito || "",
+            modificadores: modificadoresDoItem,
+            duracaoHoras: extrairDuracaoHorasDaDescricao(it.descricao),
+            usadoPorTipo: modoNpc ? "npc" : "ficha",
+            usadoPorId: modoNpc ? npcAtualId : fichaAtualId,
+            usadoPorNome: nomeAtacanteOuNpc,
+            criadoEm: Date.now()
+        });
+        delete fichaAtual.inventario[it.id];
+        await remove(ref(db, `${caminhoBase()}/inventario/${it.id}`));
+
+        toast(`💨 ${it.nome} usado em área — aguardando o Mestre liberar em "${cenario.titulo}".`);
     });
     document.body.appendChild(modal);
 }
@@ -12301,7 +12397,7 @@ function prepararModalItem(existente, ehBanco) {
         } else {
             el.modalCategoriaBanco.value = existente.categoriaBanco || "";
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas, existente.quimico);
         el.modalEquipavel.checked = !!existente.equipavel;
         // Reavalia com o checkbox "equipável" já no valor certo (a
         // chamada acima roda antes dessa linha, então via com o valor
@@ -12376,7 +12472,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas, it.quimico);
                 el.modalEquipavel.checked = !!it.equipavel;
                 atualizarCampoJaEquipar();
                 el.modalItemBancoOpcoes.style.display = "none";
@@ -12600,7 +12696,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual, quimicoConfigAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma" e
     // "Explosivo": as duas já são sempre equipáveis por natureza (ver
@@ -12849,6 +12945,19 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         el.modalExplosivoDificuldadeArmar.value = (armaConfig && armaConfig.dificuldadeArmar) ?? 0;
         el.modalExplosivoRaio.value = (armaConfig && armaConfig.raio) ?? 0;
         el.modalExplosivoModulo.value = (armaConfig && armaConfig.moduloDetonacao) || "";
+    }
+
+    // Configuração do Produto Químico (ver plano-quimicos-cenario.txt) —
+    // só pra tag "produto_quimico". Raio/Dificuldade de uso/Tipo de
+    // efeito são campos próprios (it.quimico); Perícia, Modificadores
+    // automáticos e Descrição (duração em horas) continuam vindo dos
+    // campos genéricos de sempre, tratados mais abaixo/fora desta função.
+    const produtoQuimico = ehProdutoQuimico(tagKey);
+    el.modalConfigQuimico.style.display = produtoQuimico ? "block" : "none";
+    if (produtoQuimico) {
+        el.modalQuimicoRaio.value = (quimicoConfigAtual && quimicoConfigAtual.raio) ?? 0;
+        el.modalQuimicoDificuldadeUsar.value = (quimicoConfigAtual && quimicoConfigAtual.dificuldadeUsar) ?? 0;
+        el.modalQuimicoTipoEfeito.value = (quimicoConfigAtual && quimicoConfigAtual.tipoEfeito) || "";
     }
     // Tipo de dano extra — só faz sentido em arma branca (corpo a corpo,
     // não-fogo); arma de fogo dispara sempre o mesmo tipo de projétil.
@@ -13461,6 +13570,17 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     };
 }
 
+// Produto Químico (ver plano-quimicos-cenario.txt) — monta it.quimico a
+// partir dos campos do bloco "Configuração do produto químico", mesmo
+// padrão de lerConfigArmaDoModal pra it.arma.
+function lerConfigQuimicoDoModal() {
+    return {
+        raio: Number(el.modalQuimicoRaio.value) || 0,
+        dificuldadeUsar: Number(el.modalQuimicoDificuldadeUsar.value) || 0,
+        tipoEfeito: el.modalQuimicoTipoEfeito.value.trim()
+    };
+}
+
 // Lê o(s) valor(es) de perícia vinculada do modal do item — array (só
 // as marcadas) pra tags multi-perícia (eletrônico, ver ehTagMultiPericia
 // em dados-manual.js), string única (ou null) pras demais. Usada tanto
@@ -13747,6 +13867,7 @@ async function salvarItemDoModal(id) {
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
         arma: ehArmaOuExplosivo(tag) ? lerConfigArmaDoModal(periciaUso, calibre, existenteItem.arma, tag) : null,
+        quimico: ehProdutoQuimico(tag) ? lerConfigQuimicoDoModal() : null,
         carregador,
         projetil,
         // Equipável (checkbox independente da tag — ver atualizarCamposPorTag):
@@ -13917,6 +14038,7 @@ async function salvarItemBancoDoModal(id) {
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
         arma: armaConfig,
+        quimico: ehProdutoQuimico(tag) ? lerConfigQuimicoDoModal() : null,
         carregador,
         projetil,
         // Equipável — molde do Banco Global; item criado a partir dele
@@ -15924,6 +16046,42 @@ function montarPainelAcoesPendentes(corpo) {
             return; // pula o bloco genérico de Confirmar/Rejeitar abaixo
         }
 
+        // "quimico_area" (ver liberarQuimicoCenario, mestre.js, e
+        // plano-quimicos-cenario.txt Parte 5) — mesmo padrão de
+        // "explosao_raio": pergunta binária "esse participante estava na
+        // área?". "Sim" NÃO aplica nada sozinho — abre o painel "Aplicar
+        // Efeito Químico" (abrirAcaoMestre("efeito-quimico", ...)) pro
+        // Mestre revisar/ajustar antes de confirmar (ex.: alvo resistiu
+        // parcialmente, reduzir a duração, remover algum modificador).
+        // "Não" só descarta a pendência.
+        if (acao.tipo === "quimico_area") {
+            const botoesQuim = document.createElement("div");
+            botoesQuim.className = "pendente-botoes";
+            const btnSim = document.createElement("button");
+            btnSim.className = "btn-red"; btnSim.type = "button"; btnSim.innerText = "💨 Sim, na área";
+            btnSim.addEventListener("click", async () => {
+                await rejeitarAcaoPendente(acao.id);
+                abrirAcaoMestre("efeito-quimico", {
+                    alvoTipo: acao.payload.participanteTipo,
+                    alvoId: acao.payload.participanteRefId,
+                    nomeQuimico: acao.payload.nomeQuimico,
+                    tipoEfeito: acao.payload.tipoEfeito,
+                    modificadores: acao.payload.modificadores,
+                    duracaoHoras: acao.payload.duracaoHoras
+                });
+            });
+            const btnNao = document.createElement("button");
+            btnNao.className = "btn-ghost"; btnNao.type = "button"; btnNao.innerText = "Não, fora da área";
+            btnNao.addEventListener("click", async () => {
+                await rejeitarAcaoPendente(acao.id);
+                toast(`${acao.payload.participanteNome} fora da área.`);
+            });
+            botoesQuim.append(btnSim, btnNao);
+            card.appendChild(botoesQuim);
+            corpo.appendChild(card);
+            return; // pula o bloco genérico de Confirmar/Rejeitar abaixo
+        }
+
         // "pegar_dinheiro_cenario" e "depositar_dinheiro_item" (ver
         // plano-cenario.txt e transformar_dinheiro_item, mestre.js) não
         // depositam mais automaticamente em "Dinheiro limpo": o Mestre
@@ -16240,6 +16398,7 @@ const ROTULOS_ACAO_MESTRE = {
     xp: "Dar XP",
     dado: "Rolar Dado",
     dano: "Causar Dano",
+    "efeito-quimico": "Aplicar Efeito Químico",
     npcs: "NPCs",
     dashboard: "Fichas ativas",
     biblioteca: "Biblioteca de Itens",
@@ -16381,6 +16540,84 @@ function abrirAcaoMestre(acao, prefill = null) {
             selectTipo.dispatchEvent(new Event("change"));
             input.value = prefill.valor;
         }
+
+    } else if (acao === "efeito-quimico") {
+        // Aplicar Efeito Químico (ver plano-quimicos-cenario.txt, Parte 5):
+        // aberto pela pendência "quimico_area" já com o alvo, o nome/tipo
+        // do químico e os modificadores/duração do item pré-preenchidos —
+        // o Mestre só revisa (pode remover algum modificador, ex.: alvo
+        // resistiu parcialmente) e confirma. Grava em efeitosDrogas do
+        // alvo via aplicarEfeitoQuimicoAlvo (mestre.js) — mesmo shape que
+        // consumirDroga já usa pra autoconsumo.
+        const select = criarSelectFichas(true, prefill ? `${prefill.alvoTipo}::${prefill.alvoId}` : null);
+
+        const info = document.createElement("p");
+        info.className = "hint";
+        info.innerHTML = `Químico: <strong>${escapeHtml(prefill?.nomeQuimico || "(sem nome)")}</strong>` +
+            (prefill?.tipoEfeito ? ` — ${escapeHtml(prefill.tipoEfeito)}` : "");
+
+        const listaMods = document.createElement("div");
+        let modificadoresAtuais = [...(prefill?.modificadores || [])];
+        function renderModsQuimico() {
+            listaMods.innerHTML = "";
+            if (!modificadoresAtuais.length) {
+                listaMods.innerHTML = `<p class="hint">Nenhum modificador cadastrado neste item.</p>`;
+                return;
+            }
+            modificadoresAtuais.forEach((m, idx) => {
+                const linha = document.createElement("div");
+                linha.className = "pendente-botoes";
+                linha.style.justifyContent = "space-between";
+                linha.style.alignItems = "center";
+                const span = document.createElement("span");
+                span.innerText = `${m.alvo}: ${m.valor > 0 ? "+" : ""}${m.valor}`;
+                const btnRemover = document.createElement("button");
+                btnRemover.type = "button"; btnRemover.className = "btn-ghost"; btnRemover.innerText = "Remover";
+                btnRemover.addEventListener("click", () => {
+                    modificadoresAtuais.splice(idx, 1);
+                    renderModsQuimico();
+                });
+                linha.append(span, btnRemover);
+                listaMods.appendChild(linha);
+            });
+        }
+        renderModsQuimico();
+
+        const campoDuracao = document.createElement("div");
+        campoDuracao.className = "modal-field";
+        const labelDuracao = document.createElement("label");
+        labelDuracao.innerText = "Duração em horas (vazio = até o fim do dia em jogo)";
+        const inputDuracao = document.createElement("input");
+        inputDuracao.type = "number";
+        inputDuracao.value = (prefill && prefill.duracaoHoras !== null && prefill.duracaoHoras !== undefined) ? prefill.duracaoHoras : "";
+        labelDuracao.appendChild(inputDuracao);
+        campoDuracao.appendChild(labelDuracao);
+
+        const btn = document.createElement("button");
+        btn.className = "btn-lime"; btn.type = "button"; btn.innerText = "Aplicar efeito";
+        btn.addEventListener("click", async () => {
+            if (!select.value) { toast("Escolha um alvo.", "erro"); return; }
+            if (calendarioAtual === null || calendarioAtual === undefined) {
+                toast("Calendário da mesa ainda não carregou — espera um instante e tenta de novo.", "erro");
+                return;
+            }
+            const [tipo, id] = select.value.split("::");
+            const diaAtual = calendarioAtual.diaIndice;
+            const horasAgora = horasTotaisCalendario(diaAtual, calendarioAtual.hora);
+            const duracaoHoras = inputDuracao.value.trim() !== "" ? (Number(inputDuracao.value) || 0) : null;
+            const horasExpira = (duracaoHoras !== null && horasAgora !== null)
+                ? horasAgora + duracaoHoras
+                : ((diaAtual + 1) * 24); // fallback: até acabar o dia em jogo (mesmo comportamento de consumirDroga)
+            await aplicarEfeitoQuimicoAlvo(tipo, id, {
+                nome: prefill?.nomeQuimico || "Químico",
+                diaIndiceConsumido: diaAtual,
+                horasExpira,
+                modificadores: modificadoresAtuais
+            });
+            toast(`💨 Efeito de "${prefill?.nomeQuimico || "químico"}" aplicado.`);
+        });
+
+        corpo.append(select, info, listaMods, campoDuracao, btn);
 
     } else if (acao === "npcs") {
         montarPainelNpcs(corpo);
@@ -17942,6 +18179,60 @@ function montarDetalheCenario(detalhe, cenario) {
         btnRemover.className = "btn-ghost"; btnRemover.type = "button"; btnRemover.innerText = "Remover";
         btnRemover.addEventListener("click", async () => { await removerExplosivoCenario(cenario.id, explosivoId); toast("Explosivo removido do cenário."); });
         botoes.appendChild(btnRemover);
+        linha.appendChild(botoes);
+        detalhe.appendChild(linha);
+    });
+
+    // ---- Químicos liberados (ver plano-quimicos-cenario.txt) — cópia da
+    // seção "Explosivos armados" acima, trocando ícone 💣→💨 e
+    // "Detonar"→"Liberar". Só o Mestre chega aqui. "Liberar" gera uma
+    // pendência "estava na área?" por participante do cenário (jogadores
+    // E NPCs); o químico continua listado depois (status "resolvido"),
+    // pra não sumir do radar no meio da resolução das pendências —
+    // remoção definitiva é sempre manual (mesma decisão de explosivos).
+    // Não tem formulário de "+ Add químico" aqui: só chega neste nó pelo
+    // "Usar" do jogador (ficha.js, abrirModalUsarQuimicoArea). ----
+    const secaoQuimicos = document.createElement("div");
+    secaoQuimicos.className = "section-header";
+    secaoQuimicos.innerText = "Químicos liberados";
+    detalhe.appendChild(secaoQuimicos);
+
+    const quimicos = cenario.quimicos || {};
+    if (!Object.keys(quimicos).length) {
+        const vazio = document.createElement("p");
+        vazio.className = "hint";
+        vazio.innerText = "Nenhum químico usado neste cenário.";
+        detalhe.appendChild(vazio);
+    }
+    Object.entries(quimicos).forEach(([quimicoId, q]) => {
+        const linha = document.createElement("div");
+        linha.style.display = "flex";
+        linha.style.justifyContent = "space-between";
+        linha.style.alignItems = "center";
+        linha.innerHTML = `<span>💨 ${escapeHtml(q.nome || "(sem nome)")}${q.tipoEfeito ? ` — ${escapeHtml(q.tipoEfeito)}` : ""}${q.raio ? `, raio ${q.raio}m` : ""}
+            ${q.status === "resolvido" ? " · <strong>já resolvido</strong>" : ""}
+            <span class="entity-sub">usado por ${escapeHtml(q.usadoPorNome || "?")}</span></span>`;
+        const botoes = document.createElement("span");
+        botoes.style.display = "flex"; botoes.style.gap = "6px";
+        if (q.status !== "resolvido") {
+            const btnLiberar = document.createElement("button");
+            btnLiberar.className = "btn-red"; btnLiberar.type = "button"; btnLiberar.innerText = "💨 Liberar";
+            btnLiberar.addEventListener("click", async () => {
+                if (!confirm(`Liberar "${q.nome}"? Isso cria uma pendência "estava na área?" pra cada participante do cenário — a aplicação do efeito fica pro painel de Ações Pendentes.`)) return;
+                try {
+                    await liberarQuimicoCenario(cenario.id, quimicoId);
+                    toast("Pendências de área criadas — resolva na fila de Ações Pendentes.");
+                } catch (err) {
+                    console.error(err);
+                    toast(err && err.message ? err.message : "Falha ao liberar.", "erro");
+                }
+            });
+            botoes.appendChild(btnLiberar);
+        }
+        const btnRemoverQuimico = document.createElement("button");
+        btnRemoverQuimico.className = "btn-ghost"; btnRemoverQuimico.type = "button"; btnRemoverQuimico.innerText = "Remover";
+        btnRemoverQuimico.addEventListener("click", async () => { await removerQuimicoCenario(cenario.id, quimicoId); toast("Químico removido do cenário."); });
+        botoes.appendChild(btnRemoverQuimico);
         linha.appendChild(botoes);
         detalhe.appendChild(linha);
     });

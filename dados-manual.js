@@ -274,7 +274,8 @@ export const TAGS_ITEM = [
     { key: "veiculo", label: "Veículo", temNivel: true },
     { key: "biomecanica", label: "Biomecânica / prótese", temNivel: false },
     { key: "mecanito", label: "Mecânito", temNivel: false },
-    { key: "droga", label: "Droga / químico", temNivel: false },
+    { key: "droga", label: "Droga", temNivel: false },
+    { key: "produto_quimico", label: "Produto Químico", temNivel: false },
     { key: "equipamento_medico", label: "Equipamento médico", temNivel: false },
     { key: "explosivo", label: "Explosivo", temNivel: true },
     { key: "modulo_detonacao", label: "Módulo de Detonação", temNivel: true },
@@ -330,6 +331,20 @@ export function ehExplosivo(tagKey) {
 
 export function ehArmaOuExplosivo(tagKey) {
     return ehArma(tagKey) || ehExplosivo(tagKey);
+}
+
+// "Droga" (uso pessoal, botão "Consumir" — ver consumirDroga em ficha.js)
+// e "Produto Químico" (uso em área/cenário — ver plano-quimicos-cenario.txt)
+// são duas tags SEPARADAS, mesmo espírito de "arma" vs "explosivo": mesma
+// infraestrutura (perícia, dificuldade, modificadores, duração em horas),
+// fluxos de uso completamente diferentes. Sem campo "modo de uso" — a
+// própria tag já diz o modo.
+export function ehDroga(tagKey) {
+    return tagKey === "droga";
+}
+
+export function ehProdutoQuimico(tagKey) {
+    return tagKey === "produto_quimico";
 }
 
 // ---------------------------------------------------------------------
@@ -1067,7 +1082,7 @@ export function ehFerramentaCriacaoGeral(tagKey) {
 export function tagTemPericiaUso(tagKey) {
     return tagKey === "arma" || tagKey === "explosivo" || tagKey === "eletronico" ||
         tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
-        tagKey === "destrave";
+        tagKey === "destrave" || tagKey === "produto_quimico";
 }
 
 // Tags cujo item PRECISA de uma perícia vinculada pra ter ação de "Usar"
@@ -1086,7 +1101,7 @@ export function tagTemPericiaUso(tagKey) {
 export function tagExigePericiaUso(tagKey) {
     return tagKey === "arma" || tagKey === "explosivo" ||
         tagKey === "ferramenta_criacao_quimica" || tagKey === "ferramenta_criacao_biomecanica" ||
-        tagKey === "destrave";
+        tagKey === "destrave" || tagKey === "produto_quimico";
 }
 
 // Eletrônico é a única tag (fora Ferramenta de Criação geral, que tem
@@ -1205,6 +1220,10 @@ export function periciasVinculaveisPorTag(tagKey) {
         // manual já trata "criar" e "armar/usar" como testes da mesma
         // perícia).
         case "explosivo": return ["Explosivos", "Sem Perícia"];
+        // Produto Químico usa a mesma perícia de criação química (manual
+        // pág. 91-93) pra "espalhar"/ativar em área — ver
+        // PERICIAS_FERRAMENTA_CRIACAO_QUIMICA acima.
+        case "produto_quimico": return PERICIAS_FERRAMENTA_CRIACAO_QUIMICA;
         case "eletronico": return PERICIAS_ELETRONICO;
         case "ferramenta_criacao": return PERICIAS_FERRAMENTA_CRIACAO;
         case "ferramenta_criacao_quimica": return PERICIAS_FERRAMENTA_CRIACAO_QUIMICA;

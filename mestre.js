@@ -1288,6 +1288,91 @@ export async function detonarExplosivoCenario(cenarioId, explosivoId) {
     await marcarExplosivoDetonado(cenarioId, explosivoId);
 }
 
+// ---- Químicos liberados no cenário (ver plano-quimicos-cenario.txt,
+// Parte 4). Mesmo shape/funções de explosivos acima, só trocando
+// "explosao"/"detonar" por "quimico"/"liberar": item com tag
+// "produto_quimico" grava aqui direto ao ser usado (ficha.js) e já
+// remove o item do inventário na hora — igual "Armar" de explosivo.
+//
+// Formato de cada cenarios/{cenarioId}/quimicos/{quimicoId}:
+//   nome:              string (nome do item)
+//   raio:              number
+//   tipoEfeito:        string (informativo)
+//   modificadores:     array (copiado de it.modificadores no momento do uso)
+//   duracaoHoras:      number | null (extraído da descrição do item)
+//   usadoPorTipo:      "ficha" | "npc"
+//   usadoPorId:        string
+//   usadoPorNome:      string
+//   status:            "liberado_pendente" | "resolvido"
+//   criadoEm:          timestamp
+export async function adicionarQuimicoCenario(cenarioId, dados) {
+    const novaRef = push(ref(db, caminhoMesa(`cenarios/${cenarioId}/quimicos`)));
+    await set(novaRef, { ...dados, status: "liberado_pendente" });
+    return novaRef.key;
+}
+
+// Remoção definitiva do cenário — sempre manual (mesma decisão de
+// explosivos), mesmo depois de resolvido.
+export async function removerQuimicoCenario(cenarioId, quimicoId) {
+    await remove(ref(db, caminhoMesa(`cenarios/${cenarioId}/quimicos/${quimicoId}`)));
+}
+
+export async function marcarQuimicoResolvido(cenarioId, quimicoId) {
+    await update(ref(db, caminhoMesa(`cenarios/${cenarioId}/quimicos/${quimicoId}`)), { status: "resolvido" });
+}
+
+// Liberar: gera uma pendência "estava na área?" (tipo "quimico_area") por
+// participante do cenário — mesmo padrão de detonarExplosivoCenario. Não
+// aplica efeito nenhum sozinho: cada pendência, respondida "Sim", abre o
+// painel "Aplicar Efeito Químico" (ficha.js) já pré-preenchido.
+export async function liberarQuimicoCenario(cenarioId, quimicoId) {
+    const snap = await get(ref(db, caminhoMesa(`cenarios/${cenarioId}`)));
+    if (!snap.exists()) throw new Error("Cenário não encontrado.");
+    const cenario = snap.val();
+    const quimico = cenario.quimicos && cenario.quimicos[quimicoId];
+    if (!quimico) throw new Error("Químico não encontrado neste cenário.");
+    if (quimico.status === "resolvido") throw new Error("Este químico já foi resolvido.");
+
+    const participantes = cenario.participantes || {};
+    for (const [participanteId, participante] of Object.entries(participantes)) {
+        await criarAcaoPendente({
+            tipo: "quimico_area",
+            fichaId: null,
+            nomeJogador: "Mestre",
+            detalhe: `${participante.nome} estava na área de "${quimico.nome}" (raio ${quimico.raio}m)?`,
+            payload: {
+                cenarioId, quimicoId, participanteId,
+                participanteTipo: participante.tipo,
+                participanteRefId: participante.refId,
+                participanteNome: participante.nome,
+                nomeQuimico: quimico.nome,
+                tipoEfeito: quimico.tipoEfeito,
+                modificadores: quimico.modificadores,
+                duracaoHoras: quimico.duracaoHoras
+            }
+        });
+    }
+    await marcarQuimicoResolvido(cenarioId, quimicoId);
+}
+
+// Aplica o efeito temporário de um Produto Químico usado em área na
+// ficha/NPC ALVO (ver plano-quimicos-cenario.txt, Parte 5) — MESMO shape
+// que consumirDroga (ficha.js) já grava pra autoconsumo em
+// `ficha.efeitosDrogas`, só que endereçado a um alvo qualquer em vez de
+// "quem usou o item". calcularModificadoresDrogasAtivas (regras.js) já lê
+// `efeitosDrogas` de QUALQUER ficha/npc que passar por ele — nenhuma
+// mudança necessária lá. Chave normalizada por nome (mesmo padrão de
+// consumirDroga: reusar o químico de novo no mesmo alvo sobrescreve o
+// efeito anterior em vez de empilhar duas entradas).
+export async function aplicarEfeitoQuimicoAlvo(alvoTipo, alvoId, dados) {
+    const { nome, diaIndiceConsumido, horasExpira, modificadores } = dados;
+    const chave = normalizarTexto(nome);
+    const raizAlvo = alvoTipo === "npc" ? `npcs/${alvoId}` : `fichas/${alvoId}`;
+    await set(ref(db, caminhoMesa(`${raizAlvo}/efeitosDrogas/${chave}`)), {
+        nome, diaIndiceConsumido, horasExpira, modificadores
+    });
+}
+
 // ---------------------------------------------------------------------
 // Gerenciador de Combate — lista compartilhada de participantes ativos
 // (jogadores e/ou NPCs), usada pra alimentar o seletor de alvo no botão
