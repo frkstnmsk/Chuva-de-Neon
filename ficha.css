@@ -2693,6 +2693,12 @@ select.select-guardar-dentro {
 .ferida-historico summary { cursor: pointer; }
 .ferida-historico ul { margin: 6px 0 0; padding-left: 18px; }
 
+/* Implantes (aba Saúde, painel provisório — Fase 6 do plano de
+   implantes/biomecânica; ver plano-implantes-biomecanica.txt). Reusa o
+   molde do .ferida-card acima, só troca a cor de destaque pra não
+   confundir visualmente com ferida. */
+.implante-card { border-left-color: var(--neon-blue); }
+
 /* Histórico de XP (plano-registro-xp.txt) — mesmo molde do
    .ferida-historico acima, só um pouco mais respirado por ficar sozinho
    na seção "Progressão" em vez de dentro de um card apertado. */

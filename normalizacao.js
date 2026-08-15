@@ -529,6 +529,13 @@ export function normalizarInventario(lista) {
             ativo: it.ativo ?? true,
             tag: it.tag || "geral",
             nivelTag: it.nivelTag ?? null,
+            // Checkbox "Limitar rolagem" (ver tagPermiteLimiteRolagemPorNivel
+            // em dados-manual.js): quando true, a rolagem da perícia
+            // vinculada ao usar este item fica travada no nível do
+            // próprio item (nivelTag), mesmo que a perícia do
+            // personagem seja mais alta. Default false (não muda
+            // comportamento de itens antigos).
+            limitarRolagemPorNivel: it.limitarRolagemPorNivel ?? false,
             peso: it.peso ?? 0,
             // Quantidade genérica (ver tagTemQuantidadeGeral em
             // dados-manual.js): pesoUnitario só existe pra tags que
@@ -614,9 +621,58 @@ export function normalizarInventario(lista) {
                 ? {
                     raio: Number(it.quimico?.raio) || 0,
                     dificuldadeUsar: it.quimico?.dificuldadeUsar ?? null,
-                    tipoEfeito: it.quimico?.tipoEfeito || ""
+                    tipoEfeito: it.quimico?.tipoEfeito || "",
+                    // Efeitos mecânicos do item (it.quimico.efeitos — gerado
+                    // pelo modal via lerConfigQuimicoDoModal). Faltava aqui:
+                    // toda normalização de ficha jogava esse array fora,
+                    // deixando consumirDroga/painel de área sem nada pra
+                    // disparar (Parte 8, item 5.1 do plano-automacao-
+                    // materiais-quimicos-v3).
+                    efeitos: Array.isArray(it.quimico?.efeitos) ? it.quimico.efeitos : [],
+                    // Veículo de transporte (continuação da v3 — automação
+                    // da entrega): pontosVeiculoTransporte precisa
+                    // sobreviver à normalização pra restaurar a linha da
+                    // receita ao reabrir o item pra edição (ver
+                    // renderizarLinhasMateriaisQuimico em ficha.js); sem
+                    // isso, editar um item já salvo zerava esse campo
+                    // silenciosamente porque este bloco reconstrói o objeto
+                    // do zero em vez de espalhar (...it.quimico).
+                    pontosVeiculoTransporte: Number(it.quimico?.pontosVeiculoTransporte) || 0,
+                    tipoEntrega: it.quimico?.tipoEntrega || "area",
+                    tipoEntregaLabel: it.quimico?.tipoEntregaLabel || "Área"
                   }
                 : (it.quimico || null),
+            // Implante de Biomecânica (tag "biomecanica" — ver plano-
+            // implantes-biomecanica.txt). Mesmo padrão de `it.quimico`
+            // acima: só relevante pra essa tag, mas normaliza pro objeto
+            // default em vez de null quando a tag bate, pra sempre ter
+            // os campos prontos pro modal/UI ler sem checagem extra.
+            // `instalado` é o que diferencia "produto comprado, ainda na
+            // mochila" de "já implantado, mora no painel da aba Saúde".
+            implante: it.tag === "biomecanica"
+                ? {
+                    subtipo: it.implante?.subtipo || null,
+                    dificuldadeInstalar: it.implante?.dificuldadeInstalar ?? null,
+                    funcoesEspeciais: it.implante?.funcoesEspeciais || "",
+                    instalado: it.implante?.instalado ?? false,
+                    // Testes de adaptação (Constituição, feitos pelo
+                    // próprio paciente, sozinho, após a cirurgia — ver
+                    // Fase 6 do plano): contagem de quantos já foram
+                    // feitos e quantas falhas viraram rejeição parcial.
+                    testesAdaptacaoFeitos: it.implante?.testesAdaptacaoFeitos ?? 0,
+                    rejeicaoParcial: it.implante?.rejeicaoParcial ?? 0,
+                    // Histórico simples da cirurgia (quem instalou/
+                    // removeu, resultado, data) — só pra exibição no
+                    // card, sem efeito mecânico.
+                    historico: Array.isArray(it.implante?.historico) ? it.implante.historico : [],
+                    // Marcado pela Fase 5 (confirmarAcaoPendente
+                    // "instalar_implante", mestre.js) numa falha
+                    // crítica de instalação — item vira sucata inútil,
+                    // sem efeito mecânico automático além do aviso na
+                    // Fase 9 (painel Implantes da aba Saúde).
+                    quebrado: it.implante?.quebrado ?? false
+                  }
+                : (it.implante || null),
             periciaUso: it.periciaUso || null,
             // Carteira digital (Eletrônico ou Dinheiro físico — ver
             // ehTagQuePodeSerSaldo em dados-manual.js): saldoValor só

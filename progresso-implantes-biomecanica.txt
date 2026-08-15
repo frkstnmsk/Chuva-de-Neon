@@ -1,0 +1,208 @@
+=====================================================================
+CHUVA DE NEON — Progresso: Implantes/Próteses (Biomecânica)
+Referência: plano-implantes-biomecanica.txt
+=====================================================================
+
+[x] FASE 1 — Dados do item (dados-manual.js)
+    1.1 subtipoImplante (SUBTIPOS_IMPLANTE) — feito.
+    1.2 dificuldadeCriar / dificuldadeInstalar como campos separados
+        (ver el.modalImplanteDificuldadeInstalar em ficha.js e
+        normalizacao.js) — feito.
+    1.3 funcoesEspeciais (texto livre) — feito.
+    1.4 subtipoContaComoImplante(subtipo) — feito.
+
+[x] FASE 2 — Criar o implante (fabricação)
+    2.1 subtipoImplante liberado no modal de criação quando tag =
+        biomecanica — feito.
+    2.2 Item nasce com instalado:false, sem paciente vinculado — feito
+        (lerConfigImplanteDoModal, ficha.js).
+
+[x] FASE 3 — Achar quem pode ser alvo da cirurgia   <-- IMPLEMENTADO NESTA RODADA
+    3.1 Reusa cenarioAtualDoPersonagem() (já existia) — feito.
+    3.2 candidatosCirurgiaImplante() (ficha.js, logo após
+        cenarioAtualDoPersonagem): lista participantes tipo "ficha" do
+        cenário do instalador, excluindo o próprio instalador — feito.
+    3.3 implantesDoPacienteParaCirurgia(fichaAlvoId) (ficha.js): lê via
+        todasAsFichasCache o inventário do paciente e separa os itens
+        tag "biomecanica" em paraInstalar (instalado:false) e
+        paraRemover (instalado:true) — feito.
+
+    Observação: Fase 3 é só a camada de dados (helpers), sem UI própria
+    — ainda não há botão/modal novo na tela. Os dois helpers ficam
+    prontos pra Fase 4 (modal Instalar/Remover) consumir.
+
+[x] FASE 4 — Gatilho de Instalar   <-- IMPLEMENTADO NESTA RODADA
+    4.1 iniciarUsoItem (ficha.js) ganhou o ramo pra tag
+        "ferramenta_criacao_biomecanica": em vez do "Usar" genérico,
+        chama abrirModalCirurgiaImplante — modal com as duas opções
+        "🔧 Instalar implante" / "🩹 Remover implante" — feito.
+        Observação: "Remover implante" já aparece como botão (pede o
+        4.1), mas por enquanto só mostra um toast avisando que é a
+        Fase 7, ainda não implementada — não trava a UI.
+    4.2 abrirModalInstalarImplanteEscolherPaciente: select de paciente
+        (só quem tem implante instalado:false, via
+        implantesDoPacienteParaCirurgia — Fase 3) → select do implante
+        → mostra a dificuldadeInstalar gravada no item — feito.
+    4.3 resolverInstalarImplante: o INSTALADOR rola Biomecânica contra
+        essa dificuldade (reusa rolarComPossibilidadeDeOcasionais/
+        rolarERegistrar, com Ocasiões Especiais se houver) — feito.
+    4.4 A rolagem NÃO aplica nada ainda. Monta payload classificado
+        (sucesso / falha_leve = "até 5" / falha_grave = "6+" /
+        critica = falha crítica da rolagem) e chama criarAcaoPendente
+        com tipo "instalar_implante" — feito.
+
+    Import adicionado: PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA
+    (dados-manual.js) no topo de ficha.js.
+
+[x] FASE 5 — Mestre confirma a instalação   <-- IMPLEMENTADO NESTA RODADA
+    5.1 Novo `case "instalar_implante"` em confirmarAcaoPendente
+        (mestre.js) — interpreta payload.classificacao já calculado
+        pela Fase 4, sem re-rolar nada. Revalida que o implante ainda
+        existe no inventário do paciente e reforça "nunca em si mesmo"
+        (fichaAlvoId === fichaId cancela o pedido) — feito.
+    5.2 Sucesso: seta implante.instalado:true — feito.
+    5.4 Falha até 5 (falha_leve): só grava histórico, sem efeito
+        mecânico (tempo perdido, narrado pela mesa) — feito.
+    5.3 Falha 6+ (falha_grave) ou crítica: aplica dano ao paciente via
+        aplicarDano("ficha", fichaAlvoId, dano, null) — tipoDanoKey
+        null pra ignorar redução de armadura (mesmo padrão de
+        causarDanoJogador/causarDanoNpc, dano "interno" de cirurgia
+        malsucedida, não um golpe externo). Crítica também marca
+        implante.quebrado:true (item vira sucata inútil) — feito.
+    5.5 Grava linha em implante.historico (tipo, resultado, por, em)
+        em qualquer um dos 4 casos — feito.
+
+    >>> DECISÃO DE DESIGN TOMADA NESTA RODADA (o plano não fixava a
+    fórmula de dano pra falha na Fase 5, só pra Fase 8/remover):
+    falha_grave (6+) = 10×nível do implante; crítica = 20×nível (mesmo
+    teto já fixado pra Remover, Fase 8.3) + quebra o item. Fica
+    registrado aqui caso a mesa queira ajustar antes da Fase 8 usar o
+    mesmo padrão.
+
+    Campo novo `implante.quebrado` (default false) também foi somado
+    em lerConfigImplanteDoModal (ficha.js) e na normalização
+    (normalizacao.js), pra não se perder ao editar o item depois.
+
+[x] FASE 6 — Testes de adaptação (pós-cirurgia)   <-- IMPLEMENTADO NESTA RODADA
+    6.1 Painel provisório "Implantes" na aba Saúde (ficha.html, logo
+        abaixo da lista de feridas — el.implantesLista/renderizarImplantes
+        em ficha.js), listando os implantes instalado:true da ficha
+        aberta. Botão "🧬 Testar adaptação" só aparece pro DONO da ficha
+        (!isMestre) e só enquanto restarem tentativas (nível da
+        prótese - testesAdaptacaoFeitos) — feito.
+    6.2 testarAdaptacaoImplante (ficha.js): o PACIENTE rola Constituição
+        (buscarConstituicaoAlvo, mesmo cálculo estruturado com
+        modificadores já usado em qualquer outro teste de Constituição)
+        contra dif 10+2×nível. Sem terceiro e sem Ação Pendente — grava
+        direto em fichas/{id}/inventario/{itemId}/implante (mesmo
+        espírito de tratarFerida em si mesmo, saude.js Etapa 3). Cada
+        clique consome uma tentativa (testesAdaptacaoFeitos+1); cada
+        falha soma +1 em rejeicaoParcial — feito.
+    6.3 Badge de rejeição (⚠️ Rejeição parcial: N) quando
+        rejeicaoParcial > 0 — feito. Dano "toda vez que usar a prótese"
+        (2×nível) como botão manual do Mestre no mesmo card
+        (aplicarDanoUsoImplanteGodmode, sem gatilho automático, sem fila
+        de Ação Pendente — o clique do Mestre já é a confirmação, mesmo
+        padrão de reverterComaGodmode/acordarDesmaioGodmode) — feito.
+
+    Observação: o painel "Implantes" desta rodada é só o mínimo pra ter
+    onde colocar os botões da Fase 6 (nome, subtipo, nível, testes
+    restantes, badges, histórico). O painel COMPLETO — contador
+    "Implantes: X / nível do personagem" e modificadores formatados
+    igual ao inventário — é escopo da Fase 9, ainda não feito.
+
+[x] FASE 7 — Gatilho de Remover   <-- IMPLEMENTADO NESTA RODADA
+    7.1 abrirModalCirurgiaImplante ganhou o handler de verdade em
+        "🩹 Remover implante" (antes só mostrava toast) — abre
+        abrirModalRemoverImplanteEscolherPaciente: select de paciente
+        (só quem tem ao menos 1 implante instalado, via
+        implantesDoPacienteParaCirurgia().paraRemover, Fase 3) → select
+        de qual implante — feito.
+    7.2 resolverRemoverImplante: o INSTALADOR rola Biomecânica contra
+        dificuldade FIXA 8+nível do implante, calculada na hora (não é
+        campo do item, diferente de dificuldadeInstalar) — feito.
+    7.3 Monta payload e chama criarAcaoPendente({ tipo:
+        "remover_implante", ... }) — nunca aplica direto, nem em
+        sucesso — feito.
+
+    >>> DECISÃO DE DESIGN: a classificação do resultado usa só 3 níveis
+    (sucesso / falha / crítica) pra Remover, diferente dos 4 níveis de
+    Instalar (sucesso / falha_leve / falha_grave / crítica, Fase 4.4).
+    O plano só fala em sucesso/falha/crítica pra Remover (Fase 7.3/8.3),
+    sem distinguir margem de falha.
+
+[x] FASE 8 — Mestre confirma a remoção   <-- IMPLEMENTADO NESTA RODADA
+    8.1 Novo `case "remover_implante"` em confirmarAcaoPendente
+        (mestre.js) — interpreta payload.classificacao já calculado
+        pela Fase 7, sem re-rolar nada. Reforça "nunca em si mesmo" e
+        revalida que o implante ainda existe E ainda está instalado no
+        paciente (pode ter sido removido por outro pedido concorrente
+        enquanto este esperava confirmação) — feito.
+    8.4 Grava linha em implante.historico (tipo "remover", resultado,
+        por, em) em qualquer um dos 3 casos — feito.
+
+    >>> DECISÃO DE DESIGN TOMADA NESTA RODADA (o plano deixava em
+    aberto na Fase 8.2 — "apaga o implante da ficha do paciente OU
+    volta pra instalado:false"): optei por instalado:false em vez de
+    apagar o item. A prótese continua existindo como objeto físico no
+    inventário do paciente (pode ser vendida, dada, ou reinstalada
+    depois em outro personagem, reaproveitando o fluxo de Instalar,
+    Fase 4, sem precisar recriar o item do zero). testesAdaptacaoFeitos
+    e rejeicaoParcial (Fase 6) são zerados junto — só fazem sentido
+    enquanto o implante está de fato instalado em alguém.
+
+    8.2 Sucesso: instalado:false, sem dano, contadores de adaptação
+        zerados — feito.
+    8.3 Falha OU crítica: o plano diz que MESMO falhando a cirurgia o
+        implante sai (extração malfeita) — então instalado:false nos
+        dois casos, com dano 20×nível do paciente (mesmo teto já usado
+        por instalar_implante crítica, Fase 5). Crítica ainda soma
+        implante.quebrado:true — feito.
+
+[x] FASE 9 — UI da aba Saúde (painel Implantes)   <-- IMPLEMENTADO NESTA RODADA
+    9.1 Lista el.implantesLista, só com os itens instalado:true da
+        própria ficha aberta — já existia desde a Fase 6, mantido.
+    9.2 Modificadores estruturados do implante agora aparecem no card
+        via resumoModificadores(it) — mesma função já usada pra
+        vantagens/desvantagens (ficha.js), reaproveitada aqui em vez de
+        reinventar formatação — feito.
+    9.3 Contador no topo do painel (el.implantesContador, HTML novo:
+        #implantes-contador): "Implantes: X / nível do personagem".
+        X só conta implantes cujo subtipoContaComoImplante(subtipo) é
+        true (tudo menos "chip", Fase 1.4) — feito. Fica vermelho e
+        mostra "(chips não contam)" quando faz sentido (só aparece a
+        nota se algum chip estiver de fato instalado, pra não poluir a
+        maioria dos casos).
+
+[x] FASE 10 — Validações finais   <-- IMPLEMENTADO NESTA RODADA
+    10.1 implantesContagemELimite(fichaObj) nova (ficha.js, perto de
+         implantesDoPacienteParaCirurgia, Fase 3): mesma conta da Fase
+         9.3 (subtipoContaComoImplante — chip não ocupa vaga — vs.
+         nível do personagem), mas reaproveitável pra QUALQUER ficha
+         lida de todasAsFichasCache (não só fichaAtual). Devolve
+         semVaga=true quando contam >= nivel (sem espaço pra mais um).
+         abrirModalInstalarImplanteEscolherPaciente filtra
+         pacientesComImplante → pacientesDisponiveis tirando quem tem
+         semVaga:true, ANTES de montar o select — se sobrar 0
+         candidatos (todos bloqueados ou nenhum tinha implante pra
+         instalar), toast de erro específico e não abre o modal; se
+         sobrar alguns mas outros ficaram de fora por limite, aviso em
+         vermelho no rodapé do modal avisando quantos foram
+         escondidos — feito.
+    10.2 Reforçar "nunca em si mesmo" no confirmarAcaoPendente — já
+         estava feito em rodadas anteriores (mestre.js, `if
+         (fichaAlvoId === fichaId)` em "instalar_implante" e
+         "remover_implante") — confirmado, sem mudança nesta rodada.
+    10.3 Texto fixo nos dois modais avisando que o resultado só vale
+         depois que o Mestre confirmar — já existia (hint no modal de
+         escolha Instalar/Remover, abrirModalCirurgiaImplante) —
+         confirmado, sem mudança nesta rodada.
+
+    Testado: node --check ficha.js; node -e isolado de
+    implantesContagemELimite (5 cenários: com vaga, sem vaga exato no
+    limite, chip não conta pro limite, nível 0 sem implante nenhum já
+    fecha o limite, implante não instalado não conta).
+
+---------------------------------------------------------------------
+PLANO DE IMPLANTES/PRÓTESES (BIOMECÂNICA) 100% CONCLUÍDO (10/10 fases).
+---------------------------------------------------------------------

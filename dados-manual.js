@@ -142,6 +142,31 @@ export function atendeRequisitoPericia(nomePericia, dadosPrimarios, periciasFich
     return { ok: true };
 }
 
+// Requisito pra AUTORAR (criar/registrar) uma receita de nível `nivel`
+// vinculada à perícia `periciaVinculada` (ex.: Armeiro): precisa ter
+// Engenharia E a própria perícia vinculada em nível ≥ nível do item —
+// ex.: receita de uma pistola 1911 (classe de proteção II) exige, no
+// mínimo, Engenharia 2 e Armeiro 2. Engenharia é quem "sabe desenhar o
+// esquema"; a perícia vinculada é quem "sabe pra que serve o item" —
+// as duas juntas autorizam a receita a entrar no Banco Global. Não
+// confundir com CRAFTAR/fabricar um item a partir de uma receita já
+// pronta (resolverCriacaoReceita) — aquilo só exige a perícia
+// vinculada, não Engenharia; este requisito é só pra ORIGINAR a
+// receita em si.
+export function atendeRequisitoCriarReceita(periciasFicha, nivel, periciaVinculada) {
+    const nivelAlvo = Number(nivel) || 1;
+    const lista = Object.values(periciasFicha || {});
+    const nivelEngenharia = Number(lista.find(p => p.nome === "Engenharia")?.nivel) || 0;
+    const nivelPericiaVinculada = Number(lista.find(p => p.nome === periciaVinculada)?.nivel) || 0;
+    if (nivelEngenharia < nivelAlvo || nivelPericiaVinculada < nivelAlvo) {
+        return {
+            ok: false,
+            motivo: `Criar uma receita de nível ${nivelAlvo} exige Engenharia ${nivelAlvo} e ${periciaVinculada} ${nivelAlvo} (atual: Engenharia ${nivelEngenharia}, ${periciaVinculada} ${nivelPericiaVinculada}).`
+        };
+    }
+    return { ok: true };
+}
+
 // ---------------------------------------------------------------------
 // Artes Marciais — tecnicamente perícias físicas de combate corpo a
 // corpo, listadas em separado no manual. Entram na categoria Física,
@@ -268,11 +293,11 @@ export const TAGS_ITEM = [
     { key: "ferramenta_criacao", label: "Ferramenta de criação (geral)", temNivel: true },
     { key: "ferramenta_criacao_quimica", label: "Ferramenta de criação química", temNivel: true },
     { key: "ferramenta_criacao_biomecanica", label: "Ferramenta de criação biomecânica", temNivel: true },
-    { key: "eletronico", label: "Eletrônico", temNivel: false },
+    { key: "eletronico", label: "Eletrônico", temNivel: true },
     { key: "dinheiro", label: "Dinheiro", temNivel: false },
     { key: "drone", label: "Drone", temNivel: false },
     { key: "veiculo", label: "Veículo", temNivel: true },
-    { key: "biomecanica", label: "Biomecânica / prótese", temNivel: false },
+    { key: "biomecanica", label: "Biomecânica / prótese", temNivel: true },
     { key: "mecanito", label: "Mecânito", temNivel: false },
     { key: "droga", label: "Droga", temNivel: false },
     { key: "produto_quimico", label: "Produto Químico", temNivel: false },
@@ -297,6 +322,40 @@ export function ehChaveVeiculo(tagKey) {
     return tagKey === "chave";
 }
 
+// ---------------------------------------------------------------------
+// Implantes de Biomecânica (manual pg. 84-88 — Tomada, Chips, Membros
+// superiores e inferiores, Extremidades periféricas, Olhos, Endo
+// esqueleto, Órgãos). Todos vivem sob a tag "biomecanica"; este campo
+// extra por item (subtipoImplante) é que diferencia qual dos sete é.
+// Mecânitos/Colateral ficam de fora por enquanto (ver plano-implantes-
+// biomecanica.txt) — são uma mecânica de ativação temporária bem
+// diferente de prótese permanente, tratada à parte depois.
+// ---------------------------------------------------------------------
+export const SUBTIPOS_IMPLANTE = [
+    { key: "tomada", label: "Tomada" },
+    { key: "chip", label: "Chip" },
+    { key: "membro", label: "Membro superior/inferior" },
+    { key: "extremidade", label: "Extremidade periférica (mão/pé)" },
+    { key: "olho", label: "Olho" },
+    { key: "endoesqueleto", label: "Endoesqueleto" },
+    { key: "orgao", label: "Órgão" }
+];
+
+export function rotuloSubtipoImplante(subtipo) {
+    const s = SUBTIPOS_IMPLANTE.find(s => s.key === subtipo);
+    return s ? s.label : subtipo;
+}
+
+// Chip não ocupa vaga do limite de implantes (manual: "Chips não
+// contam como implantes, somente o implante 'tomada'.") — todo o
+// resto conta. Usado pra contar o limite (Fase 9/10 do plano) e pra
+// decidir se o item precisa de uma Tomada instalada com vaga livre
+// antes de poder ser "inserido" (ver Fase de UI de Chips, mais adiante
+// no plano — ainda não implementada nesta etapa).
+export function subtipoContaComoImplante(subtipo) {
+    return subtipo !== "chip";
+}
+
 export function rotuloTag(tagKey) {
     const t = TAGS_ITEM.find(t => t.key === tagKey);
     return t ? t.label : tagKey;
@@ -305,6 +364,24 @@ export function rotuloTag(tagKey) {
 export function tagTemNivel(tagKey) {
     const t = TAGS_ITEM.find(t => t.key === tagKey);
     return t ? t.temNivel : false;
+}
+
+// Tags cujo item pode, opcionalmente, LIMITAR a rolagem da perícia
+// vinculada ao nível do próprio item (checkbox "Limitar rolagem" no
+// modal — ver el.modalLimitarRolagem em ficha.js). Regra do manual:
+// Arrombamento/Destrave, Hacking/Eletrônico e as perícias de criação
+// (Ofícios Utilitários, Armeiro, Mecânica Automotiva, Explosivos,
+// Eletrônica, Química, Biomecânica) usando Ferramentas de Criação —
+// ex.: perícia Arrombamento 3 mas notebook nível 2 só rola com +2.
+// Feito como flag opcional por item (em vez de hard-code da regra
+// sempre-ativa) porque nem toda mesa/item quer essa restrição — ex.
+// um Destrave "mestre" que o Narrador queira liberar sem cap. Só as
+// tags abaixo mostram o checkbox; Arma e Explosivo, mesmo tendo
+// nível, NÃO entram aqui (não é regra do manual pra combate).
+export function tagPermiteLimiteRolagemPorNivel(tagKey) {
+    return tagKey === "destrave" || tagKey === "eletronico" ||
+        tagKey === "ferramenta_criacao" || tagKey === "ferramenta_criacao_quimica" ||
+        tagKey === "ferramenta_criacao_biomecanica";
 }
 
 export function ehArma(tagKey) {
@@ -2460,4 +2537,547 @@ export const TABELA_PONTUACAO_FUGA = [
 // já usado pro upgrade de veículo.
 export function tabelaPontuacaoFugaCadastrada() {
     return TABELA_PONTUACAO_FUGA.length > 0;
+}
+
+// =====================================================================
+// PRODUTOS QUÍMICOS — automação de receita/efeito (ver
+// plano-automacao-materiais-quimicos-v3.md, Partes 2/3/4). Só dados e
+// funções puras aqui — zero UI, zero leitura de DOM. A "fiação" com
+// mestre.js/ficha.js (motor de status por turno, modal de criação,
+// pontos de disparo) é passo separado do plano (Partes 5/6/8).
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// PARTE 2 — Fórmula de dificuldade de criação (manual: "dificuldade =
+// 10 + 2×(maior pontuação entre os materiais da receita); para cada
+// ponto ímpar de material além do de maior número, +1 na dificuldade").
+//
+// Leitura confirmada com o Mestre (a única ambiguidade do plano): a
+// regra é POR MATERIAL secundário, flat — se a pontuação daquele
+// material for ímpar, soma-se +1 uma única vez, não importa se ela é 1,
+// 3 ou 5. Não é "+1 por cada ponto ímpar individual" dentro do mesmo
+// material. Exemplo do manual confirmado: 3 de Explosivo + 1 de
+// Oxidante → 10 + 2×3 + 1 = 17.
+// ---------------------------------------------------------------------
+export function calcularDificuldadeQuimico(pontosPorMaterial) {
+    // pontosPorMaterial: { "Sedativo": 3, "Oxidante": 1, ... } — só
+    // materiais com pontos > 0 (nomes sem o prefixo "Material Químico: ",
+    // ver nomeMaterialQuimicoBase abaixo se vier da MATERIAIS_CRIACAO).
+    const entradas = Object.entries(pontosPorMaterial || {}).filter(([, p]) => (Number(p) || 0) > 0);
+    if (!entradas.length) return null;
+    const maior = Math.max(...entradas.map(([, p]) => Number(p)));
+    const jaContadoMaior = entradas.findIndex(([, p]) => Number(p) === maior);
+    let dif = 10 + 2 * maior;
+    entradas.forEach(([, p], i) => {
+        if (i === jaContadoMaior) return; // só o PRIMEIRO material no valor máximo é "o maior"
+        if (Number(p) % 2 !== 0) dif += 1; // ponto ímpar do material secundário — flat, não por ponto
+    });
+    return dif;
+}
+
+// Materiais Químicos em MATERIAIS_CRIACAO vêm com o prefixo
+// "Material Químico: " (ex.: "Material Químico: Sedativo"). As chaves de
+// EFEITOS_MATERIAL_QUIMICO abaixo usam o nome curto ("Sedativo"), igual
+// o exemplo do manual e a Parte 2. Esta função normaliza os dois
+// formatos pra quem chamar resolverNivelMaterial/calcularDificuldadeQuimico
+// puder usar qualquer um dos dois.
+export function nomeMaterialQuimicoBase(nomeMaterial) {
+    if (!nomeMaterial) return nomeMaterial;
+    const prefixo = "Material Químico: ";
+    return nomeMaterial.startsWith(prefixo) ? nomeMaterial.slice(prefixo.length) : nomeMaterial;
+}
+
+// ---------------------------------------------------------------------
+// Helpers genéricos de escalonamento — usados pelas tabelas abaixo pra
+// não repetir a mesma lógica de "percorre a mecânica gerada e ajusta
+// todo campo numérico chamado X" em cada material. Operam sobre uma
+// CÓPIA da mecânica (ver clonarMecanica), nunca sobre a tabela original.
+// ---------------------------------------------------------------------
+function clonarMecanica(mecanica) {
+    if (!mecanica) return mecanica;
+    if (typeof structuredClone === "function") return structuredClone(mecanica);
+    return JSON.parse(JSON.stringify(mecanica));
+}
+
+// Arredondamento dos multiplicadores de "Eficiência aumentada" (ex.:
+// dano ×4/3, ×1.5) — Math.round, mesmo padrão usado em regras.js pra
+// ajustes percentuais de valor (ver calcularPrecoComFator/análogos).
+function arredondarValorQuimico(valor) {
+    return Math.round(valor);
+}
+
+function ajustarCampoRecursivo(obj, chave, delta) {
+    if (!obj || typeof obj !== "object") return;
+    Object.entries(obj).forEach(([k, v]) => {
+        if (k === chave && typeof v === "number") {
+            obj[k] = v + delta;
+        } else if (v && typeof v === "object") {
+            ajustarCampoRecursivo(v, chave, delta);
+        }
+    });
+}
+
+function multiplicarCampoRecursivo(obj, chave, fator) {
+    if (!obj || typeof obj !== "object") return;
+    Object.entries(obj).forEach(([k, v]) => {
+        if (k === chave && typeof v === "number") {
+            obj[k] = arredondarValorQuimico(v * fator);
+        } else if (v && typeof v === "object") {
+            multiplicarCampoRecursivo(v, chave, fator);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------
+// PARTE 3 — Tabela completa de efeitos por material/nível (Manual 1.4).
+// Cada `mecanica` é o descritor que os pontos de disparo (Parte 6, ainda
+// não fiada) vão ler pra chamar as funções que já existem em mestre.js
+// (aplicarStatusPorTurno e afins). Aqui só descrevemos os dados — nada
+// chama mestre.js.
+//
+// Estrutura de cada entrada em EFEITOS_MATERIAL_QUIMICO:
+//   niveis: { 1..5: { texto, mecanica } } — mecanica pode ser `null`
+//     quando o efeito não é automatizável (ex.: Corrosivo).
+//   automatizavel: false quando NENHUM nível é automatizável — sinaliza
+//     pra UI futura (Parte 4) que o campo fica só informativo.
+//   escalonamentoPorPontoExtra(mecanicaClonada, extra): aplica a regra
+//     de "6+" sobre pontos além de 5, quando o manual dá uma regra
+//     numérica clara. Omitido quando o manual não define "6+" (ex.:
+//     Sedativo) ou quando é só narrativo.
+//   eficienciaAumentada: { descricao, tipo: "automatico"|"escolha"|
+//     "narrativo", aplicar(mecanicaClonada, escolha) } — aplicar() é
+//     omitido quando o bônus é puramente narrativo (Corrosivo) ou
+//     manual demais pra automatizar com segurança (Catalizador).
+// ---------------------------------------------------------------------
+export const EFEITOS_MATERIAL_QUIMICO = {
+    // 3.1 — Sedativo
+    "Sedativo": {
+        niveis: {
+            1: {
+                texto: "-2 em todos os testes enquanto exposto",
+                mecanica: { penalidadeTemporizada: { alvos: ["testes_fisicos", "testes_mentais", "testes_sociais"], valor: -2, turnos: "duracaoGeral" } }
+            },
+            2: {
+                texto: "Após 3 turnos expostos, teste de Resistência Imunológica dif 14; falha → desmaia por 4 turnos",
+                mecanica: { testeAtrasado: { turnos: 3, pericia: "Resistência Imunológica", dificuldade: 14, seFalhar: { desmaioTemporizado: { turnos: 4 } } } }
+            },
+            3: {
+                texto: "-4 em todos os testes; teste pra desmaiar após 2 turnos, dif 16",
+                mecanica: {
+                    penalidadeTemporizada: { alvos: ["testes_fisicos", "testes_mentais", "testes_sociais"], valor: -4, turnos: "duracaoGeral" },
+                    testeAtrasado: { turnos: 2, pericia: "Resistência Imunológica", dificuldade: 16, seFalhar: { desmaioIndefinido: true } }
+                }
+            },
+            4: {
+                texto: "Teste imediato dif 16; falha → adormece 6 turnos OU cena inteira + confusão -2 até fim de cena",
+                mecanica: {
+                    testeImediato: {
+                        pericia: "Resistência Imunológica", dificuldade: 16,
+                        seFalhar: {
+                            desmaioTemporizado: { turnos: 6 },
+                            depoisFlag: { alvos: ["testes_mentais", "testes_fisicos", "testes_sociais"], valor: -2, ateFimDeCena: true }
+                        }
+                    }
+                }
+            },
+            5: {
+                texto: "Teste imediato dif 18; falha → inconsciente até tratamento médico especializado",
+                mecanica: { testeImediato: { pericia: "Resistência Imunológica", dificuldade: 18, seFalhar: { desmaioIndefinido: true } } }
+            }
+        },
+        // Manual não define "6+" pra Sedativo — pontos extra não mudam a
+        // mecânica (fica no nível 5).
+        eficienciaAumentada: {
+            descricao: "+2 na dif dos testes OU reduz os turnos necessários pro efeito — escolha do criador ao gerar",
+            tipo: "escolha",
+            // ⚠️ O manual não dá o número de turnos a reduzir — assumido
+            // -1 turno (mínimo 1) até confirmação. Fácil de ajustar aqui.
+            aplicar(mecanica, escolha) {
+                if (escolha === "turnos") {
+                    ajustarCampoRecursivo(mecanica, "turnos", -1);
+                } else {
+                    ajustarCampoRecursivo(mecanica, "dificuldade", 2);
+                }
+            }
+        }
+    },
+
+    // 3.2 — Tóxico
+    "Tóxico": {
+        niveis: {
+            1: { texto: "20 de dano no momento da exposição", mecanica: { danoImediato: { valor: 20 } } },
+            2: { texto: "40 de dano no momento da exposição", mecanica: { danoImediato: { valor: 40 } } },
+            3: { texto: "40 imediato + 10/turno por 3 turnos", mecanica: { danoImediato: { valor: 40 }, danoContinuo: { valor: 10, turnos: 3 } } },
+            4: { texto: "80 imediato + 10/turno por 5 turnos", mecanica: { danoImediato: { valor: 80 }, danoContinuo: { valor: 10, turnos: 5 } } },
+            5: { texto: "120 imediato + 15/turno por 5 turnos", mecanica: { danoImediato: { valor: 120 }, danoContinuo: { valor: 15, turnos: 5 } } }
+        },
+        escalonamentoPorPontoExtra(mecanica, extra) {
+            // "+10 de dano residual por turno, por ponto extra" — soma ao danoContinuo.
+            if (!mecanica.danoContinuo) mecanica.danoContinuo = { valor: 0, turnos: 5 };
+            mecanica.danoContinuo.valor += 10 * extra;
+        },
+        eficienciaAumentada: {
+            descricao: "dano extra de 1/3 (multiplica os valores por 4/3)",
+            tipo: "automatico",
+            aplicar(mecanica) {
+                multiplicarCampoRecursivo(mecanica, "valor", 4 / 3);
+            }
+        }
+    },
+
+    // 3.3 — Inflamável
+    "Inflamável": {
+        niveis: {
+            1: { texto: "10 de dano elemental de fogo quando exposto, dura 2 turnos", mecanica: { danoContinuo: { valor: 10, turnos: 2, tipoDanoKey: "fogo" } } },
+            2: { texto: "25 de dano, dura 4 turnos", mecanica: { danoContinuo: { valor: 25, turnos: 4, tipoDanoKey: "fogo" } } },
+            3: { texto: "40 de dano, dura 6 turnos", mecanica: { danoContinuo: { valor: 40, turnos: 6, tipoDanoKey: "fogo" } } },
+            4: { texto: "50 de dano, dura 8 turnos", mecanica: { danoContinuo: { valor: 50, turnos: 8, tipoDanoKey: "fogo" } } },
+            5: { texto: "60 de dano, dura uma cena", mecanica: { danoContinuo: { valor: 60, semTimer: true, tipoDanoKey: "fogo" } } }
+        },
+        escalonamentoPorPontoExtra(mecanica, extra) {
+            // "+15 de dano elemental de fogo, por ponto extra"
+            mecanica.danoContinuo.valor += 15 * extra;
+        },
+        eficienciaAumentada: {
+            descricao: "dano extra OU duração extra em 1/3 — escolha do criador",
+            tipo: "escolha",
+            aplicar(mecanica, escolha) {
+                if (escolha === "turnos" && !mecanica.danoContinuo.semTimer) {
+                    mecanica.danoContinuo.turnos = arredondarValorQuimico(mecanica.danoContinuo.turnos * 4 / 3);
+                } else {
+                    mecanica.danoContinuo.valor = arredondarValorQuimico(mecanica.danoContinuo.valor * 4 / 3);
+                }
+            }
+        }
+    },
+
+    // 3.4 — Explosivo. Já coberto pelo sistema de Explosivos existente
+    // (fluxo de área, fora do motor de status por turno) — a "mecanica"
+    // aqui é só a tabela de referência (dano/raio/detonação), não um
+    // descritor pro motor de mestre.js. Fiação com o sistema de
+    // explosivos existente é passo à parte (fora do escopo da Parte 3).
+    "Explosivo": {
+        niveis: {
+            1: { texto: "30 de dano, raio 1m, detona após 2 turnos", mecanica: { explosivo: { dano: 30, raio: 1, detonaApos: 2 } } },
+            2: { texto: "50 de dano, raio 1,5m, detona após 2 turnos", mecanica: { explosivo: { dano: 50, raio: 1.5, detonaApos: 2 } } },
+            3: { texto: "80 de dano, raio 2m, detona após 2 turnos", mecanica: { explosivo: { dano: 80, raio: 2, detonaApos: 2 } } },
+            4: { texto: "120 de dano, raio 2,5m, detona após 2 turnos", mecanica: { explosivo: { dano: 120, raio: 2.5, detonaApos: 2 } } },
+            5: { texto: "160 de dano, raio 3m, detona após 2 turnos", mecanica: { explosivo: { dano: 160, raio: 3, detonaApos: 2 } } }
+        },
+        escalonamentoPorPontoExtra(mecanica, extra) {
+            // "+20 dano/ponto" — automatizável. Raio "aumenta
+            // substancialmente (sem número fixo)" — não automatizável,
+            // deixado pro Mestre ajustar na mão.
+            mecanica.explosivo.dano += 20 * extra;
+        },
+        eficienciaAumentada: {
+            descricao: "dano extra de 1/3",
+            tipo: "automatico",
+            aplicar(mecanica) {
+                mecanica.explosivo.dano = arredondarValorQuimico(mecanica.explosivo.dano * 4 / 3);
+            }
+        }
+    },
+
+    // 3.5 — Oxidante. Sem efeito próprio em alvo — é regra de VALIDAÇÃO
+    // de receita (razão Explosivo/Inflamável : Oxidante), não status de
+    // combate. Sem "niveis" de 1-5 porque o manual não define um.
+    "Oxidante": {
+        semEfeitoProprio: true,
+        texto: "Sem efeito em alvo — a cada 3 pontos de Explosivo ou Inflamável na receita, é necessário 1 ponto de Oxidante.",
+        validacaoReceita: {
+            razaoPorPontosExplosivoOuInflamavel: 3,
+            // Eficiência aumentada: razão cai de 3:1 para 2:1.
+            razaoAltaQualidade: 2
+        }
+    },
+
+    // 3.6 — Corrosivo. Afeta objetos/ambiente, não pessoas — "sem
+    // automação possível" (confirmado pelo próprio plano). Fica só como
+    // referência textual pro Mestre narrar; mecanica sempre null.
+    "Corrosivo": {
+        automatizavel: false,
+        niveis: {
+            1: { texto: "Corrói (em 3 turnos): fechaduras simples, fios elétricos, superfícies frágeis", mecanica: null },
+            2: { texto: "Corrói (em 3 turnos): madeira, plástico duro, painéis metálicos finos", mecanica: null },
+            3: { texto: "Corrói (em 3 turnos): aço industrial, trancas reforçadas, cofres pequenos", mecanica: null },
+            4: { texto: "Corrói (em 3 turnos): paredes de concreto, cofres grandes, estruturas metálicas", mecanica: null },
+            5: { texto: "Corrói (em 3 turnos): suportes de estrutura, blindagens pesadas, pisos/tetos", mecanica: null }
+        },
+        // "+ área maior + ignora camadas extras de proteção" — narrativo,
+        // sem regra numérica fixa; sem escalonamentoPorPontoExtra.
+        eficienciaAumentada: {
+            descricao: "corrói o material do próximo nível de pontos, com +2 turnos adicionais de prazo no próximo nível",
+            tipo: "narrativo"
+        }
+    },
+
+    // 3.7 — Catalizador. Não tem efeito próprio no alvo — modifica OUTRO
+    // material da mesma receita. Só os níveis 4 e 5 têm regra numérica
+    // clara o bastante pra automatizar (ver plano, Parte 3.7); os demais
+    // ficam manuais. Aplicar isso de fato exige combinar duas entradas
+    // da receita (é trabalho da Parte 6 — integração, ainda não fiada).
+    "Catalizador": {
+        niveis: {
+            1: { texto: "Reduz o tempo de ativação da substância mais presente da receita", mecanica: null, automatizavel: false },
+            2: { texto: "+1 turno na duração da substância mais presente da receita", mecanica: null, automatizavel: false },
+            3: { texto: "Estabiliza a mistura (sem falhas/vazamentos); só é perigoso criar se o teste de criação resultar em 1", mecanica: null, automatizavel: false },
+            4: {
+                texto: "+50% de eficácia da substância principal da receita",
+                mecanica: { modificaOutroMaterial: { alvo: "material_principal", fator: 1.5 } }
+            },
+            5: {
+                texto: "Substância principal ignora resistências/dificuldades de defesa",
+                mecanica: { modificaOutroMaterial: { alvo: "material_principal", ignoraResistencia: true } }
+            }
+        },
+        // "6+: escolhe uma substância adicional pra também receber os
+        // efeitos" — escolha do criador, manual.
+        eficienciaAumentada: {
+            descricao: "todos os efeitos do catalisador se aplicam a duas substâncias simultaneamente desde o primeiro ponto",
+            tipo: "narrativo"
+        }
+    },
+
+    // 3.8 — Psicotrópico
+    "Psicotrópico": {
+        niveis: {
+            1: {
+                texto: "Confusão mental: -2 em atributos mentais por 2 turnos quando exposto",
+                mecanica: { penalidadeTemporizada: { alvos: ["testes_mentais"], valor: -2, turnos: 2 } }
+            },
+            2: {
+                texto: "Alucinações leves: teste de Resistência Mental dif 13; falha → perde 1 ação por turno durante 2 turnos",
+                // Precisa do tipo novo "perde_acao_temporizado" no motor (Parte 5.1, ainda não implementada).
+                mecanica: { testeImediato: { pericia: "Resistência Mental", dificuldade: 13, seFalhar: { perdeAcaoTemporizado: { turnos: 2 } } } }
+            },
+            3: {
+                texto: "Alucinações intensas: teste de Resistência Imunológica dif 14; falha → -1 em rolagens mentais",
+                mecanica: { testeImediato: { pericia: "Resistência Imunológica", dificuldade: 14, seFalhar: { penalidadeTemporizada: { alvos: ["testes_mentais"], valor: -1, turnos: "duracaoGeral" } } } }
+            },
+            4: {
+                texto: "Alvo vê estímulos falsos como reais; teste de Resistência Mental dif 16; falha → -4 em rolagens mentais e -4 na dif pra ser acertado",
+                mecanica: {
+                    testeImediato: {
+                        pericia: "Resistência Mental", dificuldade: 16,
+                        seFalhar: {
+                            penalidadeTemporizada: { alvos: ["testes_mentais"], valor: -4, turnos: "duracaoGeral" },
+                            // "-4 na dif pra ser acertado" mexe em defesa, não em teste — flag narrativa manual.
+                            flagNarrativa: "vulnerável a manipulação/ataques mentais (-4 na dif pra ser acertado)"
+                        }
+                    }
+                }
+            },
+            5: {
+                texto: "Psicose: teste de Resistência Mental dif 18; falha → perde controle completo das ações e capacidade mental",
+                mecanica: { testeImediato: { pericia: "Resistência Mental", dificuldade: 18, seFalhar: { flagNarrativa: "perde controle das próprias ações — Mestre assume temporariamente" } } }
+            }
+        },
+        escalonamentoPorPontoExtra(mecanica, extra) {
+            // "Duração +1 turno, dif de resistência +2" por ponto extra.
+            // Falhas críticas causando trauma/insanidade: narrativo, sem regra numérica.
+            ajustarCampoRecursivo(mecanica, "turnos", 1 * extra);
+            ajustarCampoRecursivo(mecanica, "dificuldade", 2 * extra);
+        },
+        eficienciaAumentada: {
+            descricao: "+2 na dif dos testes",
+            tipo: "automatico",
+            aplicar(mecanica) {
+                ajustarCampoRecursivo(mecanica, "dificuldade", 2);
+            }
+        }
+    },
+
+    // 3.9 — Bioquímico. Escolha de efeitos dentre uma lista (não
+    // automatiza a escolha em si — só a lista de opções válidas
+    // aparecer pronta). O que É automático e incondicional é o efeito
+    // colateral, adicionado em resolverNivelMaterial (não aqui, porque
+    // depende do total de pontos, não só do nível/tier).
+    "Bioquímico": {
+        niveis: {
+            1: {
+                texto: "Escolhe 1 efeito, dura 2 turnos",
+                mecanica: {
+                    curaEscolha: {
+                        quantidadeEscolhas: 1, duracaoTurnos: 2,
+                        opcoes: ["+1 atributo físico", "Restaura 5 PV", "-1 penalidade Machucado e Muito Machucado", "-10 no próximo dano recebido"]
+                    }
+                }
+            },
+            2: {
+                texto: "Escolhe 2 efeitos, dura 3 turnos",
+                mecanica: {
+                    curaEscolha: {
+                        quantidadeEscolhas: 2, duracaoTurnos: 3,
+                        opcoes: ["+1 atributo físico", "Restaura 7 PV", "-1 penalidade Machucado e Muito Machucado", "-10 no próximo dano recebido"]
+                    }
+                }
+            },
+            3: {
+                texto: "Escolhe 3 efeitos, dura 3 turnos",
+                mecanica: {
+                    curaEscolha: {
+                        quantidadeEscolhas: 3, duracaoTurnos: 3,
+                        opcoes: [
+                            "+2 atributo físico", "Restaura 7 PV", "-50% penalidade Machucado/Muito Machucado", "-15 no próximo dano recebido",
+                            "Ignore sangramento", "Ignore penalidade de velocidade por Machucado/Muito Machucado",
+                            "Ignore modificadores negativos de manipulação mental", "Ignore penalidade de cansaço"
+                        ]
+                    }
+                }
+            },
+            4: {
+                texto: "Escolhe 3 efeitos, dura 4 turnos",
+                mecanica: {
+                    curaEscolha: {
+                        quantidadeEscolhas: 3, duracaoTurnos: 4,
+                        opcoes: [
+                            "+2 atributo físico", "Restaura 7 PV", "-50% penalidade Machucado/Muito Machucado", "-15 no próximo dano recebido",
+                            "Ignore sangramento", "Ignore penalidade de velocidade por Machucado/Muito Machucado",
+                            "Ignore modificadores negativos de manipulação mental", "Ignore penalidade de cansaço"
+                        ]
+                    }
+                }
+            },
+            5: {
+                texto: "Escolhe 3 efeitos, dura uma cena",
+                mecanica: {
+                    curaEscolha: {
+                        quantidadeEscolhas: 3, duracaoCena: true,
+                        opcoes: [
+                            "+2 atributo físico", "Restaura 7 PV", "-50% penalidade Machucado/Muito Machucado", "-20 no próximo dano recebido",
+                            "Ignore sangramento", "Ignore penalidade de velocidade por Machucado/Muito Machucado",
+                            "Ignore modificadores negativos de manipulação mental", "Ignore penalidade de cansaço",
+                            "Ignore um golpe letal, mantendo 1 PV"
+                        ]
+                    }
+                }
+            }
+        },
+        // "6+: +1 efeito de nível 2 em paralelo" — muda a estrutura da
+        // escolha, não um número simples; deixado manual.
+        eficienciaAumentada: {
+            descricao: "efeitos escolhidos duram +1 turno; efeitos de cura +3 PV",
+            tipo: "automatico",
+            aplicar(mecanica) {
+                // Só a parte de duração é automatizável com segurança
+                // aqui (campo estruturado). O "+3 PV" mexe no texto das
+                // opções de cura (não estruturado) — fica manual/visual
+                // pro Mestre, mesmo padrão do resto da Parte 3.9.
+                ajustarCampoRecursivo(mecanica, "duracaoTurnos", 1);
+            }
+        }
+    }
+};
+
+// ---------------------------------------------------------------------
+// PARTE 4 — resolverNivelMaterial: pontos investidos num material →
+// descritor de efeito pronto pra guardar em it.quimico.efeitos (ainda
+// não fiado na criação de item — isso é Parte 4 da UI, passo separado).
+// ---------------------------------------------------------------------
+export function resolverNivelMaterial(nomeMaterialQualquerFormato, pontos, qualidadeAlta = false, escolhaEficiencia = null) {
+    const pontosNum = Number(pontos) || 0;
+    if (pontosNum <= 0) return null;
+
+    const nomeMaterial = nomeMaterialQuimicoBase(nomeMaterialQualquerFormato);
+    const tabela = EFEITOS_MATERIAL_QUIMICO[nomeMaterial];
+    if (!tabela) return null;
+
+    // Oxidante: sem tiers de 1-5, é só validação de receita.
+    if (tabela.semEfeitoProprio) {
+        return {
+            material: nomeMaterial, pontos: pontosNum, semEfeitoProprio: true,
+            texto: tabela.texto, mecanica: null, validacaoReceita: tabela.validacaoReceita
+        };
+    }
+
+    const nivelBase = Math.min(pontosNum, 5);
+    const tier = tabela.niveis[nivelBase];
+    if (!tier) return null;
+
+    const extra = Math.max(0, pontosNum - 5);
+    let mecanica = clonarMecanica(tier.mecanica);
+
+    if (mecanica && extra > 0 && typeof tabela.escalonamentoPorPontoExtra === "function") {
+        tabela.escalonamentoPorPontoExtra(mecanica, extra);
+    }
+    if (mecanica && qualidadeAlta && tabela.eficienciaAumentada && typeof tabela.eficienciaAumentada.aplicar === "function") {
+        tabela.eficienciaAumentada.aplicar(mecanica, escolhaEficiencia);
+    }
+
+    // Efeito colateral do Bioquímico é incondicional e escala com o
+    // total de pontos investidos (10 × pontos), não só com o tier —
+    // por isso é adicionado aqui, fora da tabela estática.
+    if (nomeMaterial === "Bioquímico" && mecanica) {
+        mecanica.efeitoColateral = { danoImediato: { valor: 10 * pontosNum } };
+    }
+
+    return {
+        material: nomeMaterial,
+        pontos: pontosNum,
+        nivelBase,
+        pontosExtra: extra,
+        qualidadeAlta: !!qualidadeAlta,
+        // Guardada só pra reconstruir a UI do modal ao editar um item já
+        // salvo (Parte 4) — a mecânica em si já foi resolvida acima.
+        escolhaEficiencia: qualidadeAlta ? (escolhaEficiencia || null) : null,
+        automatizavel: tabela.automatizavel !== false && !!mecanica,
+        texto: tier.texto,
+        mecanica
+    };
+}
+
+// =====================================================================
+// PARTE 9 — Veículo de transporte (automação da mecânica de entrega —
+// ver conversa "automação materiais químicos", continuação da v3).
+// "Veículo de transporte" NÃO é um material de efeito (não entra em
+// EFEITOS_MATERIAL_QUIMICO/resolverNivelMaterial — não tem `mecanica`
+// de status pra disparar); ele é lido separadamente na receita pra
+// decidir COMO o produto químico é entregue. Confirmado com o Mestre:
+//   - conta normalmente na fórmula de dificuldade de criação (Parte 2)
+//     junto com os outros materiais — calcularDificuldadeQuimico já
+//     aceita isso de graça, não precisa de nenhuma mudança lá, desde
+//     que o chamador inclua "Veículo de transporte" no mesmo objeto
+//     pontosPorMaterial que os materiais de efeito.
+//   - 0 pontos  → Seringa: uso direto (arma branca exótica) num alvo em
+//     combate; fora de combate, em qualquer pessoa, inclusive em si
+//     mesmo, sem teste.
+//   - 1 ponto   → Spray: mesmo uso que a Seringa, só que -3 na
+//     dificuldade de DEFESA do alvo (mais fácil de acertar), porque o
+//     ataque de arma branca é teste oposto (não dificuldade fixa) — ver
+//     resolverAtaque em ficha.js.
+//   - 2+ pontos → Área: libera no cenário, mesmo fluxo que Explosivo
+//     (ações pendentes "estava na área?" — já implementado em
+//     liberarQuimicoCenario/mestre.js, sem mudança nenhuma aqui).
+// A tag do item (arma+carga química vs. produto_quimico) continua
+// escolhida à mão pelo criador — isto aqui só informa uma SUGESTÃO na
+// UI (ficha.js), nunca trava a escolha.
+// ---------------------------------------------------------------------
+export const NOME_MATERIAL_VEICULO_TRANSPORTE = "Veículo de transporte";
+
+export const NIVEIS_ENTREGA_QUIMICO = [
+    {
+        tipo: "seringa", label: "Seringa", pontosMin: 0, pontosMax: 0,
+        modificadorDificuldadeDefesa: 0,
+        descricao: "Uso direto num alvo (Armas Brancas Exóticas) em combate; fora de combate, em qualquer pessoa, inclusive em si mesmo, sem teste."
+    },
+    {
+        tipo: "spray", label: "Spray", pontosMin: 1, pontosMax: 1,
+        modificadorDificuldadeDefesa: -3,
+        descricao: "Mesmo uso da Seringa (Armas Brancas Exóticas), mas -3 na dificuldade de defesa do alvo."
+    },
+    {
+        tipo: "area", label: "Área", pontosMin: 2, pontosMax: Infinity,
+        modificadorDificuldadeDefesa: 0,
+        descricao: "Libera no cenário — o Mestre decide quem estava na área de efeito (mesmo fluxo de Explosivos)."
+    }
+];
+
+// pontosVeiculoTransporte: número de pontos investidos no material
+// "Veículo de transporte" da receita (0 se a receita não usa esse
+// material). Sempre retorna uma entrada (0 pontos cai em "seringa").
+export function resolverTipoEntregaQuimico(pontosVeiculoTransporte) {
+    const pontos = Number(pontosVeiculoTransporte) || 0;
+    return NIVEIS_ENTREGA_QUIMICO.find(n => pontos >= n.pontosMin && pontos <= n.pontosMax)
+        || NIVEIS_ENTREGA_QUIMICO[NIVEIS_ENTREGA_QUIMICO.length - 1];
 }

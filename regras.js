@@ -443,8 +443,19 @@ export { ALVO_TESTES_POR_CATEGORIA };
 // calcularEstadoSaude abaixo): 0 normalmente, -2 se Machucado, -4 se
 // Muito Machucado. Parâmetro opcional (default 0) pra não quebrar
 // nenhuma chamada existente que ainda não repassa esse valor.
-export function calcularTotalPericia(pericia, dadosPrimarios, modificadoresPlanos, penalidadeSaude = 0) {
-    const nivel = Number(pericia.nivel) || 0;
+// `limiteNivel` (opcional, ver tagPermiteLimiteRolagemPorNivel em
+// dados-manual.js): quando um número >= 0 é passado, capa só o
+// componente NÍVEL da perícia nesse teto (min(nivel, limiteNivel)) —
+// ex.: perícia Arrombamento 3 usando um Destrave nível 2 com "Limitar
+// rolagem" marcado rola só com nível 2. Ajustes (modificadores) e
+// penalidade de saúde continuam somando por cima, sem cap — o limite é
+// só sobre o quanto a PERÍCIA em si conta, não sobre o resultado final.
+// Undefined/null (padrão) não capa nada, comportamento igual a antes.
+export function calcularTotalPericia(pericia, dadosPrimarios, modificadoresPlanos, penalidadeSaude = 0, limiteNivel = null) {
+    let nivel = Number(pericia.nivel) || 0;
+    if (limiteNivel !== null && limiteNivel !== undefined) {
+        nivel = Math.min(nivel, Number(limiteNivel) || 0);
+    }
     const ajustesPericia = modificadoresQueAfetam(`pericia:${pericia.nome}`, modificadoresPlanos);
     // Perícia "legado" (fora da lista fechada do manual — ver `legado`
     // em normalizacao.js) não tem categoria conhecida, então não recebe

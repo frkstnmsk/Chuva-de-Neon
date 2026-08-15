@@ -415,6 +415,52 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv, tipoDanoFinalAjustado: tipoDanoKey };
 }
 
+// Cura imediata (Parte 5.6 — Bioquímico "Restaure N PVs"). Espelha
+// aplicarDano acima (mesma resolução de alvoTipo "ficha"/"npc"), só
+// que somando em vez de subtrair, e sem nenhuma das complicações de
+// dano (armadura, Frágil, coma, desmaio, amputação não fazem sentido
+// pra cura). Trava em pvMaximo — cura nunca deixa o alvo "acima do
+// teto" (mesmo pvMaximo calculado por calcularPvMaximo pro caso de
+// ficha; npc.pvs pro caso de NPC).
+export async function curarAlvo(alvoTipo, alvoId, valorCura) {
+    const curaNum = Math.max(0, Number(valorCura) || 0);
+
+    if (alvoTipo === "ficha") {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${alvoId}`)));
+        if (!snap.exists()) throw new Error("Ficha do alvo não encontrada.");
+        const raw = snap.val();
+        const nomeAlvo = (raw.config && raw.config.nomeExibicao) || alvoId;
+        const dadosRaw = raw.dados || {};
+        const fichaNormalizada = normalizarFicha(raw);
+        const pvMaximoFicha = calcularPvMaximo(fichaNormalizada);
+        // Mesmo fallback de "sem pvAtual definido = PV máximo" já usado
+        // em aplicarDano, pra ficha ainda em criação/sem dano registrado.
+        let pvMaximoRaw = 0;
+        if (dadosRaw.pvAtual === null || dadosRaw.pvAtual === undefined) {
+            const modificadoresAlvo = coletarModificadores(fichaNormalizada);
+            const derivadosRaw = calcularDerivados(fichaNormalizada.dados, modificadoresAlvo);
+            const bonusExtraRaw = Number(dadosRaw.pvBonusExtra) || 0;
+            const totalCalculadoRaw = Math.round(derivadosRaw.recursos.pv.total) + bonusExtraRaw;
+            const overrideRaw = dadosRaw.pvMaximoOverride;
+            pvMaximoRaw = (overrideRaw !== null && overrideRaw !== undefined && overrideRaw !== "") ? (Number(overrideRaw) || 0) : totalCalculadoRaw;
+        }
+        const pvAtual = (dadosRaw.pvAtual !== null && dadosRaw.pvAtual !== undefined) ? Number(dadosRaw.pvAtual) : pvMaximoRaw;
+        const novoPv = pvMaximoFicha > 0 ? Math.min(pvMaximoFicha, pvAtual + curaNum) : pvAtual + curaNum;
+        await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
+        return { nomeAlvo, curaAplicada: novoPv - pvAtual, pvAtual: novoPv, pvMaximo: pvMaximoFicha };
+    }
+
+    const snap = await get(ref(db, caminhoMesa(`npcs/${alvoId}`)));
+    if (!snap.exists()) throw new Error("NPC alvo não encontrado.");
+    const npc = snap.val();
+    const nomeAlvo = npc.nome || "NPC";
+    const pvMaximoNpc = Number(npc.pvs) || 0;
+    const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : pvMaximoNpc;
+    const novoPv = pvMaximoNpc > 0 ? Math.min(pvMaximoNpc, pvAtual + curaNum) : pvAtual + curaNum;
+    await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
+    return { nomeAlvo, curaAplicada: novoPv - pvAtual, pvAtual: novoPv, pvMaximo: pvMaximoNpc };
+}
+
 // Mantidas por compatibilidade com qualquer chamada antiga — agora só
 // delegam pra aplicarDano() sem tipo de dano (ou seja, sem redução).
 export async function causarDanoJogador(fichaId, valor) {
@@ -459,6 +505,22 @@ export async function causarDanoVeiculo(fichaId, veiculoId, danoBruto, atributoE
 // avancarTurnoCombate() logo abaixo.
 // ---------------------------------------------------------------------
 
+// Motor genérico de "status por turno" — grava qualquer efeito com
+// contagem regressiva própria em
+// combateAtivo/participantes/{id}/statusAtivos/{chave nova}. Cada
+// chamador monta o objeto `dadosStatus` já no formato final (precisa
+// ter pelo menos `tipo`, `label` e `turnosRestantes` — processarStatus
+// InicioTurno abaixo é quem decide o que fazer com cada `tipo`).
+// Extraído do antigo aplicarSangramento (que fazia isso inline, só pra
+// sangramento) pra virar a base compartilhada de todos os efeitos de
+// status por turno, incluindo os dos materiais químicos.
+async function aplicarStatusPorTurno(participanteId, dadosStatus) {
+    if (!participanteId) return null;
+    const novaRef = push(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos`)));
+    await set(novaRef, dadosStatus);
+    return { id: novaRef.key, ...dadosStatus };
+}
+
 // Sangramento por Golpe Perfurante (manual): dura 2 ou 3 turnos
 // conforme o local mirado, com dano fixo por turno igual a uma fração
 // do dano causado pelo golpe que sangrou (1/4 em Torso/Membro/
@@ -468,17 +530,115 @@ export async function causarDanoVeiculo(fichaId, veiculoId, danoBruto, atributoE
 // vários golpes seguidos empilham vários sangramentos simultâneos,
 // cada um com sua própria contagem e seu próprio dano fixo, todos
 // tickando juntos a cada turno (ver processarStatusInicioTurno abaixo).
+// Wrapper fino sobre aplicarStatusPorTurno — zero mudança de
+// comportamento visível em relação à versão anterior (mesmo formato
+// de retorno { danoPorTurno, turnos } que os chamadores já esperam).
 export async function aplicarSangramento(participanteId, danoPorTurno, turnos, origem) {
-    if (!participanteId) return;
-    const novaRef = push(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos`)));
-    await set(novaRef, {
+    const resultado = await aplicarStatusPorTurno(participanteId, {
         tipo: "sangramento",
         label: "Sangramento",
         turnosRestantes: turnos,
         danoPorTurno,
         origem
     });
+    if (!resultado) return;
     return { danoPorTurno, turnos };
+}
+
+// Novo tipo "dano_continuo" (Parte 5.2 — Tóxico/Inflamável residual).
+// Igual ao sangramento no formato (dano fixo por turno, mesma
+// contagem regressiva), mas SEM teste de Constituição pra resistir —
+// o manual não prevê chance de resistir à exposição química residual
+// (diferente do Sangramento por golpe). tipoDanoKey segue pro dano
+// aplicado a cada turno em processarStatusInicioTurno, igual
+// aplicarDano já recebe em qualquer outro ponto do sistema.
+export async function aplicarDanoContinuoQuimico(participanteId, danoPorTurno, turnos, origem, tipoDanoKey) {
+    return aplicarStatusPorTurno(participanteId, {
+        tipo: "dano_continuo",
+        label: "Exposição química",
+        turnosRestantes: turnos,
+        danoPorTurno,
+        origem,
+        tipoDanoKey: tipoDanoKey || null
+    });
+}
+
+// Novo tipo "penalidade_temporizada" (Parte 5.3 — Sedativo 1/3,
+// Psicotrópico 1). Modificador negativo com prazo de validade em
+// turnos, em um ou mais alvos do sistema de modificadores já existente
+// (listaAlvosModificador, regras.js — ex.: "testes_fisicos",
+// "testes_mentais", "testes_sociais"). O lado que SOMA esse valor nos
+// testes efetivos fica em ficha.js (somaModificadoresPara), lendo
+// combateAtivo/participantes/{id}/statusAtivos igual
+// calcularModificadoresAbstinencia já lê ficha.desvantagens — aqui só
+// grava a entrada.
+export async function aplicarPenalidadeTemporizada(participanteId, alvos, valor, turnos, origem) {
+    return aplicarStatusPorTurno(participanteId, {
+        tipo: "penalidade_temporizada",
+        label: origem,
+        turnosRestantes: turnos,
+        alvos: Array.isArray(alvos) ? alvos : [alvos],
+        valor,
+        origem
+    });
+}
+
+// Novo tipo "desmaio_temporizado" (Parte 5.5 — Sedativo 2/3/4,
+// "desmaia por N turnos"). Variante do Desacordado ORIGINAL
+// (definirDesacordado, ainda usado sem mudança pros casos SEM duração
+// fixa — Sedativo nível 3/5) só que com contagem regressiva própria:
+// quando turnosRestantes chega em 0, processarStatusInicioTurno acorda
+// o participante sozinho, sem precisar do Mestre clicar em nada.
+export async function aplicarDesmaioTemporizado(participanteId, turnos, origem) {
+    return aplicarStatusPorTurno(participanteId, {
+        tipo: "desmaio_temporizado",
+        label: "Desmaiado",
+        turnosRestantes: turnos,
+        origem
+    });
+}
+
+// Novo tipo "perde_acao_temporizado" (Parte 5.1 do plano de automação
+// dos materiais químicos — Psicotrópico nível 2, "falha → perde 1 ação
+// por turno durante 2 turnos"). Mesma estrutura de contagem regressiva
+// do desmaio temporizado (ver acima), mas em vez de travar o
+// participante por completo, cada turno ATIVO dele (ou seja, quando
+// chega a vez desse participante agir) consome 1 ação da economia
+// normal de turno, em vez de bloquear tudo. O bloqueio em si acontece
+// em avancarTurnoCombate, no ponto exato onde `acoes` já é decidido
+// pra cada participante (ver bloqueiaAcaoNovoTurno logo abaixo) —
+// aqui só grava a entrada de status, igual todo o resto do motor.
+export async function aplicarPerdaAcaoTemporizada(participanteId, turnos, origem) {
+    return aplicarStatusPorTurno(participanteId, {
+        tipo: "perde_acao_temporizado",
+        label: "Perda de ação (efeito psicotrópico)",
+        turnosRestantes: turnos,
+        origem
+    });
+}
+
+// Novo tipo "teste_atrasado" (Parte 5.4 — Sedativo 2, gatilhos "após N
+// turnos"). Não faz nada durante a contagem — ao chegar em
+// turnosRestantes 0, processarStatusInicioTurno dispara sozinho um
+// teste de resistência (1d20 + periciaResistencia, o valor JÁ
+// CALCULADO do alvo, recebido aqui como parâmetro igual o resto do
+// motor faz — mesmo padrão de testarSangramento recebendo
+// constituicaoAlvo pronto) contra `dificuldade`. Falha empurra
+// `consequenciaSeFalhar` como uma NOVA entrada de statusAtivos
+// (encadeando aplicarStatusPorTurno de novo). ignoraResistencia (Parte
+// 5.8 — Catalizador nível 5) pula a rolagem e trata como falha
+// automática quando presente.
+export async function aplicarTesteAtrasado(participanteId, turnosAteTeste, periciaResistencia, dificuldade, origem, consequenciaSeFalhar, ignoraResistencia = false) {
+    return aplicarStatusPorTurno(participanteId, {
+        tipo: "teste_atrasado",
+        label: origem,
+        turnosRestantes: turnosAteTeste,
+        periciaResistencia,
+        dificuldade,
+        origem,
+        consequenciaSeFalhar: consequenciaSeFalhar || null,
+        ignoraResistencia: !!ignoraResistencia
+    });
 }
 
 // Teste de Constituição contra Sangramento (manual): rolado uma vez por
@@ -571,11 +731,31 @@ export async function testarSangramentoProfundo(participanteId, constituicaoAlvo
 // PRÓXIMO turnoAtual, antes do recálculo de PV/Velocidade/estado de
 // saúde de avancarTurnoCombate — assim o dano do tick já entra nesse
 // mesmo recálculo). Cada entrada em statusAtivos é resolvida
-// independente — se houver mais de um Sangramento empilhado, cada um
-// causa seu próprio dano fixo no mesmo turno (e a soma total é logada
-// à parte, pra ficar claro no Log de Dados). Retorna as notas de log
-// (uma por efeito resolvido, + o total combinado se houver mais de
-// um) pro chamador registrar.
+// independente — se houver mais de um efeito de dano por turno
+// empilhado (Sangramento e/ou Exposição Química), cada um causa seu
+// próprio dano fixo no mesmo turno (e a soma total é logada à parte,
+// pra ficar claro no Log de Dados). Retorna as notas de log (uma por
+// efeito resolvido, + o total combinado se houver mais de um) pro
+// chamador registrar.
+//
+// Generalizada (Parte 5 do plano de automação dos materiais químicos)
+// pra cobrir, além do sangramento original:
+// - "dano_continuo": mesmo dano fixo por turno do sangramento, só que
+//   passando status.tipoDanoKey pra aplicarDano em vez de null (Parte
+//   5.2) — reaproveita o MESMO bloco/contador do sangramento, sem
+//   inventar um paralelo.
+// - "penalidade_temporizada": não faz nada aqui além da contagem
+//   regressiva genérica no rodapé do loop (quem lê o valor é
+//   somaModificadoresPara, do lado da ficha) — Parte 5.3.
+// - "desmaio_temporizado": idem, só com uma nota de log própria
+//   ("acordou") na hora de expirar em vez da genérica "terminou" —
+//   Parte 5.5.
+// - "teste_atrasado": ao ZERAR a contagem, dispara ele mesmo um teste
+//   de resistência (1d20 + periciaResistencia já calculada, contra
+//   dificuldade) em vez de só expirar — falha empurra
+//   consequenciaSeFalhar como uma NOVA entrada encadeada de
+//   statusAtivos (Parte 5.4). ignoraResistencia pula a rolagem e trata
+//   como falha automática (Parte 5.8, Catalizador nível 5).
 async function processarStatusInicioTurno(participanteId, participante) {
     const statusAtivos = participante && participante.statusAtivos;
     if (!statusAtivos) return { statusFinal: null, notas: [] };
@@ -583,30 +763,71 @@ async function processarStatusInicioTurno(participanteId, participante) {
     const statusFinal = {};
     const notas = [];
     let totalDanoTurno = 0;
-    let sangramentosAtivos = 0;
+    let danosPorTurnoAtivos = 0;
 
     for (const [chave, status] of Object.entries(statusAtivos)) {
         if (!status || (Number(status.turnosRestantes) || 0) <= 0) continue;
 
-        if (status.tipo === "sangramento") {
-            sangramentosAtivos++;
+        if (status.tipo === "sangramento" || status.tipo === "dano_continuo") {
+            danosPorTurnoAtivos++;
             const dano = Number(status.danoPorTurno) || 0;
-            const resultado = await aplicarDano(participante.tipo, participante.refId, dano, null);
+            const tipoDanoKey = status.tipo === "dano_continuo" ? (status.tipoDanoKey || null) : null;
+            const resultado = await aplicarDano(participante.tipo, participante.refId, dano, tipoDanoKey);
             totalDanoTurno += dano;
-            notas.push(`${resultado.nomeAlvo} sangrou (${status.turnosRestantes} turno(s) restante(s)): ${dano} de dano fixo. PV restante: ${resultado.novoPv}.`);
+            const verbo = status.tipo === "dano_continuo" ? "sofreu exposição química" : "sangrou";
+            notas.push(`${resultado.nomeAlvo} ${verbo} (${status.turnosRestantes} turno(s) restante(s)): ${dano} de dano fixo. PV restante: ${resultado.novoPv}.`);
         }
 
         const restante = (Number(status.turnosRestantes) || 0) - 1;
+
         if (restante > 0) {
+            // Ainda contando — penalidade_temporizada/desmaio_temporizado/
+            // teste_atrasado não fazem nada além disso enquanto não
+            // zerarem (o efeito deles é lido em outro lugar, ou só
+            // dispara na hora de expirar, tratado abaixo).
             statusFinal[chave] = { ...status, turnosRestantes: restante };
+            continue;
+        }
+
+        // Chegou em 0 — cada tipo expira do seu jeito.
+        if (status.tipo === "teste_atrasado") {
+            statusFinal[chave] = null; // a entrada de espera some, vira o teste
+            const dificuldade = Number(status.dificuldade) || 0;
+            const modResistencia = Number(status.periciaResistencia) || 0;
+            const bruto = status.ignoraResistencia ? null : rolarD20();
+            const resultado = status.ignoraResistencia ? null : bruto + modResistencia;
+            const sucesso = status.ignoraResistencia ? false : resultado >= dificuldade;
+            const nomeAlvo = participante.nome || participanteId;
+            if (sucesso) {
+                notas.push(`${nomeAlvo} — Teste de resistência vs. ${status.label || "efeito"} (dif ${dificuldade}): d20 (${bruto}) ${modResistencia >= 0 ? "+" : ""}${modResistencia} = ${resultado} — RESISTIU.`);
+            } else {
+                const detalheRolagem = status.ignoraResistencia
+                    ? "resistência ignorada"
+                    : `d20 (${bruto}) ${modResistencia >= 0 ? "+" : ""}${modResistencia} = ${resultado}`;
+                notas.push(`${nomeAlvo} — Teste de resistência vs. ${status.label || "efeito"} (dif ${dificuldade}): ${detalheRolagem} — FALHOU.`);
+                if (status.consequenciaSeFalhar) {
+                    const novoStatus = await aplicarStatusPorTurno(participanteId, status.consequenciaSeFalhar);
+                    if (novoStatus) {
+                        const { id: novoId, ...dadosNovoStatus } = novoStatus;
+                        statusFinal[novoId] = dadosNovoStatus;
+                        notas.push(`${nomeAlvo}: ${dadosNovoStatus.label || dadosNovoStatus.tipo} começou.`);
+                    }
+                }
+            }
+        } else if (status.tipo === "desmaio_temporizado") {
+            statusFinal[chave] = null; // expira — update() remove a chave
+            notas.push(`${participante.nome || participanteId} acordou.`);
+        } else if (status.tipo === "perde_acao_temporizado") {
+            statusFinal[chave] = null; // expira — update() remove a chave
+            notas.push(`${participante.nome || participanteId} recuperou o controle total das próprias ações (efeito psicotrópico passou).`);
         } else {
             statusFinal[chave] = null; // expira — update() remove a chave
             notas.push(`${participante.nome || participanteId}: ${status.label || status.tipo} terminou.`);
         }
     }
 
-    if (sangramentosAtivos > 1) {
-        notas.push(`${participante.nome || participanteId}: ${sangramentosAtivos} sangramentos empilhados causaram ${totalDanoTurno} de dano combinado neste turno.`);
+    if (danosPorTurnoAtivos > 1) {
+        notas.push(`${participante.nome || participanteId}: ${danosPorTurnoAtivos} efeitos de dano por turno empilhados causaram ${totalDanoTurno} de dano combinado neste turno.`);
     }
 
     return { statusFinal, notas };
@@ -1348,6 +1569,11 @@ export async function liberarQuimicoCenario(cenarioId, quimicoId) {
                 nomeQuimico: quimico.nome,
                 tipoEfeito: quimico.tipoEfeito,
                 modificadores: quimico.modificadores,
+                // Efeitos mecânicos do item (it.quimico.efeitos), pra
+                // chegar até o handler da pendência (ficha.js) e dali
+                // pré-preencher o painel "Aplicar Efeito Químico" — Parte
+                // 8, item 5.2 do plano-automacao-materiais-quimicos-v3.
+                efeitos: quimico.efeitos || [],
                 duracaoHoras: quimico.duracaoHoras
             }
         });
@@ -1895,6 +2121,16 @@ export async function avancarTurnoCombate() {
     // Velocidade/estado de saúde logo abaixo — assim o dano do tick já
     // entra nesse mesmo recálculo, e não só na próxima troca de turno.
     let notasStatus = [];
+    // Psicotrópico nível 2 / Parte 5.1: se quem está prestes a agir
+    // ENTROU neste turno com "perde_acao_temporizado" ainda ativo
+    // (turnosRestantes > 0 antes do tick abaixo decrementar), o turno
+    // que está começando agora consome 1 ação da economia normal —
+    // checado com o status de ANTES do tick de propósito: mesmo no
+    // turno em que o efeito acaba (turnosRestantes vira 0 agora), ele
+    // ainda estava ativo quando este turno começou, então ainda vale
+    // pra este turno (só não vale mais a partir do próximo).
+    const bloqueiaAcaoNovoTurno = !!(participantes[novoTurno] && participantes[novoTurno].statusAtivos &&
+        Object.values(participantes[novoTurno].statusAtivos).some(s => s && s.tipo === "perde_acao_temporizado" && (Number(s.turnosRestantes) || 0) > 0));
     if (participantes[novoTurno]) {
         const { statusFinal, notas } = await processarStatusInicioTurno(novoTurno, participantes[novoTurno]);
         if (statusFinal) {
@@ -1982,6 +2218,22 @@ export async function avancarTurnoCombate() {
                 ? acoesExtraCQCMax
                 : Math.min(Number(participantes[id].acoesExtraCQC) || 0, acoesExtraCQCMax);
         }
+    }
+
+    // Aplica o desconto de 1 ação do "perde_acao_temporizado" (ver
+    // bloqueiaAcaoNovoTurno acima) só DEPOIS do loop que acabou de
+    // decidir `acoes` de todo mundo pra esta troca de turno — assim o
+    // desconto vale independente de ter virado rodada ou não (mesma
+    // lógica em qualquer um dos dois ramos do `acoes` calculados
+    // acima). Nunca deixa negativo.
+    if (bloqueiaAcaoNovoTurno && participantes[novoTurno]) {
+        const chaveAcoesNovoTurno = `participantes/${novoTurno}/acoes`;
+        const acoesCalculadas = Number(atualizacoes[chaveAcoesNovoTurno] ?? participantes[novoTurno].acoes) || 0;
+        atualizacoes[chaveAcoesNovoTurno] = Math.max(0, acoesCalculadas - 1);
+        notasStatus = [
+            ...notasStatus,
+            `${participantes[novoTurno].nome || novoTurno}: efeito psicotrópico ativo consome 1 ação deste turno.`
+        ];
     }
 
     if (precisaReordenarFila) {
@@ -2464,6 +2716,15 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
         notaEscolha = `${r.nomeAlvo} não usou Esquiva/Bloqueio/Aparar e recebeu o golpe cheio.`;
     }
 
+    // Carga química (dardo/lâmina envenenada — Parte 6.2 do plano de
+    // automação dos materiais químicos): golpe "anulado" só quando
+    // Esquivar ou Aparar tiveram sucesso (as únicas duas reações que
+    // zeram danoParaAplicar) — Bloquear reduz o dano mas o golpe ainda
+    // encosta no alvo, então a substância ainda é considerada aplicada.
+    // Repassado no retorno pra quem chamou (ficha.js, responder() da
+    // tela de Esquiva/Bloqueio) decidir se dispara it.quimico.efeitos.
+    const golpeAnulado = danoParaAplicar === 0 && (escolha === "esquivar" || escolha === "aparar");
+
     // Golpes Mirados (manual): a redução de armadura do alvo só conta
     // itens de Proteção cujo localProtegido bate com o local mirado
     // (r.localArmaduraAtual — ver LOCAIS_MIRA em dados-manual.js/
@@ -2584,7 +2845,7 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
 
     await registrarRolagem({ quem: r.nomeAtacante, modificador: r.modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: r.criticoPositivo ? "acerto" : null });
     await remove(ref(db, caminhoMesa("combateAtivo/reacaoPendente")));
-    return { ...resultadoDano, detalhe: detalheDano };
+    return { ...resultadoDano, detalhe: detalheDano, golpeAnulado };
 }
 
 // Recuperação de PVs (manual) — usado tanto por "Passar o dia" (1 dia)
@@ -2786,7 +3047,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro" | "instalar_implante" | "remover_implante"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -3098,6 +3359,144 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
                 pvAtual: null
             });
         }
+
+    } else if (tipo === "instalar_implante") {
+        // Cirurgia de Implante/Prótese (Biomecânica) — Fase 5 do plano
+        // (ver plano-implantes-biomecanica.txt). A rolagem já aconteceu
+        // no client (Fase 4 — resolverInstalarImplante, ficha.js) e já
+        // chega classificada em payload.classificacao ("sucesso" /
+        // "falha_leve" = falha até 5 / "falha_grave" = falha 6+ /
+        // "critica" = falha crítica da rolagem) — aqui só interpretamos
+        // e aplicamos, sem re-rolar nada (mesmo espírito de
+        // melhorar_veiculo_terceiro/reparar_veiculo_terceiro acima:
+        // quem gastou/rolou foi acao.fichaId, o efeito cai em
+        // payload.fichaAlvoId).
+        const { fichaAlvoId, implanteId, nivel, classificacao } = payload;
+
+        // Trava "nunca em si mesmo" (Fase 10.2, adiantada aqui porque é
+        // a mesma checagem — segunda linha de defesa caso o payload
+        // chegue adulterado, já que o select do modal, Fase 4.2, já
+        // impede isso no caminho normal).
+        if (fichaAlvoId === fichaId) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error("Pedido cancelado: instalador e paciente não podem ser a mesma ficha.");
+        }
+
+        // Revalida que o implante ainda existe no inventário do
+        // paciente — ele pode ter sido removido/vendido/dado enquanto
+        // o pedido esperava confirmação do Mestre.
+        const snapImplante = await get(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}`)));
+        if (!snapImplante.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.implanteNome || "o implante"}" não está mais no inventário do paciente.`);
+        }
+        const itemImplante = snapImplante.val();
+        const historicoAtual = Array.isArray(itemImplante.implante?.historico) ? itemImplante.implante.historico : [];
+        const linhaHistorico = { tipo: "instalar", resultado: classificacao, por: acao.nomeJogador || fichaId, em: Date.now() };
+
+        if (classificacao === "sucesso") {
+            await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}/implante`)), {
+                instalado: true,
+                historico: [...historicoAtual, linhaHistorico]
+            });
+        } else if (classificacao === "falha_leve") {
+            // "Falha até 5" (manual do plano, Fase 5.4): tempo perdido,
+            // sem efeito mecânico nenhum — só grava o histórico, o
+            // resto é narrado pela mesa.
+            await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}/implante`)), {
+                historico: [...historicoAtual, linhaHistorico]
+            });
+        } else {
+            // falha_grave (6+) ou critica (Fase 5.3): aplica dano ao
+            // PACIENTE, proporcional ao nível do implante. O plano não
+            // fixa a fórmula pra esta fase (só fixa 20×nível pra
+            // Remover, Fase 8.3) — decisão tomada aqui: falha_grave
+            // vale metade (10×nível), critica vale o mesmo teto de
+            // Remover (20×nível) e ainda quebra o item. Sem redução de
+            // armadura (dano interno de cirurgia malsucedida, não um
+            // golpe externo) — aplicarDano(..., tipoDanoKey=null) já é
+            // o padrão do sistema pra isso (ver causarDanoJogador/
+            // causarDanoNpc acima).
+            const nivelNum = Number(nivel) || 0;
+            const dano = (classificacao === "critica" ? 20 : 10) * nivelNum;
+            if (dano > 0) {
+                await aplicarDano("ficha", fichaAlvoId, dano, null);
+            }
+            const atualizacoesImplante = { historico: [...historicoAtual, linhaHistorico] };
+            // Item continua instalado:false (a cirurgia não terminou) —
+            // crítica soma o sinal de "quebrado/inútil" (5.3), pra
+            // Fase 9 (painel Implantes da aba Saúde) mostrar depois.
+            if (classificacao === "critica") atualizacoesImplante.quebrado = true;
+            await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}/implante`)), atualizacoesImplante);
+        }
+
+    } else if (tipo === "remover_implante") {
+        // Cirurgia de Implante/Prótese (Biomecânica) — Fase 8 do plano
+        // (ver plano-implantes-biomecanica.txt). A rolagem já aconteceu
+        // no client (Fase 7 — resolverRemoverImplante, ficha.js) e já
+        // chega classificada em payload.classificacao ("sucesso" /
+        // "falha" / "critica" — só 3 níveis aqui, diferente de
+        // instalar_implante acima, que usa 4; o plano não pede
+        // falha_leve/falha_grave pra Remover) — aqui só interpretamos e
+        // aplicamos, sem re-rolar nada.
+        const { fichaAlvoId, implanteId, nivel, classificacao } = payload;
+
+        // Mesma trava "nunca em si mesmo" de instalar_implante acima
+        // (Fase 10.2, adiantada aqui pela mesma razão).
+        if (fichaAlvoId === fichaId) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error("Pedido cancelado: instalador e paciente não podem ser a mesma ficha.");
+        }
+
+        const snapImplanteRemover = await get(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}`)));
+        if (!snapImplanteRemover.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.implanteNome || "o implante"}" não está mais no inventário do paciente.`);
+        }
+        const itemImplanteRemover = snapImplanteRemover.val();
+        // Revalida que o implante ainda está instalado — pode ter sido
+        // removido por outra cirurgia enquanto este pedido esperava
+        // confirmação (ex.: dois pedidos concorrentes pro mesmo item).
+        if (!itemImplanteRemover.implante?.instalado) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.implanteNome || "o implante"}" já não está mais instalado.`);
+        }
+        const historicoAtualRemover = Array.isArray(itemImplanteRemover.implante?.historico) ? itemImplanteRemover.implante.historico : [];
+        const linhaHistoricoRemover = { tipo: "remover", resultado: classificacao, por: acao.nomeJogador || fichaId, em: Date.now() };
+
+        // >>> DECISÃO DE DESIGN (Fase 8.2 deixava em aberto): em vez de
+        // apagar o item do inventário, a remoção volta o implante pro
+        // estado instalado:false — a prótese continua existindo como
+        // objeto físico (pode ser vendida, dada, ou reinstalada depois
+        // em outra cirurgia). Os contadores de adaptação/rejeição
+        // (Fase 6) são zerados junto, já que passam a valer só enquanto
+        // o implante está de fato instalado em alguém.
+        const atualizacoesImplanteRemover = {
+            historico: [...historicoAtualRemover, linhaHistoricoRemover]
+        };
+
+        if (classificacao === "sucesso") {
+            atualizacoesImplanteRemover.instalado = false;
+            atualizacoesImplanteRemover.testesAdaptacaoFeitos = 0;
+            atualizacoesImplanteRemover.rejeicaoParcial = 0;
+        } else {
+            // Falha ou crítica (Fase 8.3): "remove + dano" — o plano diz
+            // que MESMO falhando a cirurgia, o implante sai (extração
+            // malfeita), só muda o dano e se o item quebra ou não.
+            // 20×nível é o mesmo teto já fixado por instalar_implante
+            // pra crítica (ver decisão registrada acima, Fase 5).
+            atualizacoesImplanteRemover.instalado = false;
+            atualizacoesImplanteRemover.testesAdaptacaoFeitos = 0;
+            atualizacoesImplanteRemover.rejeicaoParcial = 0;
+            const nivelNum = Number(nivel) || 0;
+            const dano = 20 * nivelNum;
+            if (dano > 0) {
+                await aplicarDano("ficha", fichaAlvoId, dano, null);
+            }
+            if (classificacao === "critica") atualizacoesImplanteRemover.quebrado = true;
+        }
+
+        await update(ref(db, caminhoMesa(`fichas/${fichaAlvoId}/inventario/${implanteId}/implante`)), atualizacoesImplanteRemover);
 
     } else if (tipo === "pegar_dinheiro_cenario") {
         // Pegar um valor específico de um saldo solto no cenário: o

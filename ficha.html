@@ -471,6 +471,16 @@
                     <div id="mestre-coma-painel" style="display:none;"></div>
                     <div id="mestre-desmaio-painel" style="display:none;"></div>
                     <div id="saude-lista"></div>
+
+                    <!-- Implantes/Próteses (ver plano-implantes-biomecanica.txt,
+                         Fase 6/9): testes de adaptação pós-cirurgia, feitos pelo
+                         próprio dono da ficha, sozinho (sem terceiro). Contador
+                         de limite (Fase 9.3) e modificadores formatados — só
+                         "chip" fica de fora da conta (subtipoContaComoImplante,
+                         dados-manual.js). -->
+                    <div class="section-header">Implantes <span class="hint-inline">testes de adaptação pós-cirurgia — só o dono da ficha rola</span></div>
+                    <div class="hint" id="implantes-contador"></div>
+                    <div id="implantes-lista"></div>
                 </section>
 
                 <!-- ===================== VEÍCULOS ===================== -->
@@ -697,6 +707,13 @@
             <label for="modal-nivel-tag">Nível da tag</label>
             <select id="modal-nivel-tag"></select>
         </div>
+        <div class="modal-field" id="modal-campo-limitar-rolagem" style="display:none;">
+            <label class="checkbox-inline">
+                <input type="checkbox" id="modal-limitar-rolagem">
+                Limitar rolagem ao nível do item
+            </label>
+            <p class="hint">Se marcado, a rolagem da perícia vinculada usando este item fica travada no Nível da tag acima, mesmo que a perícia do personagem seja maior (ex.: Arrombamento 3 + Destrave nível 2 = rola só com +2).</p>
+        </div>
         <div class="modal-field" id="modal-campo-instalar-veiculo" style="display:none;">
             <label for="modal-instalar-veiculo">Instalar em veículo (opcional)</label>
             <select id="modal-instalar-veiculo">
@@ -866,6 +883,18 @@
                 <label><input type="checkbox" id="modal-arma-dilacera-golpe-normal"> Dilacera em golpe normal <span class="hint-inline">(só arma branca) dilacera em qualquer acerto, não só crítico</span></label>
             </div>
 
+            <!-- Carga química em arma branca (dardo/lâmina envenenada —
+                 Parte 6.2 do plano de automação dos materiais químicos).
+                 Só aparece pra arma branca (não-fogo). Marcando, reaproveita
+                 o MESMO bloco "Configuração do produto químico" logo abaixo
+                 (raio/receita/dificuldade/tipo de efeito) pra montar
+                 it.quimico.efeitos — disparado automaticamente no alvo ao
+                 acertar (ver resolverAtaque em ficha.js), sem precisar de
+                 nenhum botão separado. -->
+            <div class="modal-field" id="modal-campo-carga-quimica" style="display:none;">
+                <label><input type="checkbox" id="modal-arma-carga-quimica"> ☣️ Carga química (dardo/lâmina envenenada) <span class="hint-inline">ao acertar, aplica automaticamente os efeitos da receita química configurada abaixo no alvo</span></label>
+            </div>
+
             <!-- Só aparece pra tag Explosivo — manual pg. 81-82. "Modelo
                  padrão" é só um atalho de preenchimento (autopreenche
                  dano/dificuldades/nível ao escolher); dá pra editar tudo
@@ -894,6 +923,32 @@
                 </div>
             </div>
 
+            <!-- Só aparece pra tag Biomecânica/Prótese — manual pg. 84-88
+                 (ver plano-implantes-biomecanica.txt). Dificuldade de
+                 instalar é SEPARADA da dificuldade de criar (esta última
+                 é o campo genérico de nível/receita que toda tag com
+                 nível já usa) — só entra em jogo na cirurgia, não na
+                 fabricação. Funções especiais é texto livre (zoom,
+                 compartimento, suporte de arma etc.) — descritivo, sem
+                 gatilho automático, resolvido pela mesa. -->
+            <div id="modal-config-implante" style="display:none;">
+                <div class="section-header">Configuração do implante <span class="hint-inline">manual pg. 84-88</span></div>
+                <div class="modal-field">
+                    <label for="modal-implante-subtipo">Subtipo</label>
+                    <select id="modal-implante-subtipo">
+                        <option value="">Escolha…</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="modal-implante-dificuldade-instalar">Dificuldade de instalar (Biomecânica — testada na cirurgia, separada da dificuldade de criar)</label>
+                    <input type="number" id="modal-implante-dificuldade-instalar" min="0" step="1" value="0">
+                </div>
+                <div class="modal-field">
+                    <label for="modal-implante-funcoes-especiais">Funções especiais (texto livre — zoom, compartimento, suporte de arma etc.; sem automação, resolvido pela mesa)</label>
+                    <textarea id="modal-implante-funcoes-especiais" placeholder="Ex.: zoom digital 2x, compartimento interno de 1kg, suporte externo p/ arma nível 2..."></textarea>
+                </div>
+            </div>
+
             <!-- Só aparece pra tag Produto Químico (ver plano-quimicos-
                  cenario.txt) — item pensado pra afetar OUTRA pessoa em área
                  (gás sedativo, spray tóxico, aerossol psicotrópico etc.,
@@ -908,12 +963,17 @@
                     <input type="number" id="modal-quimico-raio" min="0" step="1" value="0">
                 </div>
                 <div class="modal-field">
-                    <label for="modal-quimico-dificuldade-usar">Dificuldade de uso (testada toda vez que o químico é liberado em área)</label>
+                    <label>Receita (pontos de material químico — manual pg. 92-93)</label>
+                    <span class="hint-inline">Pontos de cada material investidos nesta receita (0 = não entra). A dificuldade e o resumo abaixo são calculados sozinhos a partir disso, mas continuam editáveis.</span>
+                    <div id="modal-quimico-materiais-lista"></div>
+                </div>
+                <div class="modal-field">
+                    <label for="modal-quimico-dificuldade-usar">Dificuldade de uso (calculada a partir da receita acima — editável)</label>
                     <input type="number" id="modal-quimico-dificuldade-usar" min="0" step="1" value="0">
                 </div>
                 <div class="modal-field">
-                    <label for="modal-quimico-tipo-efeito">Tipo de efeito (opcional — texto livre, ex: Sedativo, Tóxico, Psicotrópico)</label>
-                    <input type="text" id="modal-quimico-tipo-efeito" placeholder="Ex: Sedativo">
+                    <label for="modal-quimico-tipo-efeito">Tipo de efeito (resumo gerado da receita acima — editável)</label>
+                    <input type="text" id="modal-quimico-tipo-efeito" placeholder="Ex: Sedativo 3 + Tóxico 1">
                 </div>
             </div>
 

@@ -36,7 +36,7 @@ import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehExplosivo, ehArmaOuExplosivo, ehDroga, ehProdutoQuimico, EXPLOSIVOS_PADRAO, MODULOS_DETONACAO,
-    ehCarregador, ehProjetil, tagTemNivel, rotuloTag, MANOBRAS_COMBATE,
+    ehCarregador, ehProjetil, tagTemNivel, tagPermiteLimiteRolagemPorNivel, rotuloTag, MANOBRAS_COMBATE,
     tagExigePericiaUso, tagTemPericiaUso, periciasVinculaveisPorTag,
     ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral,
     ehTagQuePodeSerSaldo, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, todosOsSaldos,
@@ -49,7 +49,7 @@ import {
     ALCANCES_ARMA_FOGO, PADROES_RECUO, rotuloAlcanceArmaFogo, rotuloPadraoRecuo,
     modificadorRecuo, ESCALA_MULT_DESARMADO, ehGolpeDesarmadoComDano,
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
-    atendeRequisitoPericia, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
+    atendeRequisitoPericia, atendeRequisitoCriarReceita, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
     LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
@@ -66,7 +66,11 @@ import {
     ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo,
     PERICIAS_MECANICO_VEICULO, MANOBRAS_VEICULO, buscarManobraVeiculo,
     listarBairrosPerseguicao, bairroPerseguicao, tabelaPontuacaoFugaCadastrada, bairroTemDificuldadeRotaFuga,
-    CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo
+    CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo,
+    calcularDificuldadeQuimico, EFEITOS_MATERIAL_QUIMICO, resolverNivelMaterial,
+    NOME_MATERIAL_VEICULO_TRANSPORTE, resolverTipoEntregaQuimico,
+    SUBTIPOS_IMPLANTE, rotuloSubtipoImplante, subtipoContaComoImplante,
+    PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -134,6 +138,11 @@ import {
     detonarExplosivoCenario,
     adicionarQuimicoCenario, removerQuimicoCenario,
     liberarQuimicoCenario, aplicarEfeitoQuimicoAlvo,
+    // Despachante de it.quimico.efeitos (Parte 8, item 5.3-5.4 do plano-
+    // automacao-materiais-quimicos-v3) — wrappers do motor de status por
+    // turno que ainda não eram usados por ficha.js.
+    curarAlvo, aplicarDanoContinuoQuimico, aplicarPenalidadeTemporizada,
+    aplicarDesmaioTemporizado, aplicarTesteAtrasado, aplicarPerdaAcaoTemporizada,
     ouvirPerseguicaoAtiva, iniciarPerseguicao, removerParticipantePerseguicao, encerrarPerseguicao,
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
@@ -218,6 +227,17 @@ let modalContexto = null; // { lista: "inventario", id: "..." } | null = criando
 // cancelou. Ver retomarReceitaAoFecharModal.
 let receitaAguardandoVinculo = null; // { receitaExistente, opcoesSlot, rascunho } | null
 let idBancoParaRetomarReceita = null;
+// Fluxo "+ Criar item no Banco Global" de dentro do modal de receita
+// (ver abrirModalCriarReceita): pro JOGADOR, esse item é só um
+// PROTÓTIPO/catálogo pra vincular a receita — item da receita ≠ item
+// físico na mão do personagem. Antes disso, salvar aqui reusava o modal
+// normal de "+ Adicionar item" (lista "inventario"), que sempre grava
+// uma cópia no inventário da ficha além de mandar pro Banco Global —
+// então o protótipo da receita aparecia (errado) no inventário do
+// jogador. Esta flag, setada só nesse fluxo específico, faz
+// salvarItemDoModal pular a gravação em fichaAtual.inventario e salvar
+// SÓ no Banco Global — ver criarItemApenasNoBanco mais abaixo.
+let criarItemApenasNoBanco = false;
 let godmodeAtivo = false;
 // Sub-opção do Godmode: só some a penalidade de Machucado/Muito
 // Machucado quando ESSA também estiver marcada (ver configurarGodmode).
@@ -499,6 +519,8 @@ const el = {
     btnAddVeiculo: document.getElementById("btn-add-veiculo"),
     cenarioLista: document.getElementById("cenario-lista"),
     saudeLista: document.getElementById("saude-lista"),
+    implantesLista: document.getElementById("implantes-lista"),
+    implantesContador: document.getElementById("implantes-contador"),
     mestreComaPainel: document.getElementById("mestre-coma-painel"),
     mestreDesmaioPainel: document.getElementById("mestre-desmaio-painel"),
     btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
@@ -539,6 +561,8 @@ const el = {
     modalMaosNecessarias: document.getElementById("modal-maos-necessarias"),
     modalCampoNivelTag: document.getElementById("modal-campo-nivel-tag"),
     modalNivelTag: document.getElementById("modal-nivel-tag"),
+    modalCampoLimitarRolagem: document.getElementById("modal-campo-limitar-rolagem"),
+    modalLimitarRolagem: document.getElementById("modal-limitar-rolagem"),
     modalCampoInstalarVeiculo: document.getElementById("modal-campo-instalar-veiculo"),
     modalInstalarVeiculo: document.getElementById("modal-instalar-veiculo"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
@@ -613,10 +637,19 @@ const el = {
     modalExplosivoDificuldadeArmar: document.getElementById("modal-explosivo-dificuldade-armar"),
     modalExplosivoRaio: document.getElementById("modal-explosivo-raio"),
     modalExplosivoModulo: document.getElementById("modal-explosivo-modulo"),
+    modalConfigImplante: document.getElementById("modal-config-implante"),
+    modalImplanteSubtipo: document.getElementById("modal-implante-subtipo"),
+    modalImplanteDificuldadeInstalar: document.getElementById("modal-implante-dificuldade-instalar"),
+    modalImplanteFuncoesEspeciais: document.getElementById("modal-implante-funcoes-especiais"),
     modalConfigQuimico: document.getElementById("modal-config-quimico"),
     modalQuimicoRaio: document.getElementById("modal-quimico-raio"),
+    modalQuimicoMateriaisLista: document.getElementById("modal-quimico-materiais-lista"),
     modalQuimicoDificuldadeUsar: document.getElementById("modal-quimico-dificuldade-usar"),
     modalQuimicoTipoEfeito: document.getElementById("modal-quimico-tipo-efeito"),
+    // Carga química em arma branca (dardo/lâmina envenenada — Parte 6.2
+    // do plano de automação dos materiais químicos).
+    modalCampoCargaQuimica: document.getElementById("modal-campo-carga-quimica"),
+    modalArmaCargaQuimica: document.getElementById("modal-arma-carga-quimica"),
     modalConfigArmaFogo: document.getElementById("modal-config-arma-fogo"),
     modalArmaCapacidade: document.getElementById("modal-arma-capacidade"),
     modalArmaDisparosTurno: document.getElementById("modal-arma-disparos-turno"),
@@ -1625,11 +1658,19 @@ async function removerReceitaConhecida(id) {
 
 // Igual coletarModificadores(fichaAtual), mas já injeta o dia atual do
 // calendário da mesa — necessário pra calcular o malus de Abstinência
-// (ver calcularModificadoresAbstinencia em regras.js). Único ponto usado
-// por toda a ficha do jogador, pra não espalhar `calendarioAtual?.diaIndice`
-// em cada chamada.
+// (ver calcularModificadoresAbstinencia em regras.js) — e, quando em
+// combate, os modificadores de "penalidade_temporizada" ativos no
+// participante atual (Parte 5.3 do plano de automação dos materiais
+// químicos — ver modificadoresPenalidadeTemporizada mais abaixo; fica
+// de fora de coletarModificadores porque aquela é uma função pura,
+// sem acesso ao Firebase de combate). Único ponto usado por toda a
+// ficha do jogador, pra não espalhar `calendarioAtual?.diaIndice` nem
+// a leitura de combate em cada chamada.
 function modificadoresAtuais() {
-    return coletarModificadores(fichaAtual, calendarioAtual ? calendarioAtual.diaIndice : null, calendarioAtual ? calendarioAtual.hora : null);
+    return [
+        ...coletarModificadores(fichaAtual, calendarioAtual ? calendarioAtual.diaIndice : null, calendarioAtual ? calendarioAtual.hora : null),
+        ...modificadoresPenalidadeTemporizada()
+    ];
 }
 
 function renderizarTudo() {
@@ -1643,6 +1684,7 @@ function renderizarTudo() {
     renderizarPericias(modificadoresPlanos);
     renderizarInventario(modificadoresPlanos);
     renderizarItensEquipadosTopo();
+    renderizarImplantes();
     renderizarCombate();
     renderizarVeiculos();
     renderizarCenarios();
@@ -2677,16 +2719,57 @@ function badgeInfeccaoCombate(p) {
     return ` <span class="mod-pill negativo" title="${escapeHtml(titulo)}">🦠 Infectado</span>`;
 }
 
-// Badges de status ativos por turno (Tick System — ex: Sangramento) pra
-// uma linha de participante do Gerenciador de Combate. Um badge por
-// efeito ativo, mostrando quantos turnos faltam — ver
-// aplicarSangramento/processarStatusInicioTurno em mestre.js.
+// Badges de status ativos por turno (Tick System) pra uma linha de
+// participante do Gerenciador de Combate. Um badge por efeito ativo,
+// mostrando quantos turnos faltam. Antes era hard-coded pro formato de
+// Sangramento (ícone 🩸 + "N de dano fixo por turno" pra QUALQUER
+// status) — agora despacha por `status.tipo`, porque os efeitos
+// químicos novos (Parte 5 do plano-automacao-materiais-quimicos-v3:
+// penalidade_temporizada, teste_atrasado, desmaio_temporizado,
+// perde_acao_temporizado) não são dano por turno e mostravam ícone/
+// texto errados. Ver mestre.js: aplicarSangramento,
+// aplicarDanoContinuoQuimico, aplicarPenalidadeTemporizada,
+// aplicarDesmaioTemporizado, aplicarPerdaAcaoTemporizada,
+// aplicarTesteAtrasado — cada um grava um `tipo` diferente em
+// statusAtivos, lido aqui (Parte 7 do plano).
 function badgeStatusAtivosCombate(p) {
     if (!p.statusAtivos) return "";
     return Object.values(p.statusAtivos)
         .filter(s => s && (Number(s.turnosRestantes) || 0) > 0)
-        .map(s => ` <span class="mod-pill negativo" title="${escapeHtml(s.origem || "")} — ${s.danoPorTurno ?? `1d${s.faces || 1}`} de dano fixo por turno">🩸 ${escapeHtml(s.label || s.tipo)} (${s.turnosRestantes})</span>`)
+        .map(s => badgeUnicoStatusAtivo(s))
         .join("");
+}
+
+// Ícone e texto de UM status ativo, por tipo — ver tabela da Parte 7:
+//   sangramento / dano_continuo   → 🩸 "N de dano por turno"
+//   penalidade_temporizada        → ⚠️ "valor em alvos, por N turnos"
+//   teste_atrasado                → ⏳ "teste em N turnos"
+//   desmaio_temporizado           → 💤 "acorda em N turnos"
+//   perde_acao_temporizado        → 🌀 "perde 1 ação por turno, N turnos restantes"
+// Tipo desconhecido (efeito futuro ainda não coberto aqui) cai num
+// badge genérico neutro em vez de quebrar a UI.
+function badgeUnicoStatusAtivo(s) {
+    const turnos = s.turnosRestantes;
+    const origemTitulo = s.origem ? escapeHtml(s.origem) : "";
+    switch (s.tipo) {
+        case "sangramento":
+        case "dano_continuo": {
+            const dano = s.danoPorTurno ?? `1d${s.faces || 1}`;
+            return ` <span class="mod-pill negativo" title="${origemTitulo} — ${dano} de dano fixo por turno">🩸 ${escapeHtml(s.label || s.tipo)} (${turnos})</span>`;
+        }
+        case "penalidade_temporizada": {
+            const alvos = Array.isArray(s.alvos) ? s.alvos.join(", ") : (s.alvos || "");
+            return ` <span class="mod-pill negativo" title="${origemTitulo} — ${s.valor} em ${escapeHtml(alvos)}, por ${turnos} turno(s)">⚠️ ${escapeHtml(s.label || s.tipo)} (${turnos})</span>`;
+        }
+        case "teste_atrasado":
+            return ` <span class="mod-pill negativo" title="${origemTitulo} — teste de ${escapeHtml(s.periciaResistencia || "")} vs dif ${s.dificuldade}, em ${turnos} turno(s)">⏳ ${escapeHtml(s.label || s.tipo)} — teste em ${turnos}</span>`;
+        case "desmaio_temporizado":
+            return ` <span class="mod-pill negativo" title="${origemTitulo} — acorda sozinho, sem precisar de ninguém confirmar">💤 Desmaiado — acorda em ${turnos}</span>`;
+        case "perde_acao_temporizado":
+            return ` <span class="mod-pill negativo" title="${origemTitulo} — consome 1 ação normal do turno enquanto durar">🌀 Perde 1 ação por turno (${turnos} restante${turnos === 1 ? "" : "s"})</span>`;
+        default:
+            return ` <span class="mod-pill negativo" title="${origemTitulo}">${escapeHtml(s.label || s.tipo)} (${turnos})</span>`;
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -2868,6 +2951,111 @@ function mostrarDetalheSecundario(key) {
 // ---------------------------------------------------------------------
 // PERÍCIAS
 // ---------------------------------------------------------------------
+// Engenharia — Parte 10 (continuação de "automação materiais químicos"):
+// rolar Engenharia oferece duas ações distintas, ver
+// li.querySelector(".btn-rolar") em renderizarPericias logo abaixo:
+//   - "Só rolar": comportamento de sempre, d20 + Engenharia no Log.
+//   - "Criar receita": abre o mesmo fluxo de sempre de autorar receita
+//     (abrirModalCriarReceita) — escolhendo uma já existente no Banco
+//     Global pra editar, ou criando uma do zero — sem reinventar nada,
+//     só dando um atalho a partir da perícia (ver
+//     abrirModalEscolherReceitaParaEngenharia). O requisito de nível
+//     (Engenharia + perícia vinculada ≥ nível do item) já é checado
+//     dentro de abrirModalCriarReceita na hora de salvar (ver
+//     atendeRequisitoCriarReceita, dados-manual.js).
+function abrirModalEscolhaEngenharia(modificadorRolagem) {
+    let modal = document.getElementById("modal-escolha-engenharia");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-escolha-engenharia";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Engenharia (${modificadorRolagem >= 0 ? "+" : ""}${modificadorRolagem})</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <div class="modal-btns" style="flex-direction:column;">
+            <button type="button" class="btn-lime" id="btn-engenharia-so-rolar">🎲 Só rolar</button>
+            <button type="button" class="btn-blue" id="btn-engenharia-criar-receita">📐 Criar receita</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-engenharia-so-rolar").addEventListener("click", async () => {
+        modal.remove();
+        await rolarComPossibilidadeDeOcasionais("Engenharia", "pericia:Engenharia", modificadorRolagem, false);
+    });
+    modal.querySelector("#btn-engenharia-criar-receita").addEventListener("click", () => {
+        modal.remove();
+        abrirModalEscolherReceitaParaEngenharia();
+    });
+    document.body.appendChild(modal);
+}
+
+// Picker simples: escolher uma receita já existente no Banco Global
+// (abre pra editar — mesma modal de sempre) ou partir pra uma nova do
+// zero. Reaproveita 100% de abrirModalCriarReceita — este picker só
+// existe pra dar o ponto de entrada a partir da perícia Engenharia.
+function abrirModalEscolherReceitaParaEngenharia() {
+    let modal = document.getElementById("modal-escolher-receita-engenharia");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-escolher-receita-engenharia";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Criar receita — Engenharia</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <div class="modal-field">
+            <button type="button" class="btn-lime" id="btn-engenharia-receita-nova" style="width:100%;">+ Nova receita</button>
+        </div>
+        <div class="modal-field">
+            <label for="engenharia-receita-busca">Ou escolha uma já existente no Banco Global pra editar</label>
+            <input type="text" id="engenharia-receita-busca" placeholder="Buscar por nome..." autocomplete="off">
+            <div class="combate-lista" id="engenharia-receita-lista" style="max-height:260px; overflow-y:auto;"></div>
+        </div>
+    `;
+    const lista = modal.querySelector("#engenharia-receita-lista");
+    const busca = modal.querySelector("#engenharia-receita-busca");
+    function renderizarLista() {
+        const termo = busca.value.trim().toLowerCase();
+        const encontradas = receitasGlobaisCache
+            .filter(r => !termo || (r.nome || "").toLowerCase().includes(termo))
+            .slice(0, 30);
+        lista.innerHTML = "";
+        if (!encontradas.length) {
+            lista.innerHTML = `<p class="hint">Nenhuma receita encontrada${termo ? " pra essa busca" : " no Banco Global ainda"}.</p>`;
+            return;
+        }
+        encontradas.forEach(r => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn-ghost";
+            btn.style.width = "100%";
+            btn.style.marginBottom = "4px";
+            btn.innerText = `Nível ${Number(r.nivel) || 1} · ${r.nome || "(sem nome)"} — ${r.periciaVinculada || "?"}`;
+            btn.addEventListener("click", () => {
+                modal.remove();
+                abrirModalCriarReceita(r);
+            });
+            lista.appendChild(btn);
+        });
+    }
+    busca.addEventListener("input", renderizarLista);
+    renderizarLista();
+
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-engenharia-receita-nova").addEventListener("click", () => {
+        modal.remove();
+        abrirModalCriarReceita(null);
+    });
+    document.body.appendChild(modal);
+}
+
 function renderizarPericias(modificadoresPlanos) {
     const podeEditar = podeEditarPericiaAtributo();
     el.btnAddPericia.style.display = podeEditar ? "inline-block" : "none";
@@ -2919,6 +3107,16 @@ function renderizarPericias(modificadoresPlanos) {
         `;
         li.querySelector(".btn-rolar").addEventListener("click", async (e) => {
             e.stopPropagation();
+            // Engenharia (continuação da conversa "automação materiais
+            // químicos" — Parte 10): rolar essa perícia específica
+            // abre uma escolha antes de rolar de verdade — "só rolar"
+            // (comportamento normal de qualquer perícia) ou "criar
+            // receita" (autorar uma receita nova/existente no Banco
+            // Global — ver abrirModalEscolhaEngenharia).
+            if (p.nome === "Engenharia") {
+                abrirModalEscolhaEngenharia(calc.total);
+                return;
+            }
             await rolarComPossibilidadeDeOcasionais(p.nome, `pericia:${p.nome}`, calc.total, p.nome === "CQC");
         });
         li.querySelectorAll(".pericia-ocasional-check").forEach(chk => {
@@ -3068,7 +3266,11 @@ async function executarManobraEsquivar(modificadoresPlanos) {
 // Calcula o modificador de perícia a aplicar numa rolagem de uso/ataque,
 // já respeitando a regra global: nível 0 (ou perícia inexistente na
 // ficha) vira -1 fixo, em vez do total calculado normalmente.
-function modificadorDePericiaComPenalidade(nomePericia, dadosPrimarios, pericias, modificadoresPlanos, penalidadeSaude = 0) {
+// `limiteNivel` (opcional) repassa pra calcularTotalPericia — ver
+// tagPermiteLimiteRolagemPorNivel/nivelTag do item que gerou a rolagem
+// (chamado por rolarComPericiaDoItem etc.). Sem treino (-1 fixo) não
+// aplica limite — não faz sentido capar algo que já não usa o nível.
+function modificadorDePericiaComPenalidade(nomePericia, dadosPrimarios, pericias, modificadoresPlanos, penalidadeSaude = 0, limiteNivel = null) {
     const entrada = Object.entries(pericias || {}).find(([, p]) => p.nome === nomePericia);
     const penalidadeTotal = (Number(penalidadeSaude) || 0) + penalidadeEnergiaParaPericia(nomePericia);
     if (!entrada || (Number(entrada[1].nivel) || 0) <= 0) {
@@ -3081,7 +3283,7 @@ function modificadorDePericiaComPenalidade(nomePericia, dadosPrimarios, pericias
         const bonusCategoriaDestreinado = alvoCategoriaDestreinada ? somaModificadoresPara(alvoCategoriaDestreinada, modificadoresPlanos) : 0;
         return -1 + penalidadeTotal + bonusCategoriaDestreinado;
     }
-    return calcularTotalPericia(entrada[1], dadosPrimarios, modificadoresPlanos, penalidadeTotal).total;
+    return calcularTotalPericia(entrada[1], dadosPrimarios, modificadoresPlanos, penalidadeTotal, limiteNivel).total;
 }
 
 // Só armas de fogo de verdade (não golpe desarmado nem arma branca) tem
@@ -3452,10 +3654,52 @@ function anexarOcasionaisNoCampoExtra(nomePericia) {
 // bloco acima), abre um passo extra de confirmação com os checkboxes
 // antes de rolar — item comum sem nenhuma especialização vinculada
 // continua rolando direto, sem esse passo a mais no meio.
+// Teto de rolagem de um item (ver tagPermiteLimiteRolagemPorNivel em
+// dados-manual.js e checkbox "Limitar rolagem" no modal): devolve o
+// nivelTag do item quando o checkbox está marcado e o item tem nível
+// válido, ou null (sem teto) caso contrário — repassado como
+// `limiteNivel` pra modificadorDePericiaComPenalidade/calcularTotalPericia.
+function limiteRolagemDoItem(it) {
+    if (!it || !it.limitarRolagemPorNivel) return null;
+    const nivel = Number(it.nivelTag);
+    return nivel > 0 ? nivel : null;
+}
+
+// Mesma ideia de limiteRolagemDoItem acima, só que pra rolagem de
+// CRIAR uma receita (aba Receitas) — que rola por perícia, não por um
+// item específico escolhido na hora (diferente do "Usar" de inventário,
+// que já sabe qual item está sendo usado). Aqui é preciso primeiro
+// descobrir qual(is) Ferramenta de Criação da ficha serve(m) pra essa
+// perícia:
+// - Química -> tag "ferramenta_criacao_quimica"
+// - Biomecânica -> tag "ferramenta_criacao_biomecanica"
+// - qualquer uma de PERICIAS_FERRAMENTA_CRIACAO (Mecânica Automotiva,
+//   Armeiro, Ofícios Utilitários, Explosivos, Eletrônica) -> tag
+//   "ferramenta_criacao" (kit geral, serve pras 5 de uma vez)
+// Critério (sem adicionar um seletor de ferramenta na UI): se o
+// personagem não tem nenhuma ferramenta daquele tipo, ou tem pelo
+// menos uma SEM "Limitar rolagem" marcado, a rolagem fica sem teto —
+// presume-se que ele usaria essa ferramenta livre. Só capa quando
+// TODAS as ferramentas daquele tipo estão marcadas, usando a de maior
+// nível entre elas (a melhor que ele tem).
+function limiteRolagemCriacaoParaPericia(nomePericia) {
+    let tagAlvo;
+    if (nomePericia === "Química") tagAlvo = "ferramenta_criacao_quimica";
+    else if (nomePericia === "Biomecânica") tagAlvo = "ferramenta_criacao_biomecanica";
+    else if (PERICIAS_FERRAMENTA_CRIACAO.includes(nomePericia)) tagAlvo = "ferramenta_criacao";
+    else return null;
+
+    const itensFerramenta = Object.values(fichaAtual.inventario || {}).filter(it => it && it.tag === tagAlvo);
+    if (!itensFerramenta.length) return null;
+    if (itensFerramenta.some(it => !it.limitarRolagemPorNivel)) return null;
+    const niveis = itensFerramenta.map(it => Number(it.nivelTag) || 0).filter(n => n > 0);
+    return niveis.length ? Math.max(...niveis) : null;
+}
+
 async function rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos) {
     const ocasionais = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
     if (!ocasionais.length) {
-        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual());
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it));
         await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
         return;
     }
@@ -3486,7 +3730,7 @@ function abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, 
     modal.querySelector("#btn-confirmar-ocasionais-uso").addEventListener("click", async () => {
         const delta = lerDeltaOcasionais(modal.querySelector("#ocasionais-uso-item-lista"), ocasionais);
         modal.remove();
-        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual()) + delta;
+        const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it)) + delta;
         await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
     });
     document.body.appendChild(modal);
@@ -3721,6 +3965,15 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
         abrirModalUsarQuimicoArea(it, modificadoresPlanos);
         return;
     }
+    // Ferramenta de Criação Biomecânica (ver plano-implantes-biomecanica.txt,
+    // Fase 4): "Usar" não é um teste solto de perícia — é o ponto de
+    // entrada da cirurgia (Instalar/Remover implante em OUTRO personagem
+    // do mesmo cenário). Mesmo padrão de entrada especial já usado por
+    // Explosivo (Armar) e Produto Químico (Usar em área) acima.
+    if (it.tag === "ferramenta_criacao_biomecanica") {
+        abrirModalCirurgiaImplante(it, modificadoresPlanos);
+        return;
+    }
     if (ehArma(it.tag) && combateTemParticipantes()) {
         // Contra-ataque imediato do Aparar (manual: "pode atacar
         // imediatamente com modificador -1") — se este personagem tem um
@@ -3738,6 +3991,14 @@ async function iniciarUsoItem(it, modificadoresPlanos) {
             }
         }
         abrirModalSelecionarAlvo(it, modificadoresPlanos);
+    } else if (ehArma(it.tag) && it.quimico && Array.isArray(it.quimico.efeitos) && it.quimico.efeitos.length) {
+        // Seringa/Spray (Parte 9 — Veículo de transporte) fora de
+        // combate: sem oposição de defesa, aplicação direta em qualquer
+        // alvo escolhido (inclusive em si mesmo) — ver
+        // abrirModalUsarQuimicoForaCombate. Só entra aqui quando NÃO há
+        // combate ativo (o `if` de cima já cobriu o caso "combate ativo"
+        // com seleção de alvo + teste de acerto normal).
+        abrirModalUsarQuimicoForaCombate(it, modificadoresPlanos);
     } else {
         await rolarUsoItem(it, modificadoresPlanos);
     }
@@ -3904,6 +4165,10 @@ function abrirModalUsarQuimicoArea(it, modificadoresPlanos) {
             raio: cfg.raio || 0,
             tipoEfeito: cfg.tipoEfeito || "",
             modificadores: modificadoresDoItem,
+            // Efeitos mecânicos do item (it.quimico.efeitos), pra viajar
+            // junto até o painel "Aplicar Efeito Químico" do Mestre —
+            // Parte 8, item 5.2 do plano-automacao-materiais-quimicos-v3.
+            efeitos: cfg.efeitos || [],
             duracaoHoras: extrairDuracaoHorasDaDescricao(it.descricao),
             usadoPorTipo: modoNpc ? "npc" : "ficha",
             usadoPorId: modoNpc ? npcAtualId : fichaAtualId,
@@ -3916,6 +4181,407 @@ function abrirModalUsarQuimicoArea(it, modificadoresPlanos) {
         toast(`💨 ${it.nome} usado em área — aguardando o Mestre liberar em "${cenario.titulo}".`);
     });
     document.body.appendChild(modal);
+}
+
+// "Usar" uma Seringa/Spray (arma com carga química, it.quimico.efeitos)
+// FORA de combate (Parte 9 — Veículo de transporte): sem oposição de
+// defesa nem teste de acerto — é aplicação direta num alvo consciente
+// e/ou não-resistente (ou em si mesmo), igual injetar alguém parado.
+// Alvo pode ser o próprio personagem/NPC ou qualquer participante do
+// cenário atual (mesma lista que liberarQuimicoCenario usa pro fluxo de
+// área — reaproveitada aqui só como fonte de "quem está por perto").
+// despacharEfeitosQuimicos (já existe) lida sozinho com o caso de o
+// alvo não estar em combate ativo: efeitos imediatos aplicam na hora,
+// efeitos por turno ficam como nota "aplique manualmente" pro Mestre.
+function abrirModalUsarQuimicoForaCombate(it, modificadoresPlanos) {
+    const cenario = cenarioAtualDoPersonagem();
+    const idAtual = modoNpc ? npcAtualId : fichaAtualId;
+    const tipoAtual = modoNpc ? "npc" : "ficha";
+    const nomeAtual = fichaAtual?.config?.nomeExibicao || sessao?.nome || idAtual;
+    const outrosParticipantes = cenario
+        ? Object.values(cenario.participantes || {}).filter(p => !(p.tipo === tipoAtual && p.refId === idAtual))
+        : [];
+
+    let modal = document.getElementById("modal-usar-quimico-fora-combate");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-usar-quimico-fora-combate";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    const rotuloEntrega = it.quimico?.tipoEntregaLabel || "Carga química";
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">${escapeHtml(rotuloEntrega)}: ${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Fora de combate — sem teste de acerto. Escolha em quem aplicar.</p>
+        <div class="combate-lista" id="quimico-fora-combate-alvos"></div>
+    `;
+    const listaAlvos = modal.querySelector("#quimico-fora-combate-alvos");
+
+    const criarBotaoAlvo = (label, onClick) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn-lime";
+        btn.style.width = "100%";
+        btn.style.marginBottom = "6px";
+        btn.innerText = label;
+        btn.addEventListener("click", onClick);
+        listaAlvos.appendChild(btn);
+    };
+
+    const confirmarAplicacao = async (alvoTipo, alvoId, nomeAlvo) => {
+        modal.remove();
+        const resultado = await despacharEfeitosQuimicos(alvoTipo, alvoId, it.quimico.efeitos, it.nome);
+        // Consome 1 unidade do item, mesmo padrão de consumirDroga.
+        const quantidadeAtual = Number(it.quantidade);
+        if (Number.isFinite(quantidadeAtual) && quantidadeAtual > 1) {
+            fichaAtual.inventario[it.id].quantidade = quantidadeAtual - 1;
+            await update(ref(db), { [`${caminhoBase()}/inventario/${it.id}/quantidade`]: quantidadeAtual - 1 });
+        } else {
+            delete fichaAtual.inventario[it.id];
+            await remove(ref(db, `${caminhoBase()}/inventario/${it.id}`));
+        }
+        toast(`${rotuloEntrega} de ${it.nome} aplicada em ${nomeAlvo}.${resultado.notas.length ? " " + resultado.notas.join(" | ") : ""}`);
+    };
+
+    criarBotaoAlvo(`💉 Em mim mesmo (${nomeAtual})`, () => confirmarAplicacao(tipoAtual, idAtual, nomeAtual));
+    outrosParticipantes.forEach(p => {
+        criarBotaoAlvo(`💉 ${p.nome}`, () => confirmarAplicacao(p.tipo, p.refId, p.nome));
+    });
+    if (!outrosParticipantes.length) {
+        const aviso = document.createElement("p");
+        aviso.className = "hint";
+        aviso.innerText = cenario
+            ? "Nenhum outro participante no cenário atual — só é possível aplicar em si mesmo."
+            : "Você não está em nenhum cenário agora — peça ao Mestre pra te colocar em um pra poder aplicar em outra pessoa (em si mesmo continua disponível).";
+        listaAlvos.appendChild(aviso);
+    }
+
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    document.body.appendChild(modal);
+}
+
+// =====================================================================
+// Cirurgia de Implante/Prótese (Biomecânica) — Fase 4 do plano (ver
+// plano-implantes-biomecanica.txt): ponto de entrada é "Usar" na
+// Ferramenta de Criação Biomecânica (ver iniciarUsoItem acima).
+// Regra-chave: ninguém opera a si mesmo — sempre um segundo
+// personagem no MESMO cenário (candidatosCirurgiaImplante/
+// implantesDoPacienteParaCirurgia, Fase 3, já existem). "Instalar"
+// (Fase 4.2-4.4: rola Biomecânica contra a dificuldadeInstalar do
+// item) e "Remover" (Fase 7.1-7.3: rola Biomecânica contra dificuldade
+// fixa 8+nível do implante) seguem o mesmo padrão — nenhum dos dois
+// aplica nada direto, os dois só entram na fila do Mestre confirmar
+// (Fases 5/8, mestre.js).
+// =====================================================================
+function abrirModalCirurgiaImplante(it, modificadoresPlanos) {
+    const cenario = cenarioAtualDoPersonagem();
+    if (!cenario) {
+        toast(`"${it.nome}" só pode ser usado dentro de um cenário — peça ao Mestre pra te colocar em um antes de operar alguém.`, "erro");
+        return;
+    }
+    const candidatos = candidatosCirurgiaImplante();
+    if (!candidatos.length) {
+        toast("Nenhum outro personagem no cenário atual — a cirurgia sempre precisa de um segundo personagem (nunca em si mesmo).", "erro");
+        return;
+    }
+
+    let modal = document.getElementById("modal-cirurgia-implante");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-cirurgia-implante";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">${escapeHtml(it.nome)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <h4>Cirurgia de Implante</h4>
+        <p class="hint">Escolha instalar ou remover um implante em outro personagem do cenário. O resultado só vale depois que o Mestre confirmar na fila de Ações Pendentes.</p>
+        <div class="modal-btns" style="flex-direction:column; gap:6px;">
+            <button type="button" class="btn-lime" id="btn-cirurgia-instalar" style="width:100%;">🔧 Instalar implante</button>
+            <button type="button" class="btn-lime" id="btn-cirurgia-remover" style="width:100%;">🩹 Remover implante</button>
+        </div>
+    `;
+    modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+    modal.querySelector("#btn-cirurgia-instalar").addEventListener("click", () => {
+        modal.remove();
+        abrirModalInstalarImplanteEscolherPaciente(it, modificadoresPlanos, candidatos);
+    });
+    modal.querySelector("#btn-cirurgia-remover").addEventListener("click", () => {
+        modal.remove();
+        abrirModalRemoverImplanteEscolherPaciente(it, modificadoresPlanos, candidatos);
+    });
+    document.body.appendChild(modal);
+}
+
+// Fase 4.2: seleção de paciente (só quem tem ao menos um implante
+// instalado:false esperando cirurgia — evita um select que sempre
+// termina em "esse personagem não tem nada pra instalar") e, a partir
+// dele, seleção de qual implante — mostra a dificuldadeInstalar
+// gravada no próprio item. Redesenha o conteúdo quando o paciente
+// muda, mesmo padrão de abrirModalMecanicoVeiculoTerceiro.
+function abrirModalInstalarImplanteEscolherPaciente(it, modificadoresPlanos, candidatos) {
+    const pacientesComImplante = candidatos
+        .map(p => ({ ...p, paraInstalar: implantesDoPacienteParaCirurgia(p.refId).paraInstalar }))
+        .filter(p => p.paraInstalar.length > 0);
+
+    if (!pacientesComImplante.length) {
+        toast("Nenhum personagem no cenário atual tem um implante não instalado esperando cirurgia.", "erro");
+        return;
+    }
+
+    // Fase 10.1: tira do select quem já bateu o limite de implantes
+    // (Fase 9.3) — checagem aqui no modal, antes mesmo de rolar.
+    const pacientesDisponiveis = pacientesComImplante.filter(p => !implantesContagemELimite(todasAsFichasCache[p.refId]).semVaga);
+    const bloqueadosPorLimite = pacientesComImplante.length - pacientesDisponiveis.length;
+
+    if (!pacientesDisponiveis.length) {
+        toast("Todos os personagens candidatos já bateram o limite de implantes (chips não contam).", "erro");
+        return;
+    }
+
+    let modal = document.getElementById("modal-instalar-implante");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-instalar-implante";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const renderizarConteudo = (fichaAlvoId) => {
+        const paciente = pacientesDisponiveis.find(p => p.refId === fichaAlvoId) || pacientesDisponiveis[0];
+        const opcoesPaciente = pacientesDisponiveis
+            .map(p => `<option value="${p.refId}" ${p.refId === paciente.refId ? "selected" : ""}>${escapeHtml(p.nome)}</option>`)
+            .join("");
+        const opcoesImplante = paciente.paraInstalar
+            .map(imp => `<option value="${imp.id}">${escapeHtml(imp.nome)}${imp.implante?.subtipo ? ` (${escapeHtml(rotuloSubtipoImplante(imp.implante.subtipo))})` : ""}</option>`)
+            .join("");
+
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">Instalar implante — ${escapeHtml(it.nome)}</span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <div class="modal-campo">
+                <label>Paciente</label>
+                <select id="instalar-implante-paciente">${opcoesPaciente}</select>
+            </div>
+            <div class="modal-campo">
+                <label>Implante</label>
+                <select id="instalar-implante-item">${opcoesImplante}</select>
+            </div>
+            <p class="hint" id="instalar-implante-dificuldade"></p>
+            <p class="hint">Você (instalador) rola Biomecânica contra essa dificuldade. O paciente não rola nada agora — os testes de adaptação dele acontecem depois, sozinho (aba Saúde).</p>
+            ${bloqueadosPorLimite > 0 ? `<p class="hint" style="color: var(--neon-red);">${bloqueadosPorLimite} candidato(s) fora da lista por já estar(em) no limite de implantes.</p>` : ""}
+            <div class="modal-btns">
+                <button type="button" class="btn-lime" id="btn-confirmar-instalar-implante">🎲 Rolar e instalar</button>
+            </div>
+        `;
+
+        const hintDificuldade = modal.querySelector("#instalar-implante-dificuldade");
+        const selectImplante = modal.querySelector("#instalar-implante-item");
+        const atualizarHintDificuldade = () => {
+            const imp = paciente.paraInstalar.find(x => x.id === selectImplante.value) || paciente.paraInstalar[0];
+            hintDificuldade.innerHTML = `Dificuldade de instalar: <strong>${imp?.implante?.dificuldadeInstalar ?? "não definida"}</strong> (perícia Biomecânica).`;
+        };
+        atualizarHintDificuldade();
+
+        modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+        modal.querySelector("#instalar-implante-paciente").addEventListener("change", (e) => renderizarConteudo(e.target.value));
+        selectImplante.addEventListener("change", atualizarHintDificuldade);
+        modal.querySelector("#btn-confirmar-instalar-implante").addEventListener("click", async () => {
+            const imp = paciente.paraInstalar.find(x => x.id === selectImplante.value);
+            if (!imp) { toast("Escolha um implante.", "erro"); return; }
+            modal.remove();
+            await resolverInstalarImplante(it, modificadoresPlanos, paciente.refId, paciente.nome, imp);
+        });
+    };
+
+    renderizarConteudo(pacientesDisponiveis[0].refId);
+    document.body.appendChild(modal);
+}
+
+// Fase 4.3/4.4: o INSTALADOR (fichaAtual) rola Biomecânica contra a
+// dificuldadeInstalar do item (reusa rolarComPossibilidadeDeOcasionais,
+// mesmo caminho de qualquer outra rolagem de perícia — cuida sozinho
+// de Ocasiões Especiais quando existirem). A rolagem NÃO aplica nada
+// na ficha do paciente ainda: monta um payload já classificado
+// (sucesso / falha_leve = "falha até 5" / falha_grave = "falha 6+" /
+// critica = falha crítica da rolagem) e entra na fila do Mestre — quem
+// de fato aplica o resultado é confirmarAcaoPendente (Fase 5, ainda
+// não implementada em mestre.js).
+async function resolverInstalarImplante(it, modificadoresPlanos, fichaAlvoId, nomePaciente, implanteItem) {
+    if (!fichaAtual || !fichaAtualId) return;
+
+    const nomePericia = PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA[0]; // "Biomecânica"
+    const dificuldade = Number(implanteItem.implante?.dificuldadeInstalar) || 0;
+    const modificador = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it));
+    const rotuloAcao = `Instalar implante em ${nomePaciente}: "${implanteItem.nome}"`;
+
+    const resultado = await rolarComPossibilidadeDeOcasionais(`${rotuloAcao} (${nomePericia})`, `pericia:${nomePericia}`, modificador, false, dificuldade);
+    if (!resultado) return;
+
+    // Classificação exigida pela Fase 5: "crítica" aqui é a FALHA
+    // crítica da rolagem (d20 natural 1, ou resultado final <= 1 — ver
+    // criticoNegativo em rolarERegistrar), não o acerto crítico
+    // (resultado >= 20), que já está coberto por "sucesso". Falha sem
+    // crítico se divide em leve (margem até 5) e grave (6+), conforme
+    // o texto do plano ("falha até 5 / falha 6+").
+    let classificacao;
+    if (resultado.criticoNegativo) {
+        classificacao = "critica";
+    } else if (resultado.sucesso) {
+        classificacao = "sucesso";
+    } else {
+        const margem = dificuldade - resultado.resultado;
+        classificacao = margem <= 5 ? "falha_leve" : "falha_grave";
+    }
+
+    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+    await criarAcaoPendente({
+        tipo: "instalar_implante",
+        fichaId: fichaAtualId,
+        nomeJogador,
+        detalhe: `${nomeJogador} tentou instalar "${implanteItem.nome}" em ${nomePaciente} — resultado ${resultado.resultado} (dif. ${dificuldade}) — aguardando confirmação do Mestre.`,
+        payload: {
+            fichaAlvoId,
+            nomePaciente,
+            implanteId: implanteItem.id,
+            implanteNome: implanteItem.nome,
+            nivel: Number(implanteItem.nivelTag) || 0,
+            dificuldadeInstalar: dificuldade,
+            resultado: resultado.resultado,
+            classificacao,
+            instaladorNome: nomeJogador
+        }
+    });
+    toast(`Cirurgia registrada — resultado ${resultado.resultado} (dif. ${dificuldade}). Aguardando confirmação do Mestre.`, resultado.sucesso ? "critico-acerto" : "erro");
+}
+
+// Fase 7.1: mesmo padrão de abrirModalInstalarImplanteEscolherPaciente
+// (Fase 4.2), só troca a fonte da lista (paraRemover em vez de
+// paraInstalar — implantesDoPacienteParaCirurgia, Fase 3, já separa os
+// dois) e mostra a dificuldade FIXA de remover (8+nível, calculada na
+// hora — não é campo do item, diferente de dificuldadeInstalar).
+function abrirModalRemoverImplanteEscolherPaciente(it, modificadoresPlanos, candidatos) {
+    const pacientesComImplante = candidatos
+        .map(p => ({ ...p, paraRemover: implantesDoPacienteParaCirurgia(p.refId).paraRemover }))
+        .filter(p => p.paraRemover.length > 0);
+
+    if (!pacientesComImplante.length) {
+        toast("Nenhum personagem no cenário atual tem um implante instalado pra remover.", "erro");
+        return;
+    }
+
+    let modal = document.getElementById("modal-remover-implante");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-remover-implante";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const renderizarConteudo = (fichaAlvoId) => {
+        const paciente = pacientesComImplante.find(p => p.refId === fichaAlvoId) || pacientesComImplante[0];
+        const opcoesPaciente = pacientesComImplante
+            .map(p => `<option value="${p.refId}" ${p.refId === paciente.refId ? "selected" : ""}>${escapeHtml(p.nome)}</option>`)
+            .join("");
+        const opcoesImplante = paciente.paraRemover
+            .map(imp => `<option value="${imp.id}">${escapeHtml(imp.nome)}${imp.implante?.subtipo ? ` (${escapeHtml(rotuloSubtipoImplante(imp.implante.subtipo))})` : ""}</option>`)
+            .join("");
+
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">Remover implante — ${escapeHtml(it.nome)}</span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <div class="modal-campo">
+                <label>Paciente</label>
+                <select id="remover-implante-paciente">${opcoesPaciente}</select>
+            </div>
+            <div class="modal-campo">
+                <label>Implante</label>
+                <select id="remover-implante-item">${opcoesImplante}</select>
+            </div>
+            <p class="hint" id="remover-implante-dificuldade"></p>
+            <p class="hint">Você (instalador) rola Biomecânica contra essa dificuldade. O resultado só vale depois que o Mestre confirmar na fila de Ações Pendentes.</p>
+            <div class="modal-btns">
+                <button type="button" class="btn-lime" id="btn-confirmar-remover-implante">🎲 Rolar e remover</button>
+            </div>
+        `;
+
+        const hintDificuldade = modal.querySelector("#remover-implante-dificuldade");
+        const selectImplante = modal.querySelector("#remover-implante-item");
+        const atualizarHintDificuldade = () => {
+            const imp = paciente.paraRemover.find(x => x.id === selectImplante.value) || paciente.paraRemover[0];
+            const nivel = Number(imp?.nivelTag) || 0;
+            hintDificuldade.innerHTML = `Dificuldade de remover: <strong>${8 + nivel}</strong> (8 + nível ${nivel}, perícia Biomecânica).`;
+        };
+        atualizarHintDificuldade();
+
+        modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
+        modal.querySelector("#remover-implante-paciente").addEventListener("change", (e) => renderizarConteudo(e.target.value));
+        selectImplante.addEventListener("change", atualizarHintDificuldade);
+        modal.querySelector("#btn-confirmar-remover-implante").addEventListener("click", async () => {
+            const imp = paciente.paraRemover.find(x => x.id === selectImplante.value);
+            if (!imp) { toast("Escolha um implante.", "erro"); return; }
+            modal.remove();
+            await resolverRemoverImplante(it, modificadoresPlanos, paciente.refId, paciente.nome, imp);
+        });
+    };
+
+    renderizarConteudo(pacientesComImplante[0].refId);
+    document.body.appendChild(modal);
+}
+
+// Fase 7.2/7.3: mesmo padrão de resolverInstalarImplante (Fase 4.3/4.4)
+// — o INSTALADOR (fichaAtual) rola Biomecânica, classifica o resultado
+// e manda pro Mestre confirmar (nunca aplica direto, nem em sucesso —
+// ver 7.3 do plano). Única diferença de verdade: a dificuldade não vem
+// do item (dificuldadeInstalar), é fixa 8+nível, calculada aqui mesmo.
+async function resolverRemoverImplante(it, modificadoresPlanos, fichaAlvoId, nomePaciente, implanteItem) {
+    if (!fichaAtual || !fichaAtualId) return;
+
+    const nomePericia = PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA[0]; // "Biomecânica"
+    const nivel = Number(implanteItem.nivelTag) || 0;
+    const dificuldade = 8 + nivel;
+    const modificador = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it));
+    const rotuloAcao = `Remover implante de ${nomePaciente}: "${implanteItem.nome}"`;
+
+    const resultado = await rolarComPossibilidadeDeOcasionais(`${rotuloAcao} (${nomePericia})`, `pericia:${nomePericia}`, modificador, false, dificuldade);
+    if (!resultado) return;
+
+    // Classificação de 3 níveis (diferente de resolverInstalarImplante,
+    // que usa 4 — sucesso/falha_leve/falha_grave/crítica, exigido pela
+    // Fase 4.4). O plano só fala em sucesso/falha/crítica pra Remover
+    // (Fase 7.3/8.3: "Falha: remove + dano 20×nível. Crítica: remove +
+    // quebra o item + dano.") — sem distinguir margem de falha aqui.
+    const classificacao = resultado.criticoNegativo ? "critica" : (resultado.sucesso ? "sucesso" : "falha");
+
+    const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
+    await criarAcaoPendente({
+        tipo: "remover_implante",
+        fichaId: fichaAtualId,
+        nomeJogador,
+        detalhe: `${nomeJogador} tentou remover "${implanteItem.nome}" de ${nomePaciente} — resultado ${resultado.resultado} (dif. ${dificuldade}) — aguardando confirmação do Mestre.`,
+        payload: {
+            fichaAlvoId,
+            nomePaciente,
+            implanteId: implanteItem.id,
+            implanteNome: implanteItem.nome,
+            nivel,
+            dificuldadeRemover: dificuldade,
+            resultado: resultado.resultado,
+            classificacao,
+            instaladorNome: nomeJogador
+        }
+    });
+    toast(`Remoção registrada — resultado ${resultado.resultado} (dif. ${dificuldade}). Aguardando confirmação do Mestre.`, resultado.sucesso ? "critico-acerto" : "erro");
 }
 
 let contextoAtaque = null;
@@ -4668,6 +5334,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         return;
     }
 
+    // Desmaio Temporizado (Parte 5.5 do plano de automação dos materiais
+    // químicos — Sedativo nível 2/3/4): mesmo bloqueio de Desacordado
+    // acima, mas essa variante acorda SOZINHA quando a contagem zera
+    // (ver processarStatusInicioTurno/meuStatusDesmaioTemporizado) — sem
+    // precisar do Mestre clicar em "Acordar".
+    const statusDesmaioTemporizado = meuStatusDesmaioTemporizado();
+    if (statusDesmaioTemporizado) {
+        toast(`Você está DESMAIADO por ${statusDesmaioTemporizado.origem || statusDesmaioTemporizado.label || "efeito químico"} — inconsciente por mais ${statusDesmaioTemporizado.turnosRestantes} turno(s), não consegue agir.`, "erro");
+        return;
+    }
+
     // Imobilizar (CQC nível 4, manual): "impedindo completamente ataques
     // e movimentação" enquanto durar — diferente de Agarrar, bloqueia
     // QUALQUER golpe (não só alcance médio/longo). Verifica antes de tudo,
@@ -4878,6 +5555,14 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
                     dificuldade += 2;
                     notasSituacionaisLista.push(`${nomeAlvo} tem uma arte marcial — Briga de Rua contra arte marcial tem dificuldade +2`);
                 }
+                // Carga química em Spray (Parte 9 — Veículo de transporte,
+                // 1 ponto): -3 na dificuldade de DEFESA do alvo (não um
+                // bônus no teste do atacante, decisão do Mestre) — a nuvem
+                // é mais fácil de acertar que a agulha da Seringa.
+                if (it.quimico && it.quimico.tipoEntrega === "spray") {
+                    dificuldade -= 3;
+                    notasSituacionaisLista.push(`Carga em spray de ${it.nome}: -3 na dificuldade de defesa de ${nomeAlvo}`);
+                }
             }
         } else {
             const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
@@ -4918,6 +5603,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
                 if (nomePericia === "Briga de Rua" && alvoTemArteMarcialTreinada(npc.periciasNpc)) {
                     dificuldade += 2;
                     notasSituacionaisLista.push(`${nomeAlvo} tem uma arte marcial — Briga de Rua contra arte marcial tem dificuldade +2`);
+                }
+                // Carga química em Spray (Parte 9) — mesma regra da ficha
+                // acima: -3 na dificuldade de defesa do NPC alvo.
+                if (it.quimico && it.quimico.tipoEntrega === "spray") {
+                    dificuldade -= 3;
+                    notasSituacionaisLista.push(`Carga em spray de ${it.nome}: -3 na dificuldade de defesa de ${nomeAlvo}`);
                 }
             }
         }
@@ -5179,7 +5870,16 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             // (ver definirContraAtaquePendente em mestre.js).
             atacanteTipo, atacanteRefId, atacantePid,
             detalheRolagem, efeitoTexto:
-                (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : ""
+                (armaConfig.efeitoExtra && armaConfig.efeitoExtra.trim()) ? ` Efeito extra: ${armaConfig.efeitoExtra.trim()}.` : "",
+            // Carga química (dardo/lâmina envenenada — Parte 6.2 do plano
+            // de automação dos materiais químicos): viaja junto na reação
+            // pendente pra, se o golpe atravessar (não foi Esquivado/
+            // Aparado com sucesso), disparar it.quimico.efeitos no alvo —
+            // ver responder() em ficha.js, que lê isso de volta de
+            // combateAtivoCache.reacaoPendente depois que
+            // responderReacaoPendente (mestre.js) resolver.
+            quimicoEfeitos: (it.quimico && Array.isArray(it.quimico.efeitos) && it.quimico.efeitos.length) ? it.quimico.efeitos : null,
+            quimicoNomeItem: it.nome
         });
         const detalheAguardando = `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaCritico} Aguardando ${nomeAlvo} decidir entre Esquivar/Bloquear/Aparar/Levar o golpe.${notaAgarrado}\n${detalheRolagem}`;
         toast(detalheAguardando, criticoPositivo ? "critico-acerto" : "ok");
@@ -5309,6 +6009,23 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         }
     }
 
+    // Carga química (dardo/lâmina envenenada — Parte 6.2 do plano de
+    // automação dos materiais químicos): golpe atravessou sem passar
+    // pela reação pendente (arma de fogo, sem Esquiva/Bloqueio
+    // disponível, ou fora de combate com iniciativa) — dispara
+    // it.quimico.efeitos DIRETO no alvo que acabou de ser acertado,
+    // reaproveitando o mesmo despachante que consumirDroga/área já usam
+    // (mesma resolução alvoTipo/alvoId de participante.tipo/refId).
+    let notaQuimico = "";
+    const efeitosQuimicosArma = (it.quimico && Array.isArray(it.quimico.efeitos)) ? it.quimico.efeitos : [];
+    if (efeitosQuimicosArma.length) {
+        const resultadoQuimicoArma = await despacharEfeitosQuimicos(participante.tipo, participante.refId, efeitosQuimicosArma, it.nome);
+        notaQuimico = ` ☣️ Carga química de ${it.nome}: ${resultadoQuimicoArma.notas.join(" | ")}`;
+        if (resultadoQuimicoArma.modificadoresExtras.length) {
+            notaQuimico += " (penalidade de duração geral prevista — sem lista de efeitos ativos pra registrar automaticamente num alvo que não é quem atacou; aplique manualmente.)";
+        }
+    }
+
     // Tiro de arma de fogo não pode ser esquivado, aparado NEM bloqueado
     // (manual) — por isso o golpe que acerta vai sempre direto pro dano
     // cheio, sem reação nenhuma do alvo. "🔫 X foi baleado!" deixa isso
@@ -5334,8 +6051,8 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         ? ` 🦺 O colete freou o tiro, mas o impacto ainda causou dano CONTUNDENTE (${TIPOS_DANO.find(t => t.key === resultadoDano.tipoDanoFinalAjustado)?.label || resultadoDano.tipoDanoFinalAjustado}), ignorando o resto da redução.`
         : "";
     const detalheDano = resultadoDano.reducao > 0
-        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}\n${detalheRolagem}`
-        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}\n${detalheRolagem}`;
+        ? `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoBruto} (${tipoDanoLabel}) - ${resultadoDano.reducao} (redução) = ${resultadoDano.danoFinal} de dano aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}${notaQuimico}\n${detalheRolagem}`
+        : `${nomeAtacante} atacou ${nomeAlvo} com ${it.nome}. ACERTO! vs. dificuldade ${dificuldade}.${notaLocalMira}${notaSituacional}${notaBaleado} Dano${danoDadoTexto}: ${resultadoDano.danoFinal} (${tipoDanoLabel}) aplicado.${notaCritico}${notaFragil}${notaRecuperacao}${notaAgarrado} PV restante: ${resultadoDano.novoPv}.${efeitoTexto}${notaColete}${notaSangramento}${notaDilaceracao}${notaEfeitoLocal}${notaQuimico}\n${detalheRolagem}`;
 
     await registrarRolagem({ quem: nomeAtacante, modificador: modAtaque, resultado: resultadoDano.danoFinal, detalhe: detalheDano, critico: criticoPositivo ? "acerto" : null });
     toast(detalheDano, criticoPositivo ? "critico-acerto" : "ok");
@@ -8019,6 +8736,72 @@ function cenarioAtualDoPersonagem() {
     ) || null;
 }
 
+// ---------------------------------------------------------------------
+// Implantes/Próteses (Biomecânica) — Fase 3 do plano (ver
+// plano-implantes-biomecanica.txt): achar quem pode ser alvo da
+// cirurgia (instalar OU remover). Regra de ouro: ninguém opera a si
+// mesmo — sempre precisa de um segundo personagem no MESMO cenário do
+// instalador. Reusa cenarioAtualDoPersonagem() (acima) pra achar o
+// cenário de quem vai USAR a Ferramenta de Criação Biomecânica; a
+// partir daí, filtra os participantes tipo "ficha" (Mecânitos/NPC não
+// têm implante — fora de escopo, ver plano) e, pra cada candidato,
+// separa os implantes do inventário dele entre "pra instalar"
+// (instalado:false) e "pra remover" (instalado:true). Só monta os
+// dados — a UI que consome isso (modal Instalar/Remover) é a Fase 4,
+// ainda não implementada.
+// ---------------------------------------------------------------------
+
+// Lista de candidatos a paciente: participantes tipo "ficha" do
+// cenário atual do instalador, excluindo o próprio instalador (nunca
+// em si mesmo — regra-chave do plano). Devolve [] se o instalador não
+// está em nenhum cenário — a Fase 4 trata esse caso com um aviso,
+// mesmo padrão já usado por Armar Explosivo/Usar Químico em área.
+function candidatosCirurgiaImplante() {
+    const cenario = cenarioAtualDoPersonagem();
+    if (!cenario) return [];
+    const idAtual = modoNpc ? npcAtualId : fichaAtualId;
+    const tipoAtual = modoNpc ? "npc" : "ficha";
+    return Object.values(cenario.participantes || {})
+        .filter(p => p.tipo === "ficha" && !(tipoAtual === "ficha" && p.refId === idAtual));
+}
+
+// Implantes do paciente (fichaAlvoId), lidos via todasAsFichasCache —
+// não depende do paciente estar com a própria ficha aberta na tela.
+// Separa em "paraInstalar" (instalado:false — candidatos ao gatilho de
+// Instalar, Fase 4) e "paraRemover" (instalado:true — candidatos ao
+// gatilho de Remover, Fase 7). Cada item sai com o `id` do inventário
+// anexado (necessário pra Fase 4/7 gravarem qual implante a cirurgia
+// afeta no payload da Ação Pendente).
+function implantesDoPacienteParaCirurgia(fichaAlvoId) {
+    const fichaAlvo = todasAsFichasCache[fichaAlvoId];
+    const inventario = (fichaAlvo && fichaAlvo.inventario) || {};
+    const implantes = Object.entries(inventario)
+        .filter(([, it]) => it && it.tag === "biomecanica" && it.implante)
+        .map(([id, it]) => ({ id, ...it }));
+    return {
+        paraInstalar: implantes.filter(it => !it.implante.instalado),
+        paraRemover: implantes.filter(it => it.implante.instalado)
+    };
+}
+
+// Fase 10.1: contagem de implantes instalados vs. limite (nível do
+// personagem) de UMA ficha qualquer (própria ou de outro personagem,
+// lida via todasAsFichasCache) — mesma conta da Fase 9.3
+// (subtipoContaComoImplante: chip não ocupa vaga), só que reaproveitável
+// pra checar o LIMITE de um paciente antes mesmo de abrir o select de
+// implante no modal de Instalar (evita rolar Biomecânica pra descobrir
+// só depois que não cabia). acimaDoLimite aqui é "sem vaga sobrando"
+// (contam >= nivel), diferente do aviso vermelho da Fase 9.3 no próprio
+// painel (que só acende quando já ultrapassou de fato, contam > nivel).
+function implantesContagemELimite(fichaObj) {
+    const inventario = (fichaObj && fichaObj.inventario) || {};
+    const contam = Object.values(inventario)
+        .filter(it => it && it.tag === "biomecanica" && it.implante?.instalado && subtipoContaComoImplante(it.implante.subtipo))
+        .length;
+    const nivel = Number(fichaObj?.dados?.nivel) || 0;
+    return { contam, nivel, semVaga: contam >= nivel };
+}
+
 // Qual linha de dinheiro está com a caixinha de "quanto pegar" aberta
 // no momento (só 1 por vez, pra não poluir a tela) — guarda o id do
 // saldo de dinheiro do cenário (push key, único mesmo entre cenários
@@ -9221,6 +10004,198 @@ function configurarCampoSubstanciaVicio() {
 }
 
 // ---------------------------------------------------------------------
+// DESPACHANTE DE EFEITOS QUÍMICOS (it.quimico.efeitos) — Parte 8, item 5
+// do plano-automacao-materiais-quimicos-v3. Percorre o array gerado por
+// resolverNivelMaterial (dados-manual.js, um item por material com
+// pontos > 0 na receita, cada um já com sua `mecanica` resolvida — nível
+// + pontos extra + eficiência aumentada) e dispara os wrappers do motor
+// de status por turno (mestre.js) correspondentes, quando possível.
+//
+// Chamado por consumirDroga (autoconsumo) e pelo painel "Aplicar Efeito
+// Químico" (área/cenário) — sempre ALÉM do que esses dois fluxos já
+// fazem com efeitosDrogas/modificadores livres, nunca no lugar.
+//
+// Retorna { modificadoresExtras, notas }:
+// - modificadoresExtras: penalidadeTemporizada com turnos:"duracaoGeral"
+//   não tem contagem de turno própria — vira modificador comum
+//   ({alvo, valor}), pra somar na MESMA lista que efeitosDrogas já grava
+//   (hora-a-hora, resolvida por calcularModificadoresDrogasAtivas).
+// - notas: avisos pro Mestre sobre tudo que não dá pra automatizar
+//   (alvo fora de combate, escolha humana do Bioquímico, exceções
+//   narrativas do manual) — pra mostrar como toast/log.
+// ---------------------------------------------------------------------
+
+// penalidadeTemporizada isolada — usada tanto direto (mecanica.
+// penalidadeTemporizada) quanto dentro de testeImediato.seFalhar.
+async function despacharPenalidadeTemporizada(pt, origemLabel, participanteId, modificadoresExtras, notas) {
+    const alvos = Array.isArray(pt.alvos) ? pt.alvos : [pt.alvos];
+    if (pt.turnos === "duracaoGeral") {
+        alvos.forEach(alvo => modificadoresExtras.push({ alvo, valor: pt.valor }));
+        notas.push(`${origemLabel}: penalidade de ${pt.valor} em ${alvos.join(", ")} incorporada ao efeito (duração geral, hora-a-hora).`);
+    } else if (participanteId) {
+        await aplicarPenalidadeTemporizada(participanteId, alvos, pt.valor, pt.turnos, origemLabel);
+        notas.push(`${origemLabel}: penalidade de ${pt.valor} em ${alvos.join(", ")} por ${pt.turnos} turno(s) aplicada.`);
+    } else {
+        notas.push(`${origemLabel}: penalidade de ${pt.valor} em ${alvos.join(", ")} por ${pt.turnos} turno(s) — alvo fora do combate ativo, aplique manualmente.`);
+    }
+}
+
+// testeImediato — resolvido NA HORA (d20 + perícia do alvo, sem
+// depender de combate). Falha aplica a(s) consequência(s) de seFalhar
+// direto pelos wrappers certos, quando participanteId existe;
+// desmaioIndefinido/flagNarrativa/depoisFlag são sempre nota manual
+// (exceções do manual, Parte 5.2 do plano).
+async function despacharTesteImediato(ti, origemLabel, alvoTipo, alvoId, participanteId, modificadoresExtras, notas) {
+    const bruto = rolarD20();
+    const modAlvo = await buscarValorPericiaAlvo(alvoTipo, alvoId, ti.pericia);
+    const resultado = bruto + modAlvo;
+    const sucesso = resultado >= ti.dificuldade;
+    if (sucesso) {
+        notas.push(`${origemLabel}: teste de ${ti.pericia} (dif ${ti.dificuldade}): d20 (${bruto}) ${modAlvo >= 0 ? "+" : ""}${modAlvo} = ${resultado} — RESISTIU.`);
+        return;
+    }
+    notas.push(`${origemLabel}: teste de ${ti.pericia} (dif ${ti.dificuldade}): d20 (${bruto}) ${modAlvo >= 0 ? "+" : ""}${modAlvo} = ${resultado} — FALHOU.`);
+    const seFalhar = ti.seFalhar || {};
+    for (const [chave, valor] of Object.entries(seFalhar)) {
+        if (chave === "desmaioTemporizado") {
+            if (participanteId) {
+                await aplicarDesmaioTemporizado(participanteId, valor.turnos, origemLabel);
+                notas.push(`${origemLabel}: desmaiado por ${valor.turnos} turno(s).`);
+            } else {
+                notas.push(`${origemLabel}: deveria desmaiar por ${valor.turnos} turno(s) — alvo fora do combate ativo, aplique manualmente.`);
+            }
+        } else if (chave === "perdeAcaoTemporizado") {
+            if (participanteId) {
+                await aplicarPerdaAcaoTemporizada(participanteId, valor.turnos, origemLabel);
+                notas.push(`${origemLabel}: perde 1 ação por turno durante ${valor.turnos} turno(s).`);
+            } else {
+                notas.push(`${origemLabel}: deveria perder 1 ação por turno durante ${valor.turnos} turno(s) — alvo fora do combate ativo, aplique manualmente.`);
+            }
+        } else if (chave === "penalidadeTemporizada") {
+            await despacharPenalidadeTemporizada(valor, origemLabel, participanteId, modificadoresExtras, notas);
+        } else if (chave === "desmaioIndefinido") {
+            notas.push(`${origemLabel}: desmaio INDEFINIDO até tratamento médico especializado — sem timer automático, aplique manualmente.`);
+        } else if (chave === "flagNarrativa") {
+            notas.push(`${origemLabel}: ${valor} — nota narrativa, sem automação.`);
+        } else if (chave === "depoisFlag") {
+            const alvosFlag = Array.isArray(valor.alvos) ? valor.alvos.join(", ") : "";
+            notas.push(`${origemLabel}: efeito posterior — ${valor.valor} em ${alvosFlag}${valor.ateFimDeCena ? " até o fim da cena" : ""} — nota narrativa/manual.`);
+        } else {
+            notas.push(`${origemLabel}: consequência "${chave}" não reconhecida pelo despachante — revise manualmente.`);
+        }
+    }
+}
+
+// testeAtrasado — precisa de participanteId (agenda via
+// aplicarTesteAtrasado). O motor de mestre.js só aceita UMA
+// consequência estrutural encadeável automaticamente (ver
+// processarStatusInicioTurno); o resto do seFalhar vira nota registrada
+// já no momento do disparo, não quando o teste eventualmente resolver.
+async function despacharTesteAtrasado(ta, origemLabel, participanteId, notas) {
+    if (!participanteId) {
+        notas.push(`${origemLabel}: teste de ${ta.pericia} (dif ${ta.dificuldade}) após ${ta.turnos} turno(s) — alvo fora do combate ativo, sem contagem automática possível, acompanhe manualmente.`);
+        return;
+    }
+    const seFalhar = ta.seFalhar || {};
+    let statusEncadeavel = null;
+    let chaveUsada = null;
+    if (seFalhar.desmaioTemporizado) {
+        statusEncadeavel = { tipo: "desmaio_temporizado", label: "Desmaiado", turnosRestantes: seFalhar.desmaioTemporizado.turnos, origem: origemLabel };
+        chaveUsada = "desmaioTemporizado";
+    } else if (seFalhar.perdeAcaoTemporizado) {
+        statusEncadeavel = { tipo: "perde_acao_temporizado", label: "Perda de ação (efeito psicotrópico)", turnosRestantes: seFalhar.perdeAcaoTemporizado.turnos, origem: origemLabel };
+        chaveUsada = "perdeAcaoTemporizado";
+    } else if (seFalhar.penalidadeTemporizada && seFalhar.penalidadeTemporizada.turnos !== "duracaoGeral") {
+        const pt = seFalhar.penalidadeTemporizada;
+        statusEncadeavel = { tipo: "penalidade_temporizada", label: origemLabel, turnosRestantes: pt.turnos, alvos: Array.isArray(pt.alvos) ? pt.alvos : [pt.alvos], valor: pt.valor, origem: origemLabel };
+        chaveUsada = "penalidadeTemporizada";
+    }
+
+    await aplicarTesteAtrasado(participanteId, ta.turnos, ta.pericia, ta.dificuldade, origemLabel, statusEncadeavel, false);
+    notas.push(`${origemLabel}: teste atrasado agendado — em ${ta.turnos} turno(s), ${ta.pericia} vs dif ${ta.dificuldade}.${statusEncadeavel ? ` Se falhar: ${statusEncadeavel.label}.` : ""}`);
+
+    Object.entries(seFalhar).forEach(([chave, valor]) => {
+        if (chave === chaveUsada) return;
+        if (chave === "desmaioIndefinido") {
+            notas.push(`${origemLabel}: se o teste atrasado falhar, o manual também prevê desmaio INDEFINIDO — não encadeado automaticamente, ajuste manualmente se necessário.`);
+        } else if (chave === "flagNarrativa") {
+            notas.push(`${origemLabel}: se o teste atrasado falhar, nota narrativa adicional: ${valor}.`);
+        } else if (chave === "depoisFlag") {
+            notas.push(`${origemLabel}: se o teste atrasado falhar, efeito posterior adicional (${JSON.stringify(valor)}) — não encadeado automaticamente, ajuste manualmente.`);
+        } else if (chave === "penalidadeTemporizada") {
+            const alvosPt = Array.isArray(valor.alvos) ? valor.alvos.join(", ") : valor.alvos;
+            notas.push(`${origemLabel}: se o teste atrasado falhar, também prevê penalidade de duração geral (${valor.valor} em ${alvosPt}) — não encadeada automaticamente (depende do resultado do teste), ajuste manualmente se falhar.`);
+        } else {
+            notas.push(`${origemLabel}: se o teste atrasado falhar, consequência adicional "${chave}" não encadeada automaticamente — ajuste manualmente.`);
+        }
+    });
+}
+
+async function despacharEfeitosQuimicos(alvoTipo, alvoId, efeitos, nomeItem) {
+    const modificadoresExtras = [];
+    const notas = [];
+    if (!Array.isArray(efeitos) || !efeitos.length) return { modificadoresExtras, notas };
+
+    const participanteId = participanteIdPorAlvo(alvoTipo, alvoId);
+
+    for (const entrada of efeitos) {
+        // Corrosivo, Catalizador níveis 1-3, Oxidante: sem `mecanica`
+        // automatizável (ver EFEITOS_MATERIAL_QUIMICO, dados-manual.js).
+        if (!entrada || !entrada.mecanica) continue;
+        const mecanica = entrada.mecanica;
+        const origemLabel = `${nomeItem} (${entrada.material})`;
+
+        if (mecanica.danoImediato) {
+            const resultado = await aplicarDano(alvoTipo, alvoId, mecanica.danoImediato.valor, "especial");
+            notas.push(`${origemLabel}: ${mecanica.danoImediato.valor} de dano imediato. PV restante de ${resultado.nomeAlvo}: ${resultado.novoPv}.`);
+        }
+        // efeitoColateral.danoImediato (Bioquímico) — incondicional,
+        // adicionado por resolverNivelMaterial fora da tabela estática.
+        if (mecanica.efeitoColateral && mecanica.efeitoColateral.danoImediato) {
+            const resultado = await aplicarDano(alvoTipo, alvoId, mecanica.efeitoColateral.danoImediato.valor, "especial");
+            notas.push(`${origemLabel} (efeito colateral): ${mecanica.efeitoColateral.danoImediato.valor} de dano imediato. PV restante de ${resultado.nomeAlvo}: ${resultado.novoPv}.`);
+        }
+
+        if (mecanica.danoContinuo) {
+            const dc = mecanica.danoContinuo;
+            if (dc.semTimer) {
+                notas.push(`${origemLabel}: dano contínuo de ${dc.valor}/turno enquanto durar a cena — sem contagem de turnos automatizável, acompanhe manualmente.`);
+            } else if (participanteId) {
+                await aplicarDanoContinuoQuimico(participanteId, dc.valor, dc.turnos, origemLabel, dc.tipoDanoKey || null);
+                notas.push(`${origemLabel}: dano contínuo aplicado — ${dc.valor}/turno por ${dc.turnos} turno(s).`);
+            } else {
+                notas.push(`${origemLabel}: dano contínuo de ${dc.valor}/turno por ${dc.turnos} turno(s) — alvo fora do combate ativo, aplique manualmente.`);
+            }
+        }
+
+        if (mecanica.penalidadeTemporizada) {
+            await despacharPenalidadeTemporizada(mecanica.penalidadeTemporizada, origemLabel, participanteId, modificadoresExtras, notas);
+        }
+
+        if (mecanica.testeImediato) {
+            await despacharTesteImediato(mecanica.testeImediato, origemLabel, alvoTipo, alvoId, participanteId, modificadoresExtras, notas);
+        }
+
+        if (mecanica.testeAtrasado) {
+            await despacharTesteAtrasado(mecanica.testeAtrasado, origemLabel, participanteId, notas);
+        }
+
+        // curaEscolha (Bioquímico) — escolha humana, nunca automático.
+        if (mecanica.curaEscolha) {
+            const ce = mecanica.curaEscolha;
+            const duracao = ce.duracaoCena ? "até o fim da cena" : `${ce.duracaoTurnos} turno(s)`;
+            notas.push(`${origemLabel}: alvo escolhe ${ce.quantidadeEscolhas} efeito(s) (${duracao}) entre: ${(ce.opcoes || []).join(" | ")}. Escolha do jogador — aplique manualmente.`);
+        }
+
+        // explosivo / modificaOutroMaterial (Catalizador/Explosivo dentro
+        // da receita): fora de escopo, já coberto por outro sistema ou
+        // por regra de criação — ignorado silenciosamente.
+    }
+
+    return { modificadoresExtras, notas };
+}
+
+// ---------------------------------------------------------------------
 // CONSUMIR DROGA (item de inventário com tag "droga")
 // ---------------------------------------------------------------------
 // Consumir um item de droga faz duas coisas:
@@ -9253,7 +10228,7 @@ async function consumirDroga(itemId) {
         return;
     }
     const diaAtual = calendarioAtual.diaIndice;
-    const modificadoresDoItem = (item.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
+    let modificadoresDoItem = (item.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
 
     const atualizacoes = {};
 
@@ -9262,6 +10237,25 @@ async function consumirDroga(itemId) {
     if (idDesvantagem) {
         fichaAtual.desvantagens[idDesvantagem].diaIndiceUltimoUso = diaAtual;
         atualizacoes[`${caminhoBase()}/desvantagens/${idDesvantagem}/diaIndiceUltimoUso`] = diaAtual;
+    }
+
+    // 1.5) Despacha it.quimico.efeitos (autoconsumo — alvo é quem
+    // consumiu), se o item carregar algum (normalmente só itens tag
+    // "produto_quimico", mas o campo é preservado em qualquer tag pela
+    // normalização — ver normalizacao.js). Penalidades de duração geral
+    // viram modificador comum, somado à MESMA lista que efeitosDrogas já
+    // grava logo abaixo — Parte 8, item 5.3 do plano-automacao-materiais-
+    // quimicos-v3.
+    let notasQuimico = [];
+    const efeitosQuimicosItem = (item.quimico && Array.isArray(item.quimico.efeitos)) ? item.quimico.efeitos : [];
+    if (efeitosQuimicosItem.length) {
+        const alvoTipo = modoNpc ? "npc" : "ficha";
+        const alvoIdAtual = idAtivo();
+        const resultadoQuimico = await despacharEfeitosQuimicos(alvoTipo, alvoIdAtual, efeitosQuimicosItem, item.nome);
+        if (resultadoQuimico.modificadoresExtras.length) {
+            modificadoresDoItem = [...modificadoresDoItem, ...resultadoQuimico.modificadoresExtras];
+        }
+        notasQuimico = resultadoQuimico.notas;
     }
 
     // 2) Registra o efeito ativo — direto dos modificadores editáveis do
@@ -9305,6 +10299,10 @@ async function consumirDroga(itemId) {
         if (idDesvantagem) partesAviso.push("abstinência zerada");
         if (notaDuracao) partesAviso.push(notaDuracao);
         toast(`${item.nome} consumido${partesAviso.length ? " — " + partesAviso.join(", ") : ""}.`);
+        // Avisos do despachante de efeitos químicos (dano imediato já
+        // aplicado, testes já resolvidos, o que precisa de ajuste manual
+        // etc.) — mesmo padrão de notasStatus do avanço de turno.
+        notasQuimico.forEach(nota => toast(nota, "erro"));
     } catch (e) {
         toast("Não foi possível consumir o item. Tente de novo.", "erro");
     }
@@ -9863,7 +10861,7 @@ function renderizarReceitas() {
         ? `<p class="entity-list-empty" style="cursor:default;">Nenhuma perícia de criação de item (Mecânica Automotiva, Armeiro, Ofícios Utilitários, Explosivos, Eletrônica ou Química) cadastrada nesta ficha ainda.</p>`
         : entradasCriacao.map(p => {
             const nivelPericia = Number(p.nivel) || 0;
-            const calcPericia = calcularTotalPericia(p, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(p.nome));
+            const calcPericia = calcularTotalPericia(p, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(p.nome), limiteRolagemCriacaoParaPericia(p.nome));
 
             // Um "slot" por nível de 1 até o nível atual da perícia — cada
             // um comporta exatamente 1 receita gratuita (origem "livre").
@@ -9938,7 +10936,7 @@ function renderizarReceitas() {
                                     ${item?.descricao ? `<span class="entity-sub">${escapeHtml(item.descricao)}</span>` : (r?.descricao ? `<span class="entity-sub">${escapeHtml(r.descricao)}</span>` : "")}
                                 </div>
                                 <div class="entity-badges">
-                                    ${r ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(r.periciaVinculada)}" data-modificador="${calcularTotalPericia(Object.values(fichaAtual.pericias || {}).find(pp => pp.nome === r.periciaVinculada) || { nome: r.periciaVinculada, nivel: 0 }, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(r.periciaVinculada)).total}" title="Rolar ${escapeHtml(r.periciaVinculada)} pra criar">🎲 Criar</button>` : ""}
+                                    ${r ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(r.periciaVinculada)}" data-modificador="${calcularTotalPericia(Object.values(fichaAtual.pericias || {}).find(pp => pp.nome === r.periciaVinculada) || { nome: r.periciaVinculada, nivel: 0 }, fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(r.periciaVinculada), limiteRolagemCriacaoParaPericia(r.periciaVinculada)).total}" title="Rolar ${escapeHtml(r.periciaVinculada)} pra criar">🎲 Criar</button>` : ""}
                                     ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                                 </div>
                                 <span class="hint-inline">Módulo de detonação — gratuita — travada${isMestre ? "" : " (só o Mestre pode trocar)"}</span>
@@ -10182,6 +11180,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
         <div class="modal-field">
             <label for="receita-nivel">Nível do item (nível mínimo da perícia pra criar)</label>
             <select id="receita-nivel"></select>
+            <p class="hint" id="receita-hint-requisito-engenharia"></p>
         </div>
         <div class="modal-field">
             <label for="receita-dificuldade">Dificuldade (opcional)</label>
@@ -10308,6 +11307,22 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
     selectPericia.addEventListener("change", atualizarAvisoVinculo);
     atualizarAvisoVinculo();
 
+    // Aviso ao vivo do requisito de Engenharia (ver atendeRequisitoCriarReceita,
+    // dados-manual.js) — só faz sentido pra receita NOVA com uma ficha
+    // de personagem de verdade no contexto (mesmas condições checadas
+    // de novo, pra valer, no clique de "Criar receita" mais abaixo).
+    const hintRequisito = modal.querySelector("#receita-hint-requisito-engenharia");
+    function atualizarAvisoRequisitoEngenharia() {
+        if (!hintRequisito) return;
+        if (receitaExistente || !fichaAtual || (isMestre && godmodeAtivo)) { hintRequisito.innerText = ""; return; }
+        const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
+        hintRequisito.innerText = requisito.ok ? "" : `⚠️ ${requisito.motivo}`;
+        hintRequisito.classList.toggle("hint-alerta", !requisito.ok);
+    }
+    selectNivel.addEventListener("change", atualizarAvisoRequisitoEngenharia);
+    selectPericia.addEventListener("change", atualizarAvisoRequisitoEngenharia);
+    atualizarAvisoRequisitoEngenharia();
+
     // Ingredientes: cada linha é { material, quantidade }, com o material
     // restrito à lista fechada MATERIAIS_CRIACAO (seção "Materiais" do
     // Manual) — nada de texto livre, pra manter a receita sempre
@@ -10413,6 +11428,11 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
             abrirModalNovo("itensGlobais");
         } else {
             abrirModalNovo("inventario");
+            // Ver declaração de criarItemApenasNoBanco: setado DEPOIS de
+            // abrirModalNovo porque ele reseta a flag pra false no início
+            // (proteção padrão contra vazar pra próxima abertura do
+            // modal) — aqui é exatamente o fluxo que precisa dela true.
+            criarItemApenasNoBanco = true;
         }
         // Pré-preenche depois que o modal de item já montou os campos
         // (abrirModalNovo/prepararModalParaLista rodam de forma síncrona
@@ -10421,6 +11441,19 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
             if (el.modalNome) el.modalNome.value = nomeRascunho;
             if (!isMestre && el.modalCampoSalvarBanco && el.modalCampoSalvarBanco.style.display !== "none") {
                 el.modalSalvarBanco.checked = true;
+                // Travado marcado: neste fluxo o ponto INTEIRO é ir pro
+                // Banco Global (catálogo) — desmarcar não faria sentido
+                // (o item não teria pra onde ir).
+                el.modalSalvarBanco.disabled = true;
+                if (el.modalCampoSalvarBanco) {
+                    let avisoSoBanco = el.modalCampoSalvarBanco.querySelector(".hint-item-so-banco");
+                    if (!avisoSoBanco) {
+                        avisoSoBanco = document.createElement("p");
+                        avisoSoBanco.className = "hint hint-item-so-banco";
+                        el.modalCampoSalvarBanco.appendChild(avisoSoBanco);
+                    }
+                    avisoSoBanco.innerText = "Este item é só o protótipo da receita, pro Banco Global (catálogo) — não entra no seu inventário.";
+                }
             }
         }, 0);
     });
@@ -10433,6 +11466,16 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
         if (!itemGlobalIdVinculado && PERICIAS_QUE_EXIGEM_ITEM_VINCULADO.includes(selectPericia.value)) {
             toast(`Vincule essa receita a um item real do Banco Global antes de salvar — sem isso, o item criado por ela não vai ter tag, bônus nem efeito nenhum. Cadastre o item primeiro (pelo "+ Adicionar item" com "Salvar no Banco Global" marcado) e depois vincule pelo nome aqui.`, "erro");
             return;
+        }
+        // Requisito de Engenharia (só pra AUTORAR receita nova — editar
+        // uma já existente é só corrigir texto, não re-desenhar o
+        // esquema do zero; e só quando há uma ficha de personagem de
+        // verdade no contexto — Mestre mexendo direto na Biblioteca de
+        // Receitas sem ficha ativa, ou em godmode, ignora essa trava,
+        // mesmo padrão de atendeRequisitoPericia em salvarPericiaDoModal).
+        if (!receitaExistente && fichaAtual && !(isMestre && godmodeAtivo)) {
+            const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
+            if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
         }
         const nomeCriador = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
         const receita = {
@@ -11945,12 +12988,14 @@ function abrirModalNovo(lista) {
         return;
     }
     modalContexto = { lista, id: null };
+    criarItemApenasNoBanco = false;
     prepararModalParaLista(lista, null);
     el.modal.classList.add("active");
 }
 
 function abrirModalEdicao(lista, id) {
     modalContexto = { lista, id };
+    criarItemApenasNoBanco = false;
     const objeto = lista === "itensGlobais"
         ? itensGlobaisCache.find(it => it.id === id)
         : fichaAtual[lista] && fichaAtual[lista][id];
@@ -11983,6 +13028,13 @@ function fecharModal() {
 function esconderTodosCamposEspeciais() {
     el.modalItemBancoOpcoes.style.display = "none";
     el.modalCampoSalvarBanco.style.display = "none";
+    // Reset do estado especial deixado pelo fluxo "+ Criar item no Banco
+    // Global" da receita (ver criarItemApenasNoBanco) — sem isso, o
+    // checkbox travado/o aviso ficavam grudados pra qualquer próximo
+    // "+ Adicionar item" comum que reusasse este mesmo modal.
+    el.modalSalvarBanco.disabled = false;
+    const avisoSoBancoAntigo = el.modalCampoSalvarBanco.querySelector(".hint-item-so-banco");
+    if (avisoSoBancoAntigo) avisoSoBancoAntigo.remove();
     el.modalCampoCategoriaPericia.style.display = "none";
     el.modalCampoPericiaBusca.style.display = "none";
     el.modalCampoNivel.style.display = "none";
@@ -12007,6 +13059,7 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoMaterialQuantidade.style.display = "none";
     el.modalConfigArma.style.display = "none";
     el.modalConfigExplosivo.style.display = "none";
+    el.modalConfigImplante.style.display = "none";
     el.modalConfigReducaoDano.style.display = "none";
     el.modalCampoSubstanciaVicio.style.display = "none";
     el.modalCampoTipoVeiculo.style.display = "none";
@@ -12385,6 +13438,12 @@ function prepararModalItem(existente, ehBanco) {
     el.modalCampoSalvarBanco.style.display = (!ehBanco) ? "flex" : "none";
     el.modalSalvarBanco.checked = false;
 
+    // Toda vez que o modal reabre (item novo ou outro item existente), a
+    // checkbox de "carga química" volta a refletir o que está salvo no
+    // item em vez do que sobrou de uma edição anterior na mesma sessão
+    // do modal (ver dataset.tocado em atualizarCamposPorTag).
+    delete el.modalArmaCargaQuimica.dataset.tocado;
+
     if (existente) {
         el.modalNome.value = existente.nome || "";
         el.modalTag.value = existente.tag || "";
@@ -12397,7 +13456,7 @@ function prepararModalItem(existente, ehBanco) {
         } else {
             el.modalCategoriaBanco.value = existente.categoriaBanco || "";
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas, existente.quimico);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas, existente.quimico, existente.limitarRolagemPorNivel, existente.implante);
         el.modalEquipavel.checked = !!existente.equipavel;
         // Reavalia com o checkbox "equipável" já no valor certo (a
         // chamada acima roda antes dessa linha, então via com o valor
@@ -12472,7 +13531,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas, it.quimico);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas, it.quimico, it.limitarRolagemPorNivel, it.implante);
                 el.modalEquipavel.checked = !!it.equipavel;
                 atualizarCampoJaEquipar();
                 el.modalItemBancoOpcoes.style.display = "none";
@@ -12696,7 +13755,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual, quimicoConfigAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual, quimicoConfigAtual, limitarRolagemAtual, implanteConfigAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma" e
     // "Explosivo": as duas já são sempre equipáveis por natureza (ver
@@ -12725,6 +13784,14 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     const temNivel = tagTemNivel(tagKey);
     el.modalCampoNivelTag.style.display = temNivel ? "flex" : "none";
     if (temNivel) el.modalNivelTag.value = nivelTag || 1;
+
+    // Checkbox "Limitar rolagem" — só pra tags do manual onde o nível do
+    // item de fato limita a rolagem da perícia (ver
+    // tagPermiteLimiteRolagemPorNivel em dados-manual.js).
+    const permiteLimiteRolagem = temNivel && tagPermiteLimiteRolagemPorNivel(tagKey);
+    el.modalCampoLimitarRolagem.style.display = permiteLimiteRolagem ? "flex" : "none";
+    if (permiteLimiteRolagem) el.modalLimitarRolagem.checked = !!limitarRolagemAtual;
+    else el.modalLimitarRolagem.checked = false;
 
     // Carregador — capacidade máxima é definida na criação do item.
     const exigeCapacidade = tagExigeCapacidadeCarregador(tagKey);
@@ -12890,6 +13957,38 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     const armaOuExplosivo = ehArmaOuExplosivo(tagKey);
     const explosivoItem = ehExplosivo(tagKey);
     const arma = ehArma(tagKey);
+    // Arma branca (não-fogo) — condição repetida aqui (igual a
+    // `ehArmaBranca` mais abaixo, que só é calculada DEPOIS do bloco
+    // químico) porque a checkbox de "carga química" precisa saber se
+    // mostra ANTES de chegar lá. Perícia vinculada já está populada no
+    // select nesse ponto (ver bloco de perícia vinculada, logo acima).
+    const ehArmaBrancaQuimico = arma && exigePericia && !ehArmaDeFogo(el.modalPericiaUso.value);
+    el.modalCampoCargaQuimica.style.display = ehArmaBrancaQuimico ? "flex" : "none";
+    if (ehArmaBrancaQuimico) {
+        // Só reseta o checkbox a partir do que já está salvo quando o
+        // modal está sendo (re)aberto para este item — dataset.tocado
+        // marca que a pessoa já mexeu manualmente nele nesta sessão do
+        // modal, pra não desmarcar sem querer ao trocar outro campo que
+        // também chama atualizarCamposPorTag.
+        if (!el.modalArmaCargaQuimica.dataset.tocado) {
+            el.modalArmaCargaQuimica.checked = !!(quimicoConfigAtual && Array.isArray(quimicoConfigAtual.efeitos) && quimicoConfigAtual.efeitos.length);
+        }
+        if (!el.modalArmaCargaQuimica.dataset.listener) {
+            el.modalArmaCargaQuimica.addEventListener("change", () => {
+                el.modalArmaCargaQuimica.dataset.tocado = "1";
+                const mostrar = el.modalArmaCargaQuimica.checked;
+                el.modalConfigQuimico.style.display = mostrar ? "block" : "none";
+                if (mostrar && !el.modalQuimicoMateriaisLista.children.length) {
+                    renderizarLinhasMateriaisQuimico(null);
+                    recalcularQuimicoAutoPreenchido();
+                }
+            });
+            el.modalArmaCargaQuimica.dataset.listener = "1";
+        }
+    } else {
+        el.modalArmaCargaQuimica.checked = false;
+        delete el.modalArmaCargaQuimica.dataset.tocado;
+    }
     el.modalConfigArma.style.display = armaOuExplosivo ? "block" : "none";
     if (armaOuExplosivo) {
         el.modalArmaDanoBase.value = (armaConfig && armaConfig.danoBase) ?? 0;
@@ -12947,17 +14046,69 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
         el.modalExplosivoModulo.value = (armaConfig && armaConfig.moduloDetonacao) || "";
     }
 
-    // Configuração do Produto Químico (ver plano-quimicos-cenario.txt) —
-    // só pra tag "produto_quimico". Raio/Dificuldade de uso/Tipo de
-    // efeito são campos próprios (it.quimico); Perícia, Modificadores
-    // automáticos e Descrição (duração em horas) continuam vindo dos
-    // campos genéricos de sempre, tratados mais abaixo/fora desta função.
+    // Configuração do implante (manual pg. 84-88 — ver plano-implantes-
+    // biomecanica.txt) — só pra tag "biomecanica". Select de subtipo
+    // popula uma vez só (mesmo padrão do select de módulo de detonação
+    // acima); dificuldade de instalar e funções especiais são sempre
+    // re-sincronizados com o item.
+    const implanteItem = tagKey === "biomecanica";
+    el.modalConfigImplante.style.display = implanteItem ? "block" : "none";
+    if (implanteItem) {
+        if (!el.modalImplanteSubtipo.dataset.montado) {
+            SUBTIPOS_IMPLANTE.forEach(s => {
+                const opt = document.createElement("option");
+                opt.value = s.key;
+                opt.innerText = s.label;
+                el.modalImplanteSubtipo.appendChild(opt);
+            });
+            el.modalImplanteSubtipo.dataset.montado = "1";
+        }
+        el.modalImplanteSubtipo.value = (implanteConfigAtual && implanteConfigAtual.subtipo) || "";
+        el.modalImplanteDificuldadeInstalar.value = (implanteConfigAtual && implanteConfigAtual.dificuldadeInstalar) ?? 0;
+        el.modalImplanteFuncoesEspeciais.value = (implanteConfigAtual && implanteConfigAtual.funcoesEspeciais) || "";
+    }
+
+    // Configuração do Produto Químico (Parte 4 do plano de automação dos
+    // materiais químicos — ver plano-automacao-materiais-quimicos-v3.md):
+    // Raio continua campo próprio simples; Dificuldade de uso e Tipo de
+    // efeito agora são CALCULADOS a partir da receita por pontos de
+    // material (renderizarLinhasMateriaisQuimico/recalcularQuimicoAuto
+    // Preenchido logo abaixo), mas continuam editáveis à mão — dataset.
+    // autoGerado controla se o próximo recálculo pode sobrescrever o
+    // campo (ver listeners de "input" logo abaixo, que zeram a flag
+    // assim que a pessoa mexe direto no campo em vez de nos materiais).
+    // ehProdutoQuimico(tagKey) cobre o item "de área" de sempre;
+    // ehArmaBrancaQuimico && checkbox marcado cobre o dardo/lâmina
+    // envenenada novo (Parte 6.2). Os dois casos reaproveitam o mesmo
+    // bloco de UI e o mesmo campo it.quimico — só muda ONDE os efeitos
+    // são disparados depois (área via Mestre vs. direto no alvo ao
+    // acertar, ver resolverAtaque).
     const produtoQuimico = ehProdutoQuimico(tagKey);
-    el.modalConfigQuimico.style.display = produtoQuimico ? "block" : "none";
-    if (produtoQuimico) {
+    const armaComCargaQuimica = ehArmaBrancaQuimico && el.modalArmaCargaQuimica.checked;
+    el.modalConfigQuimico.style.display = (produtoQuimico || armaComCargaQuimica) ? "block" : "none";
+    if (produtoQuimico || armaComCargaQuimica) {
         el.modalQuimicoRaio.value = (quimicoConfigAtual && quimicoConfigAtual.raio) ?? 0;
-        el.modalQuimicoDificuldadeUsar.value = (quimicoConfigAtual && quimicoConfigAtual.dificuldadeUsar) ?? 0;
-        el.modalQuimicoTipoEfeito.value = (quimicoConfigAtual && quimicoConfigAtual.tipoEfeito) || "";
+        renderizarLinhasMateriaisQuimico(quimicoConfigAtual && quimicoConfigAtual.efeitos, quimicoConfigAtual && quimicoConfigAtual.pontosVeiculoTransporte);
+        el.modalQuimicoDificuldadeUsar.dataset.autoGerado = "1";
+        el.modalQuimicoTipoEfeito.dataset.autoGerado = "1";
+        if (quimicoConfigAtual && quimicoConfigAtual.efeitos && quimicoConfigAtual.efeitos.length) {
+            // Item existente com receita já salva: mostra os valores que
+            // já estavam gravados (podem ter sido ajustados à mão) em vez
+            // de recalcular por cima — só passa a recalcular a partir da
+            // primeira mudança nos materiais (autoGerado continua "1").
+            el.modalQuimicoDificuldadeUsar.value = Number(quimicoConfigAtual.dificuldadeUsar) || 0;
+            el.modalQuimicoTipoEfeito.value = quimicoConfigAtual.tipoEfeito || "";
+        } else {
+            recalcularQuimicoAutoPreenchido();
+        }
+        if (!el.modalQuimicoDificuldadeUsar.dataset.listenerAuto) {
+            el.modalQuimicoDificuldadeUsar.addEventListener("input", () => { el.modalQuimicoDificuldadeUsar.dataset.autoGerado = "0"; });
+            el.modalQuimicoDificuldadeUsar.dataset.listenerAuto = "1";
+        }
+        if (!el.modalQuimicoTipoEfeito.dataset.listenerAuto) {
+            el.modalQuimicoTipoEfeito.addEventListener("input", () => { el.modalQuimicoTipoEfeito.dataset.autoGerado = "0"; });
+            el.modalQuimicoTipoEfeito.dataset.listenerAuto = "1";
+        }
     }
     // Tipo de dano extra — só faz sentido em arma branca (corpo a corpo,
     // não-fogo); arma de fogo dispara sempre o mesmo tipo de projétil.
@@ -13570,14 +14721,238 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     };
 }
 
+// Produto Químico (Parte 4 do plano de automação dos materiais
+// químicos) — as 9 linhas de material da receita, na mesma ordem de
+// EFEITOS_MATERIAL_QUIMICO (dados-manual.js, Parte 3). Cada linha:
+// nome fixo do material + pontos investidos (0 = fora da receita) e,
+// só quando aquele material tem uma "Eficiência aumentada" de verdade
+// automatizável (tabela.eficienciaAumentada.aplicar existe), um
+// checkbox "Qualidade Alta"; se o bônus for uma ESCOLHA entre dois
+// efeitos (Sedativo/Inflamável — ver dados-manual.js), some junto um
+// select com as duas opções, escondido até o checkbox ser marcado.
+const NOMES_MATERIAIS_QUIMICO = Object.keys(EFEITOS_MATERIAL_QUIMICO);
+
+// Rótulos das opções de "Eficiência aumentada" por escolha — só existe
+// pros materiais com tabela.eficienciaAumentada.tipo === "escolha" e
+// aplicar() que de fato usa o parâmetro de escolha (Sedativo e
+// Inflamável — Bioquímico tem tipo "automatico" porque aplicar() não
+// depende de escolha nenhuma, ver dados-manual.js).
+function opcoesEscolhaQuimico(nomeMaterial) {
+    if (nomeMaterial === "Sedativo") {
+        return [
+            { valor: "dificuldade", label: "+2 na dificuldade dos testes" },
+            { valor: "turnos", label: "Reduz os turnos do efeito" }
+        ];
+    }
+    if (nomeMaterial === "Inflamável") {
+        return [
+            { valor: "valor", label: "Dano extra" },
+            { valor: "turnos", label: "Duração extra" }
+        ];
+    }
+    return [];
+}
+
+// pontosVeiculoSalvo (Parte 9 — Veículo de transporte, automação da
+// entrega): "Veículo de transporte" não é um material de efeito — não
+// entra em EFEITOS_MATERIAL_QUIMICO/resolverNivelMaterial, então não
+// aparece em `efeitosSalvos` (it.quimico.efeitos). Os pontos investidos
+// nele são persistidos à parte, em it.quimico.pontosVeiculoTransporte
+// (ver lerConfigQuimicoDoModal), e passados aqui só pra restaurar o
+// valor do campo ao reabrir um item já salvo pra edição.
+function renderizarLinhasMateriaisQuimico(efeitosSalvos, pontosVeiculoSalvo) {
+    const porMaterial = {};
+    (efeitosSalvos || []).forEach(e => { if (e && e.material) porMaterial[e.material] = e; });
+    if (Number(pontosVeiculoSalvo) > 0) porMaterial[NOME_MATERIAL_VEICULO_TRANSPORTE] = { pontos: Number(pontosVeiculoSalvo) };
+
+    el.modalQuimicoMateriaisLista.innerHTML = "";
+    // Veículo de transporte primeiro — é a decisão "estrutural" da
+    // receita (seringa/spray/área, ver resolverTipoEntregaQuimico em
+    // dados-manual.js), então fica no topo da lista, antes dos materiais
+    // de efeito propriamente ditos.
+    [NOME_MATERIAL_VEICULO_TRANSPORTE, ...NOMES_MATERIAIS_QUIMICO].forEach(nome => {
+        const tabela = EFEITOS_MATERIAL_QUIMICO[nome];
+        const salvo = porMaterial[nome];
+        const temEficiencia = !!(tabela && tabela.eficienciaAumentada && typeof tabela.eficienciaAumentada.aplicar === "function");
+        const opcoesEscolha = temEficiencia && tabela.eficienciaAumentada.tipo === "escolha" ? opcoesEscolhaQuimico(nome) : [];
+        const ehEscolha = opcoesEscolha.length > 0;
+        const qualidadeAltaSalva = !!(salvo && salvo.qualidadeAlta);
+
+        const linha = document.createElement("div");
+        linha.className = "receita-ingrediente-linha quimico-material-linha";
+        linha.dataset.material = nome;
+        const ehVeiculo = nome === NOME_MATERIAL_VEICULO_TRANSPORTE;
+        linha.innerHTML = `
+            <span class="quimico-material-nome" style="flex:1;${ehVeiculo ? " font-weight:600;" : ""}">${escapeHtml(nome)}</span>
+            <input type="number" class="quimico-material-pontos" min="0" step="1" style="width:64px;" value="${salvo ? Number(salvo.pontos) || 0 : 0}" title="Pontos de ${escapeHtml(nome)}">
+            ${temEficiencia ? `
+                <label class="quimico-material-qualidade" style="display:flex; align-items:center; gap:4px; white-space:nowrap;">
+                    <input type="checkbox" class="quimico-material-qualidade-alta" ${qualidadeAltaSalva ? "checked" : ""}>
+                    Qualidade Alta
+                </label>
+            ` : ""}
+            ${ehEscolha ? `
+                <select class="quimico-material-escolha" style="${qualidadeAltaSalva ? "" : "display:none;"}">
+                    ${opcoesEscolha.map(op => `<option value="${op.valor}" ${salvo && salvo.escolhaEficiencia === op.valor ? "selected" : ""}>${escapeHtml(op.label)}</option>`).join("")}
+                </select>
+            ` : ""}
+        `;
+        el.modalQuimicoMateriaisLista.appendChild(linha);
+
+        linha.querySelector(".quimico-material-pontos").addEventListener("input", recalcularQuimicoAutoPreenchido);
+        const checkboxQualidade = linha.querySelector(".quimico-material-qualidade-alta");
+        if (checkboxQualidade) {
+            checkboxQualidade.addEventListener("change", () => {
+                const selectEscolha = linha.querySelector(".quimico-material-escolha");
+                if (selectEscolha) selectEscolha.style.display = checkboxQualidade.checked ? "" : "none";
+                recalcularQuimicoAutoPreenchido();
+            });
+        }
+        const selectEscolha = linha.querySelector(".quimico-material-escolha");
+        if (selectEscolha) selectEscolha.addEventListener("change", recalcularQuimicoAutoPreenchido);
+    });
+
+    // Dica de entrega (Parte 9 — Veículo de transporte): só informativa,
+    // nunca trava a tag escolhida lá em cima no modal (decisão do
+    // Mestre: sugestão pré-marcada, criador pode sobrescrever). Vive
+    // fora do loop porque não é uma linha de material, é o resultado
+    // calculado a partir da linha de Veículo de transporte.
+    let hintEntrega = el.modalQuimicoMateriaisLista.parentElement.querySelector("#quimico-hint-entrega");
+    if (!hintEntrega) {
+        hintEntrega = document.createElement("p");
+        hintEntrega.id = "quimico-hint-entrega";
+        hintEntrega.className = "hint";
+        el.modalQuimicoMateriaisLista.insertAdjacentElement("afterend", hintEntrega);
+    }
+    atualizarHintEntregaQuimico();
+}
+
+// Recalcula e escreve o texto de "Dica de entrega" a partir dos pontos
+// atuais na linha de Veículo de transporte — chamado toda vez que os
+// materiais mudam (ver recalcularQuimicoAutoPreenchido), pra ficar
+// sempre em dia com o que está no formulário.
+function atualizarHintEntregaQuimico() {
+    const hintEntrega = document.getElementById("quimico-hint-entrega");
+    if (!hintEntrega) return;
+    const pontosVeiculo = lerPontosVeiculoTransporteDoModal();
+    const entrega = resolverTipoEntregaQuimico(pontosVeiculo);
+    // Sugestão informativa só — nunca troca a tag/checkbox sozinha
+    // (decisão do Mestre: automático só como sugestão pré-marcada, o
+    // criador continua podendo sobrescrever). Nota: o pré-marcado real
+    // do checkbox "carga química" pra itens já salvos já existe desde
+    // antes (ver linha que faz `checked = !!(efeitos && efeitos.length)`
+    // ao reabrir o item) — não dava pra fazer o mesmo aqui em tempo real
+    // porque o bloco de materiais só fica visível DEPOIS do checkbox
+    // marcado (a receita e o checkbox se retroalimentariam).
+    const tagAtualSugere = entrega.tipo === "area" ? "produto_quimico" : "arma (com a caixa \"carga química\" marcada)";
+    hintEntrega.innerHTML = `💉 Com ${pontosVeiculo} ponto(s) em "${escapeHtml(NOME_MATERIAL_VEICULO_TRANSPORTE)}", esta receita é um(a) <strong>${escapeHtml(entrega.label)}</strong>: ${escapeHtml(entrega.descricao)} <em>(sugestão de tag: ${escapeHtml(tagAtualSugere)} — continua editável à mão.)</em>`;
+}
+
+// { pontos investidos SÓ na linha de "Veículo de transporte" } — usada
+// tanto pra montar it.quimico.pontosVeiculoTransporte/tipoEntrega
+// (lerConfigQuimicoDoModal) quanto pra atualizar a dica em tempo real.
+function lerPontosVeiculoTransporteDoModal() {
+    const linha = el.modalQuimicoMateriaisLista.querySelector(`.quimico-material-linha[data-material="${CSS.escape(NOME_MATERIAL_VEICULO_TRANSPORTE)}"]`);
+    if (!linha) return 0;
+    return Number(linha.querySelector(".quimico-material-pontos").value) || 0;
+}
+
+// { "Sedativo": 3, "Oxidante": 1, ... } — só materiais com pontos > 0,
+// direto das linhas do modal (mesmo formato que calcularDificuldade
+// Quimico/resolverNivelMaterial esperam, ver dados-manual.js).
+function lerPontosPorMaterialQuimicoDoModal() {
+    const pontosPorMaterial = {};
+    el.modalQuimicoMateriaisLista.querySelectorAll(".quimico-material-linha").forEach(linha => {
+        const pontos = Number(linha.querySelector(".quimico-material-pontos").value) || 0;
+        if (pontos > 0) pontosPorMaterial[linha.dataset.material] = pontos;
+    });
+    return pontosPorMaterial;
+}
+
+// Recalcula Dificuldade de uso e Tipo de efeito a partir das linhas de
+// material — só SOBRESCREVE cada campo se ele ainda não tiver sido
+// editado à mão desde a última vez que os materiais mudaram (ver
+// dataset.autoGerado, zerado pelos listeners de "input" desses dois
+// campos em atualizarCamposPorTag).
+function recalcularQuimicoAutoPreenchido() {
+    const pontosPorMaterial = lerPontosPorMaterialQuimicoDoModal();
+    const nomes = Object.keys(pontosPorMaterial);
+
+    if (el.modalQuimicoDificuldadeUsar.dataset.autoGerado !== "0") {
+        const dif = calcularDificuldadeQuimico(pontosPorMaterial);
+        el.modalQuimicoDificuldadeUsar.value = dif === null ? 0 : dif;
+    }
+    if (el.modalQuimicoTipoEfeito.dataset.autoGerado !== "0") {
+        // Veículo de transporte não é um efeito — some do resumo textual
+        // (fica só no rótulo de entrega, ver atualizarHintEntregaQuimico);
+        // sem isso, "Sedativo 3 + Tóxico 1" virava "Veículo de transporte
+        // 1 + Sedativo 3 + Tóxico 1", confuso pra quem lê o Tipo de Efeito.
+        const nomesEfeito = nomes.filter(n => n !== NOME_MATERIAL_VEICULO_TRANSPORTE);
+        const entregaResumo = resolverTipoEntregaQuimico(pontosPorMaterial[NOME_MATERIAL_VEICULO_TRANSPORTE] || 0);
+        const baseTexto = nomesEfeito.length
+            ? nomesEfeito.map(nome => `${nome} ${pontosPorMaterial[nome]}`).join(" + ")
+            : "";
+        el.modalQuimicoTipoEfeito.value = baseTexto ? `${baseTexto} (${entregaResumo.label})` : "";
+    }
+    atualizarHintEntregaQuimico();
+}
+
 // Produto Químico (ver plano-quimicos-cenario.txt) — monta it.quimico a
 // partir dos campos do bloco "Configuração do produto químico", mesmo
-// padrão de lerConfigArmaDoModal pra it.arma.
+// padrão de lerConfigArmaDoModal pra it.arma. `efeitos` (Parte 4) é o
+// array de resolverNivelMaterial(...) pra cada material com pontos > 0
+// na receita — é isso que os pontos de disparo (Parte 6, ainda não
+// fiada) vão ler pra aplicar o efeito de verdade num alvo.
+// Lê a Configuração do implante (tag "biomecanica" — ver
+// plano-implantes-biomecanica.txt). `existenteImplante` preserva os
+// campos que este modal não edita (instalado, testesAdaptacaoFeitos,
+// rejeicaoParcial, historico, quebrado — todos só mudam pela cirurgia,
+// nunca por aqui, mesmo padrão de "carregador" preservando
+// municaoAtual ao editar só a capacidadeMax). `quebrado` é gravado só
+// pela Fase 5 (confirmarAcaoPendente "instalar_implante", mestre.js)
+// numa falha crítica de instalação — ver Fase 9 do plano pra exibição.
+function lerConfigImplanteDoModal(existenteImplante) {
+    return {
+        subtipo: el.modalImplanteSubtipo.value || null,
+        dificuldadeInstalar: Number(el.modalImplanteDificuldadeInstalar.value) || 0,
+        funcoesEspeciais: el.modalImplanteFuncoesEspeciais.value.trim(),
+        instalado: existenteImplante?.instalado ?? false,
+        testesAdaptacaoFeitos: existenteImplante?.testesAdaptacaoFeitos ?? 0,
+        rejeicaoParcial: existenteImplante?.rejeicaoParcial ?? 0,
+        historico: existenteImplante?.historico || [],
+        quebrado: existenteImplante?.quebrado ?? false
+    };
+}
+
 function lerConfigQuimicoDoModal() {
+    const efeitos = [];
+    el.modalQuimicoMateriaisLista.querySelectorAll(".quimico-material-linha").forEach(linha => {
+        const nome = linha.dataset.material;
+        const pontos = Number(linha.querySelector(".quimico-material-pontos").value) || 0;
+        if (pontos <= 0) return;
+        const checkboxQualidade = linha.querySelector(".quimico-material-qualidade-alta");
+        const qualidadeAlta = !!(checkboxQualidade && checkboxQualidade.checked);
+        const selectEscolha = linha.querySelector(".quimico-material-escolha");
+        const escolha = (selectEscolha && qualidadeAlta) ? selectEscolha.value : null;
+        const resolvido = resolverNivelMaterial(nome, pontos, qualidadeAlta, escolha);
+        if (resolvido) efeitos.push(resolvido);
+    });
+    // Veículo de transporte (Parte 9): não vira uma entrada de `efeitos`
+    // (resolverNivelMaterial retorna null pra ele, sem tabela de efeito),
+    // então precisa ser persistido à parte pra: (a) restaurar o campo ao
+    // reabrir o item pra edição (ver renderizarLinhasMateriaisQuimico) e
+    // (b) decidir o tipo de entrega toda vez que o item for usado (ver
+    // resolverAtaque — modificador de dificuldade do spray).
+    const pontosVeiculoTransporte = lerPontosVeiculoTransporteDoModal();
+    const tipoEntrega = resolverTipoEntregaQuimico(pontosVeiculoTransporte);
     return {
         raio: Number(el.modalQuimicoRaio.value) || 0,
         dificuldadeUsar: Number(el.modalQuimicoDificuldadeUsar.value) || 0,
-        tipoEfeito: el.modalQuimicoTipoEfeito.value.trim()
+        tipoEfeito: el.modalQuimicoTipoEfeito.value.trim(),
+        efeitos,
+        pontosVeiculoTransporte,
+        tipoEntrega: tipoEntrega.tipo,
+        tipoEntregaLabel: tipoEntrega.label
     };
 }
 
@@ -13682,6 +15057,8 @@ async function salvarItemDoModal(id) {
     const exigeLocalProtegido = tagExigeLocalProtegido(tag);
     const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
     if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
+
+    if (tag === "biomecanica" && !el.modalImplanteSubtipo.value) { toast("Escolha o subtipo do implante.", "erro"); return; }
 
     const tamanho = el.modalTamanho.value || null;
 
@@ -13843,6 +15220,7 @@ async function salvarItemDoModal(id) {
         ativo: existenteItem.ativo ?? (modificadoresItem.length && tag !== "droga" ? false : true),
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
+        limitarRolagemPorNivel: tagPermiteLimiteRolagemPorNivel(tag) ? !!el.modalLimitarRolagem.checked : false,
         peso,
         pesoUnitario,
         volume,
@@ -13867,7 +15245,13 @@ async function salvarItemDoModal(id) {
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
         arma: ehArmaOuExplosivo(tag) ? lerConfigArmaDoModal(periciaUso, calibre, existenteItem.arma, tag) : null,
-        quimico: ehProdutoQuimico(tag) ? lerConfigQuimicoDoModal() : null,
+        quimico: (ehProdutoQuimico(tag) || (tag === "arma" && el.modalArmaCargaQuimica.checked)) ? lerConfigQuimicoDoModal() : null,
+        // Implante de Biomecânica (ver plano-implantes-biomecanica.txt).
+        // `instalado`/testes/rejeição/histórico nunca mudam por este
+        // modal — só pela cirurgia (Fase 4-8 do plano, ainda não
+        // implementada) — lerConfigImplanteDoModal preserva o que já
+        // existia em existenteItem.implante.
+        implante: tag === "biomecanica" ? lerConfigImplanteDoModal(existenteItem.implante) : null,
         carregador,
         projetil,
         // Equipável (checkbox independente da tag — ver atualizarCamposPorTag):
@@ -13919,12 +15303,35 @@ async function salvarItemDoModal(id) {
     // Roda com o `registro` já montado (não com o item antigo) porque a
     // edição pode ter mudado categoria/dentroDe/equipada/subtipoPorte
     // nesta mesma submissão.
-    if (!itemPodeSerLevadoSolto(fichaAtual, registro)) {
+    // Não se aplica ao protótipo de receita (criarItemApenasNoBanco):
+    // ele nunca chega a existir fisicamente na ficha, então "cabe na
+    // mão"/"guardado em algo" não faz sentido pra ele.
+    if (!criarItemApenasNoBanco && !itemPodeSerLevadoSolto(fichaAtual, registro)) {
         toast(`"${nome}" precisa estar numa mão, vestido/carregado, ou guardado dentro de um compartimento pra ficar em "levando consigo".`, "erro");
         return;
     }
 
     const idFinal = id || gerarIdLocal();
+    // Fluxo "+ Criar item no Banco Global" da receita (ver
+    // criarItemApenasNoBanco): este item é só o protótipo/catálogo pra
+    // vincular a receita — NÃO deve virar um item físico na mão do
+    // personagem. Pula a gravação em fichaAtual.inventario e vai direto
+    // pro Banco Global.
+    if (criarItemApenasNoBanco) {
+        criarItemApenasNoBanco = false;
+        const nomeJogador = fichaAtual?.config?.nomeExibicao || fichaAtualId;
+        try {
+            idBancoParaRetomarReceita = await salvarItemNoBanco(registro, nomeJogador);
+            toast(`Item "${nome}" salvo no Banco Global (não entrou no seu inventário).`);
+        } catch (erro) {
+            console.error("Falha ao salvar item no Banco Global:", erro);
+            toast(`Falha ao salvar "${nome}" no Banco Global (${erro.message || "erro desconhecido"}).`, "erro");
+            return; // não fecha o modal — deixa tentar de novo.
+        }
+        fecharModal();
+        return;
+    }
+
     if (!fichaAtual.inventario) fichaAtual.inventario = {};
     fichaAtual.inventario[idFinal] = registro;
     await update(ref(db, `${caminhoBase()}/inventario`), fichaAtual.inventario);
@@ -13995,6 +15402,8 @@ async function salvarItemBancoDoModal(id) {
     const localProtegido = exigeLocalProtegido ? el.modalLocalProtegido.value : null;
     if (exigeLocalProtegido && !localProtegido) { toast("Escolha o que este item protege.", "erro"); return; }
 
+    if (tag === "biomecanica" && !el.modalImplanteSubtipo.value) { toast("Escolha o subtipo do implante.", "erro"); return; }
+
     // Molde do Banco Global: carregador/carregadorId nunca guardam estado
     // de munição de uma ficha específica — só a capacidade máxima serve
     // de template; o resto começa zerado/vazio.
@@ -14019,6 +15428,7 @@ async function salvarItemBancoDoModal(id) {
         modificadores: lerModificadoresDoModal(),
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
+        limitarRolagemPorNivel: tagPermiteLimiteRolagemPorNivel(tag) ? !!el.modalLimitarRolagem.checked : false,
         peso,
         pesoUnitario,
         volume,
@@ -14038,7 +15448,13 @@ async function salvarItemBancoDoModal(id) {
         reducoesDano: tagPodeReduzirDano(tag) ? lerReducaoDanoDoModal() : [],
         localProtegido,
         arma: armaConfig,
-        quimico: ehProdutoQuimico(tag) ? lerConfigQuimicoDoModal() : null,
+        quimico: (ehProdutoQuimico(tag) || (tag === "arma" && el.modalArmaCargaQuimica.checked)) ? lerConfigQuimicoDoModal() : null,
+        // Molde do Banco Global de implante: nunca carrega estado de
+        // cirurgia de uma ficha específica (item copiado do banco pra
+        // uma ficha nasce sempre instalado:false, sem histórico) — por
+        // isso não passa nenhum existenteImplante aqui, diferente de
+        // salvarItemDoModal.
+        implante: tag === "biomecanica" ? lerConfigImplanteDoModal(null) : null,
         carregador,
         projetil,
         // Equipável — molde do Banco Global; item criado a partir dele
@@ -14907,6 +16323,196 @@ function renderizarSaude() {
     }
 }
 
+// =====================================================================
+// Implantes/Próteses (Biomecânica) — Fases 6 e 9 do plano (ver
+// plano-implantes-biomecanica.txt): painel na aba Saúde com os testes
+// de adaptação pós-cirurgia (Fase 6) e, agora, o contador de limite +
+// modificadores formatados (Fase 9.2/9.3). Diferente da cirurgia em si
+// (Fases 4/5/7/8), essa parte NÃO precisa de um segundo personagem nem
+// de confirmação do Mestre — é o próprio paciente rolando Constituição
+// sozinho, direto na própria ficha, então escreve direto em
+// fichas/{fichaAtualId}/inventario/{itemId}/implante sem passar por
+// Ação Pendente (mesmo espírito de tratarFerida em si mesmo, saude.js
+// Etapa 3 — a diferença é que aqui nem precisa de listener próprio, já
+// que implante mora no inventário e reaproveita o mesmo snapshot de
+// fichaAtual que o resto da tela usa).
+// =====================================================================
+
+// Lê os implantes já INSTALADOS (instalado:true) do inventário da
+// própria fichaAtual — diferente de implantesDoPacienteParaCirurgia
+// (Fase 3), que lê de todasAsFichasCache pra achar implantes de OUTRO
+// personagem (candidato à cirurgia). Aqui é sempre a ficha aberta na
+// tela (jogador vendo a própria, ou Mestre vendo a de alguém).
+function implantesInstaladosDaFichaAtual() {
+    const inventario = (fichaAtual && fichaAtual.inventario) || {};
+    return Object.entries(inventario)
+        .filter(([, it]) => it && it.tag === "biomecanica" && it.implante && it.implante.instalado)
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+function renderizarImplantes() {
+    if (!el.implantesLista) return;
+
+    if (modoNpc) {
+        if (el.implantesContador) el.implantesContador.innerText = "";
+        el.implantesLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de implantes.</p>`;
+        return;
+    }
+
+    const implantes = implantesInstaladosDaFichaAtual();
+
+    // Fase 9.3: contador "Implantes: X / nível do personagem" — chips
+    // não entram na conta (subtipoContaComoImplante, Fase 1.4: tudo
+    // menos "chip" ocupa vaga do limite).
+    if (el.implantesContador) {
+        const nivelPersonagem = Number(fichaAtual?.dados?.nivel) || 0;
+        const contam = implantes.filter(it => subtipoContaComoImplante(it.implante?.subtipo)).length;
+        const acimaDoLimite = contam > nivelPersonagem;
+        el.implantesContador.innerHTML = `Implantes: <strong${acimaDoLimite ? ' style="color: var(--neon-red);"' : ""}>${contam} / ${nivelPersonagem}</strong>${implantes.length !== contam ? ` <span class="hint-inline">(chips não contam)</span>` : ""}`;
+    }
+
+    if (!implantes.length) {
+        el.implantesLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">Nenhum implante instalado.</p>`;
+        return;
+    }
+
+    el.implantesLista.innerHTML = implantes.map(it => {
+        const imp = it.implante;
+        const nivel = Number(it.nivelTag) || 0;
+        const feitos = Number(imp.testesAdaptacaoFeitos) || 0;
+        const restantes = Math.max(0, nivel - feitos);
+        const rejeicao = Number(imp.rejeicaoParcial) || 0;
+        const dificuldadeAdaptacao = 10 + 2 * nivel;
+        const danoUso = 2 * nivel;
+
+        const badgeRejeicao = rejeicao > 0
+            ? `<span class="mod-pill negativo">⚠️ Rejeição parcial: ${rejeicao}</span>` : "";
+        const badgeQuebrado = imp.quebrado
+            ? `<span class="mod-pill negativo">💥 Quebrado</span>` : "";
+
+        // Fase 9.2: modificadores estruturados do item formatados igual
+        // ao resto da ficha (resumoModificadores, mesma função que
+        // vantagens/desvantagens/item de inventário usam).
+        const resumoMods = resumoModificadores(it);
+        const modificadoresHtml = resumoMods
+            ? `<div class="hint">Modificadores: ${resumoMods}</div>` : "";
+
+        // 6.1: botão "Testar adaptação" só visível pro DONO da ficha
+        // (nunca pro Mestre) e só enquanto restarem tentativas.
+        const botaoTestar = (!isMestre && !imp.quebrado && restantes > 0)
+            ? `<button type="button" class="btn-lime btn-testar-adaptacao-implante" data-implante-id="${it.id}" title="Teste de Constituição vs. dif ${dificuldadeAdaptacao} — adaptação ao implante">🧬 Testar adaptação (${feitos}/${nivel}, dif ${dificuldadeAdaptacao})</button>`
+            : "";
+        const avisoSemTestes = (!isMestre && !imp.quebrado && restantes === 0)
+            ? `<span class="hint">Testes de adaptação concluídos.</span>` : "";
+
+        // 6.3: dano "toda vez que usar a prótese" com rejeição parcial —
+        // fica como botão MANUAL do Mestre (sem gatilho automático, não
+        // dá pra saber sozinho quando o jogador "usou" a prótese numa
+        // ação). Direto na cena, sem Ação Pendente (o Mestre já É a
+        // confirmação).
+        const botaoDanoUso = (isMestre && rejeicao > 0)
+            ? `<button type="button" class="btn-ghost btn-dano-uso-implante" data-implante-id="${it.id}" data-implante-nome="${escapeHtml(it.nome)}" data-dano="${danoUso}" title="Dano manual de uso com rejeição parcial — aplique toda vez que o jogador usar esta prótese na cena">⚡ Aplicar dano de uso (${danoUso})</button>`
+            : "";
+
+        const historico = [...(imp.historico || [])].sort((a, b) => (a.em || 0) - (b.em || 0));
+        const historicoHtml = historico.length
+            ? `<details class="ferida-historico">
+                <summary>Histórico (${historico.length})</summary>
+                <ul>${historico.map(h => `<li>${escapeHtml(h.tipo || "")}${h.por ? ` — ${escapeHtml(h.por)}` : ""}: ${escapeHtml(h.resultado || "")}</li>`).join("")}</ul>
+               </details>`
+            : "";
+
+        return `
+        <div class="ferida-card implante-card" data-implante-id="${it.id}">
+            <div class="ferida-topo">
+                <span class="ferida-tipo">${escapeHtml(it.nome)}${imp.subtipo ? ` — ${escapeHtml(rotuloSubtipoImplante(imp.subtipo))}` : ""}</span>
+                <span class="mod-pill tag">Nível ${nivel}</span>
+                ${badgeRejeicao}${badgeQuebrado}
+            </div>
+            <div class="hint">Testes de adaptação: ${feitos}/${nivel} feito(s)${restantes > 0 ? ` — ${restantes} restante(s)` : ""}.</div>
+            ${modificadoresHtml}
+            ${imp.funcoesEspeciais ? `<div class="hint">Funções especiais: ${escapeHtml(imp.funcoesEspeciais)}</div>` : ""}
+            <div class="ferida-acoes">${botaoTestar}${avisoSemTestes}${botaoDanoUso}</div>
+            ${historicoHtml}
+        </div>`;
+    }).join("");
+
+    if (!isMestre) {
+        el.implantesLista.querySelectorAll(".btn-testar-adaptacao-implante").forEach(btn => {
+            btn.addEventListener("click", () => testarAdaptacaoImplante(btn.dataset.implanteId));
+        });
+    } else {
+        el.implantesLista.querySelectorAll(".btn-dano-uso-implante").forEach(btn => {
+            btn.addEventListener("click", () => aplicarDanoUsoImplanteGodmode(btn.dataset.implanteId, btn.dataset.implanteNome, Number(btn.dataset.dano) || 0));
+        });
+    }
+}
+
+// Fase 6.2: cada clique rola Constituição (mesmo cálculo estruturado —
+// atributo + modificadores — usado em qualquer outro teste de
+// Constituição do sistema, via buscarConstituicaoAlvo) contra
+// dif 10 + 2×nível. NÃO passa por Ação Pendente (sem terceiro
+// envolvido — ver cabeçalho da seção acima) — grava direto, igual
+// tratarFerida em si mesmo. Cada falha soma +1 em rejeicaoParcial;
+// sucesso ou falha, sempre consome uma tentativa (testesAdaptacaoFeitos).
+async function testarAdaptacaoImplante(itemId) {
+    if (isMestre || modoNpc || !fichaAtualId || !fichaAtual) return;
+
+    const item = fichaAtual.inventario?.[itemId];
+    if (!item || !item.implante || !item.implante.instalado) {
+        toast("Esse implante não está mais instalado nessa ficha.", "erro");
+        return;
+    }
+    const imp = item.implante;
+    if (imp.quebrado) { toast("Este implante está quebrado — não há o que adaptar.", "erro"); return; }
+
+    const nivel = Number(item.nivelTag) || 0;
+    const feitos = Number(imp.testesAdaptacaoFeitos) || 0;
+    if (feitos >= nivel) { toast("Os testes de adaptação desse implante já acabaram.", "erro"); return; }
+
+    const dificuldade = 10 + 2 * nivel;
+    const constituicaoMod = await buscarConstituicaoAlvo("ficha", fichaAtualId);
+    const bruto = rolarD20();
+    const resultado = bruto + constituicaoMod;
+    const sucesso = resultado >= dificuldade;
+    const rejeicaoAtual = Number(imp.rejeicaoParcial) || 0;
+    const novaRejeicao = sucesso ? rejeicaoAtual : rejeicaoAtual + 1;
+
+    const detalhe = `Adaptação — ${item.nome} (dif ${dificuldade}): d20 (${bruto}) ${constituicaoMod >= 0 ? "+" : ""}${constituicaoMod} = ${resultado}`
+        + (sucesso ? " — o corpo está aceitando o implante." : " — o corpo rejeitou este teste (+1 rejeição parcial).");
+
+    const historicoAtual = Array.isArray(imp.historico) ? imp.historico : [];
+    const quem = fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador";
+    const linha = { tipo: "adaptacao", resultado: sucesso ? "sucesso" : "falha", por: quem, em: Date.now() };
+
+    await update(ref(db, caminhoMesa(`fichas/${fichaAtualId}/inventario/${itemId}/implante`)), {
+        testesAdaptacaoFeitos: feitos + 1,
+        rejeicaoParcial: novaRejeicao,
+        historico: [...historicoAtual, linha]
+    });
+
+    await registrarRolagem({ quem, modificador: constituicaoMod, resultado, detalhe, critico: null });
+    toast(detalhe, sucesso ? "ok" : "erro");
+}
+
+// Fase 6.3: botão manual do Mestre (nunca automático) pra aplicar o
+// dano de "toda vez que usar a prótese" enquanto houver rejeição
+// parcial (manual: 2×nível). Sem Ação Pendente — o Mestre clicando JÁ É
+// a confirmação, mesmo padrão de outros botões Godmode desta aba
+// (reverterComaGodmode/acordarDesmaioGodmode, acima). `refId` é sempre
+// a ficha que o Mestre está com a tela aberta (fichaAtualId) — este
+// botão só aparece dentro do card de implante daquela ficha.
+async function aplicarDanoUsoImplanteGodmode(itemId, nomeImplante, dano) {
+    if (!isMestre || modoNpc || !fichaAtualId || !dano) return;
+    try {
+        await aplicarDano("ficha", fichaAtualId, dano, null);
+        toast(`${dano} de dano aplicado por uso de "${nomeImplante}" com rejeição parcial.`);
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao aplicar o dano de uso.", "erro");
+    }
+}
+
 // Modal de tratamento — Etapa 3: só o próprio personagem se tratando,
 // então tratadorPericias/tratadorNome sempre vêm de fichaAtual (sem
 // seletor de paciente, que é a Etapa 4). Segue o mesmo padrão visual e
@@ -15270,6 +16876,24 @@ function renderizarReacaoPendente(r) {
         el.reacaoDefesaBotoes.querySelectorAll("button").forEach(b => b.disabled = true);
         const resultado = await responderReacaoPendente(escolha, dadosExtra || null);
         if (resultado) toast(resultado.detalhe);
+        // Carga química (dardo/lâmina envenenada — Parte 6.2 do plano de
+        // automação dos materiais químicos): `r` ainda é o snapshot de
+        // ANTES de responder (combateAtivoCache.reacaoPendente), então
+        // ainda tem quimicoEfeitos/quimicoNomeItem/alvoTipo/alvoRefId —
+        // responderReacaoPendente já removeu a reação pendente do banco
+        // a essa altura, mas o objeto local `r` continua íntegro.
+        // resultado.golpeAnulado (mestre.js) diz se Esquivar/Aparar
+        // anularam o golpe — só nesse caso a substância NÃO chega a
+        // encostar no alvo; Bloquear reduz o dano mas não impede o
+        // contato, então a carga química dispara do mesmo jeito.
+        if (resultado && !resultado.golpeAnulado && r.quimicoEfeitos && r.quimicoEfeitos.length) {
+            const resultadoQuimicoReacao = await despacharEfeitosQuimicos(r.alvoTipo, r.alvoRefId, r.quimicoEfeitos, r.quimicoNomeItem || r.nomeArma);
+            let notaQuimicoReacao = ` ☣️ Carga química de ${r.quimicoNomeItem || r.nomeArma}: ${resultadoQuimicoReacao.notas.join(" | ")}`;
+            if (resultadoQuimicoReacao.modificadoresExtras.length) {
+                notaQuimicoReacao += " (penalidade de duração geral prevista — sem lista de efeitos ativos pra registrar automaticamente num alvo que não é quem atacou; aplique manualmente.)";
+            }
+            toast(notaQuimicoReacao);
+        }
         el.modalReacaoDefesa.classList.remove("active");
     };
 
@@ -15548,6 +17172,25 @@ async function buscarConstituicaoAlvo(tipo, refId) {
     }
 }
 
+// Busca ao vivo o modificador total de UMA perícia de resistência
+// (ex.: "Resistência Imunológica", "Resistência Mental") de qualquer
+// ficha/npc pelo (tipo, refId) — Parte 5.3 do plano de automação dos
+// materiais químicos, pra resolver o "d20 + perícia do alvo" ANTES de
+// chamar aplicarTesteAtrasado (mestre.js), do mesmo jeito que
+// buscarConstituicaoAlvo acima resolve Constituição antes de
+// aplicarSangramento/testarSangramentoProfundo.
+//
+// Não duplica lógica nova: calcularModApararParticipante (abaixo,
+// ~15434) já é 100% genérica por nomePericia — mesma regra de "nível 0
+// ou perícia ausente vira -1 fixo" já usada em qualquer outro teste do
+// sistema — só o nome dela é específico de Aparar por causa de onde
+// foi extraída originalmente. Este wrapper só dá um nome que não
+// confunde quem estiver lendo o código dos efeitos químicos com
+// "aparar".
+async function buscarValorPericiaAlvo(tipo, refId, nomePericia) {
+    return calcularModApararParticipante(tipo, refId, nomePericia);
+}
+
 // Status de Agarrado (manual) de quem está sendo controlado nesta tela
 // agora — a própria ficha do jogador, ou o NPC que o Mestre estiver
 // atuando como. `null` se não estiver agarrado ou fora de combate.
@@ -15578,6 +17221,55 @@ function meuStatusDesacordado() {
     if (!meuPid) return null;
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     return (participantes[meuPid] && participantes[meuPid].desacordado) || null;
+}
+
+// Status de Desmaio Temporizado (Parte 5.5 do plano de automação dos
+// materiais químicos — Sedativo nível 2/3/4: "desmaia por N turnos").
+// Diferente de meuStatusDesacordado() acima (um booleano só, preso a
+// `participante.desacordado`), esse efeito é uma entrada normal de
+// `statusAtivos` (tipo "desmaio_temporizado", gerada por
+// aplicarDesmaioTemporizado em mestre.js) com contagem regressiva
+// própria — acorda sozinho quando zera, sem o Mestre precisar clicar
+// em nada (ver processarStatusInicioTurno). Devolve a primeira entrada
+// ativa encontrada (ou `null`), com `origem`/`turnosRestantes` prontos
+// pra montar a mensagem de bloqueio em resolverAtaque.
+function meuStatusDesmaioTemporizado() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return null;
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const statusAtivos = (participantes[meuPid] && participantes[meuPid].statusAtivos) || {};
+    const entrada = Object.values(statusAtivos).find(s => s && s.tipo === "desmaio_temporizado" && (Number(s.turnosRestantes) || 0) > 0);
+    return entrada || null;
+}
+
+// Modificadores de "penalidade_temporizada" (Parte 5.3 do plano de
+// automação dos materiais químicos — Sedativo 1/3, Psicotrópico 1)
+// ativos em quem está sendo controlado nesta tela agora. Mesmo
+// princípio de calcularModificadoresAbstinencia (regras.js) — um
+// modificador com prazo de validade —, só que a fonte é
+// combateAtivo/participantes/{meuPid}/statusAtivos em vez de
+// ficha.desvantagens, então fica do lado da FICHA (aqui) e não em
+// coletarModificadores (que é uma função pura, sem acesso ao Firebase
+// de combate). Cada `alvo` do array `status.alvos` vira uma entrada
+// própria, todas com o mesmo `valor` — mesmo formato plano usado em
+// toda parte (coletarModificadores/somaModificadoresPara).
+function modificadoresPenalidadeTemporizada() {
+    const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
+    if (!meuPid) return [];
+    const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
+    const statusAtivos = (participantes[meuPid] && participantes[meuPid].statusAtivos) || {};
+    const todos = [];
+    for (const status of Object.values(statusAtivos)) {
+        if (!status || status.tipo !== "penalidade_temporizada") continue;
+        if ((Number(status.turnosRestantes) || 0) <= 0) continue;
+        const origem = `Efeito temporário: ${status.origem || status.label || "?"}`;
+        const alvos = Array.isArray(status.alvos) ? status.alvos : [status.alvos];
+        for (const alvo of alvos) {
+            if (!alvo) continue;
+            todos.push({ alvo, valor: Number(status.valor) || 0, origem });
+        }
+    }
+    return todos;
 }
 
 // Agarrar (manual): "impossibilita golpes de alcance médio e longo".
@@ -16067,6 +17759,11 @@ function montarPainelAcoesPendentes(corpo) {
                     nomeQuimico: acao.payload.nomeQuimico,
                     tipoEfeito: acao.payload.tipoEfeito,
                     modificadores: acao.payload.modificadores,
+                    // Efeitos mecânicos do item (it.quimico.efeitos), pra
+                    // pré-preencher o despachante do painel "Aplicar Efeito
+                    // Químico" — Parte 8, item 5.2/5.3 do plano-automacao-
+                    // materiais-quimicos-v3.
+                    efeitos: acao.payload.efeitos || [],
                     duracaoHoras: acao.payload.duracaoHoras
                 });
             });
@@ -16583,6 +18280,20 @@ function abrirAcaoMestre(acao, prefill = null) {
         }
         renderModsQuimico();
 
+        // Efeitos mecânicos do item (it.quimico.efeitos, ver despachante
+        // acima de consumirDroga) — guardados junto com modificadoresAtuais
+        // pra disparar ao confirmar. SEM edição fina aqui (diferente dos
+        // modificadores livres): só um resumo pro Mestre saber o que vai
+        // acontecer — Parte 8, item 5.2/5.4 do plano-automacao-materiais-
+        // quimicos-v3.
+        const efeitosAtuais = Array.isArray(prefill?.efeitos) ? prefill.efeitos : [];
+        const resumoEfeitos = document.createElement("div");
+        if (efeitosAtuais.length) {
+            resumoEfeitos.className = "hint";
+            resumoEfeitos.innerHTML = `<strong>Efeitos que serão disparados ao confirmar:</strong><br>` +
+                efeitosAtuais.map(e => `• ${escapeHtml(e.material || "?")}: ${escapeHtml(e.texto || "")}`).join("<br>");
+        }
+
         const campoDuracao = document.createElement("div");
         campoDuracao.className = "modal-field";
         const labelDuracao = document.createElement("label");
@@ -16608,16 +18319,32 @@ function abrirAcaoMestre(acao, prefill = null) {
             const horasExpira = (duracaoHoras !== null && horasAgora !== null)
                 ? horasAgora + duracaoHoras
                 : ((diaAtual + 1) * 24); // fallback: até acabar o dia em jogo (mesmo comportamento de consumirDroga)
+
+            // Despacha it.quimico.efeitos ANTES de gravar em efeitosDrogas
+            // — penalidades de duração geral entram na MESMA lista de
+            // modificadores que aplicarEfeitoQuimicoAlvo grava logo abaixo,
+            // igual consumirDroga já faz no autoconsumo.
+            let notasQuimico = [];
+            let modificadoresParaGravar = modificadoresAtuais;
+            if (efeitosAtuais.length) {
+                const resultadoQuimico = await despacharEfeitosQuimicos(tipo, id, efeitosAtuais, prefill?.nomeQuimico || "Químico");
+                if (resultadoQuimico.modificadoresExtras.length) {
+                    modificadoresParaGravar = [...modificadoresAtuais, ...resultadoQuimico.modificadoresExtras];
+                }
+                notasQuimico = resultadoQuimico.notas;
+            }
+
             await aplicarEfeitoQuimicoAlvo(tipo, id, {
                 nome: prefill?.nomeQuimico || "Químico",
                 diaIndiceConsumido: diaAtual,
                 horasExpira,
-                modificadores: modificadoresAtuais
+                modificadores: modificadoresParaGravar
             });
             toast(`💨 Efeito de "${prefill?.nomeQuimico || "químico"}" aplicado.`);
+            notasQuimico.forEach(nota => toast(nota, "erro"));
         });
 
-        corpo.append(select, info, listaMods, campoDuracao, btn);
+        corpo.append(select, info, listaMods, ...(efeitosAtuais.length ? [resumoEfeitos] : []), campoDuracao, btn);
 
     } else if (acao === "npcs") {
         montarPainelNpcs(corpo);
