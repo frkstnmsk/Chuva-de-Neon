@@ -80,7 +80,14 @@ body.combate-bloqueio-alvo .btn-usar-item {
 /* Painel/modal do jogador */
 .combate-painel-jogador {
   position: fixed;
-  top: 60px;
+  /* Era um valor fixo (60px) menor que a altura real da topbar
+     (nome/PV/EN, z-index 4000) — em telas onde a topbar passa de
+     60px (ex: celular, com os badges de roupa quebrando linha), a
+     caixa nascia com o topo escondido atrás dela. Mesmo padrão já
+     usado em .painel-info-topo/.combate-alerta-fixo: encostar
+     embaixo da topbar de verdade, usando a variável que ela mesma
+     expõe. */
+  top: calc(var(--topbar-h, 90px) + 8px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 998;
