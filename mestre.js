@@ -24,7 +24,7 @@ import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao } from "./dados-manual.js";
 import { itemCabeNoContainer, itemPodeSerLevadoSolto, resolverEntradaLevandoConsigo } from "./inventario.js";
-import { criarFerida } from "./saude.js";
+import { criarFerida, resolverFimSangramentoNatural } from "./saude.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (jogador) ou `pericias`/`periciasNpc` de um NPC — 0 se não tiver.
@@ -530,9 +530,14 @@ async function aplicarStatusPorTurno(participanteId, dadosStatus) {
 // vários golpes seguidos empilham vários sangramentos simultâneos,
 // cada um com sua própria contagem e seu próprio dano fixo, todos
 // tickando juntos a cada turno (ver processarStatusInicioTurno abaixo).
-// Wrapper fino sobre aplicarStatusPorTurno — zero mudança de
-// comportamento visível em relação à versão anterior (mesmo formato
-// de retorno { danoPorTurno, turnos } que os chamadores já esperam).
+// Wrapper fino sobre aplicarStatusPorTurno — mesmo formato de retorno
+// { danoPorTurno, turnos } que os chamadores já esperavam, agora com
+// `statusId` a mais (Fase D do plano mestre-tratar-feridas): o id da
+// entrada em statusAtivos, pra quem cria a ferida persistente
+// correspondente (saude.js/criarFerida) poder vincular os dois depois
+// — ver vincularFeridaAoStatusSangramento, logo abaixo — e assim a
+// ferida sumir sozinha quando o status expirar (processarStatus
+// InicioTurno).
 export async function aplicarSangramento(participanteId, danoPorTurno, turnos, origem) {
     const resultado = await aplicarStatusPorTurno(participanteId, {
         tipo: "sangramento",
@@ -542,7 +547,21 @@ export async function aplicarSangramento(participanteId, danoPorTurno, turnos, o
         origem
     });
     if (!resultado) return;
-    return { danoPorTurno, turnos };
+    return { danoPorTurno, turnos, statusId: resultado.id };
+}
+
+// Fase D.2 (plano mestre-tratar-feridas): grava o id da ferida
+// persistente ("sangramento", saude.js) dentro da própria entrada de
+// statusAtivos que gerou essa ferida — é esse vínculo que permite a
+// ferida sumir sozinha quando o status expira (ver
+// processarStatusInicioTurno, branch "sangramento" abaixo). Chamado
+// só quando os dois já existem (status criado por aplicarSangramento
+// + ferida criada por criarFerida, saude.js) — se qualquer um faltar
+// (ex.: alvo é NPC, sem sistema de feridas), o chamador nem invoca
+// esta função.
+export async function vincularFeridaAoStatusSangramento(participanteId, statusId, feridaId) {
+    if (!participanteId || !statusId || !feridaId) return;
+    await update(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos/${statusId}`)), { feridaId });
 }
 
 // Novo tipo "dano_continuo" (Parte 5.2 — Tóxico/Inflamável residual).
@@ -727,6 +746,35 @@ export async function testarSangramentoProfundo(participanteId, constituicaoAlvo
     };
 }
 
+// Fases C e D (plano mestre-tratar-feridas-sangramento.txt): a partir
+// de um resultado de testarSangramento OU testarSangramentoProfundo
+// (mesmo formato de retorno nos dois — `sangramento` truthy quando
+// falhou o teste e começou a sangrar), cria as feridas persistentes
+// correspondentes e já deixa tudo vinculado:
+// - Ferida "sangramento" (saude.js) — pra tratar com Estancar depois.
+// - Ferida "corte" GARANTIDA no mesmo local, sem chance nenhuma (Fase
+//   C — antes disso, só existia via chanceFeridaPorDano, então dava
+//   pra sangrar sem nunca abrir corte).
+// - Vínculo feridaId <-> statusId (Fase D) via
+//   vincularFeridaAoStatusSangramento — é esse vínculo que permite a
+//   ferida "sangramento" sumir sozinha (removerFerida) quando o status
+//   por turno expira sozinho (ver processarStatusInicioTurno abaixo).
+// Só roda quando `habilitado` for true (ficha de jogador, dano de
+// verdade — NPC não entra no sistema de feridas ainda). Devolve true
+// quando a ferida de corte foi garantida aqui, pra quem chama saber
+// que não precisa (e não deve) deixar o bloco de "chance de ferida por
+// dano" abrir uma segunda em cima do mesmo golpe.
+export async function registrarFeridasDeSangramento(habilitado, participanteId, alvoRefId, localFerida, origem, resultadoSangramento) {
+    if (!habilitado || !resultadoSangramento || !resultadoSangramento.sangramento) return false;
+    const feridaSangramento = await criarFerida(alvoRefId, { tipo: "sangramento", local: localFerida, origem });
+    await criarFerida(alvoRefId, { tipo: "corte", local: localFerida, origem: `${origem} (sangramento)` });
+    const statusId = resultadoSangramento.sangramento.statusId;
+    if (statusId) {
+        await vincularFeridaAoStatusSangramento(participanteId, statusId, feridaSangramento.id);
+    }
+    return true;
+}
+
 // Resolve os status ativos de quem está prestes a agir (chamada com o
 // PRÓXIMO turnoAtual, antes do recálculo de PV/Velocidade/estado de
 // saúde de avancarTurnoCombate — assim o dano do tick já entra nesse
@@ -813,6 +861,22 @@ async function processarStatusInicioTurno(participanteId, participante) {
                         notas.push(`${nomeAlvo}: ${dadosNovoStatus.label || dadosNovoStatus.tipo} começou.`);
                     }
                 }
+            }
+        } else if (status.tipo === "sangramento") {
+            // Fase D (plano mestre-tratar-feridas-sangramento): o
+            // sangramento parou sozinho (contagem zerou) — se essa
+            // entrada estava vinculada a uma ferida persistente
+            // (feridaId, ver registrarFeridasDeSangramento/
+            // vincularFeridaAoStatusSangramento), a ferida "sangramento"
+            // some sozinha também. NPC não tem sistema de feridas
+            // (participante.tipo !== "ficha"), então feridaId nunca
+            // deveria existir nesse caso, mas confere mesmo assim.
+            statusFinal[chave] = null; // expira — update() remove a chave
+            if (status.feridaId && participante.tipo === "ficha") {
+                await resolverFimSangramentoNatural(participante.refId, status.feridaId);
+                notas.push(`${participante.nome || participanteId} parou de sangrar — a ferida de Sangramento foi encerrada (resta a ferida de Corte/Perfuração para suturar).`);
+            } else {
+                notas.push(`${participante.nome || participanteId}: Sangramento terminou.`);
             }
         } else if (status.tipo === "desmaio_temporizado") {
             statusFinal[chave] = null; // expira — update() remove a chave
@@ -2758,12 +2822,17 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // que é exclusivo de tiro — ver o caminho direto em ficha.js).
     const criaFeridaHabilitado = danoParaAplicar > 0 && r.alvoTipo === "ficha";
     const localFerida = (r.localMiraKey && r.localMiraKey !== "padrao") ? r.localMiraKey : "torso";
+    // Fase C: true assim que o sangramento (comum OU profundo, mais
+    // abaixo) já tiver garantido uma ferida de Corte/Perfuração neste
+    // mesmo golpe — impede o bloco de "chance de ferida por dano" (mais
+    // abaixo) de abrir uma segunda em cima da mesma pancada.
+    let feridaCorteJaGarantida = false;
     if (danoParaAplicar > 0 && r.localMiraKey && r.localMiraKey !== "padrao") {
         if (ehDanoPerfurante(r.tipoDanoKey) && r.regraSangramentoLocal) {
             const resultadoSangramento = await testarSangramento(r.participanteId, r.constituicaoAlvo, r.nivelArma, danoParaAplicar, r.regraSangramentoLocal);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
-            if (criaFeridaHabilitado && resultadoSangramento && resultadoSangramento.sangramento) {
-                await criarFerida(r.alvoRefId, { tipo: "sangramento", local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+            if (await registrarFeridasDeSangramento(criaFeridaHabilitado, r.participanteId, r.alvoRefId, localFerida, `${r.nomeArma} (${r.nomeAtacante})`, resultadoSangramento)) {
+                feridaCorteJaGarantida = true;
             }
         }
         if (ehDanoCortante(r.tipoDanoKey)) {
@@ -2794,6 +2863,14 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
             if (deveTestarSangramentoProfundo(dilacerou, danoParaAplicar, resultadoDano.pvMaximo)) {
                 const resultadoSangramentoProfundo = await testarSangramentoProfundo(r.participanteId, r.constituicaoAlvo, danoParaAplicar);
                 if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
+                // Fase C.3: Sangramento Profundo/Dilaceração antes não
+                // criava ferida nenhuma (só o status de dano por turno)
+                // — agora garante sangramento + corte igual ao
+                // Sangramento comum acima, com o mesmo vínculo pra
+                // sumir sozinho quando o status expirar (Fase D).
+                if (await registrarFeridasDeSangramento(criaFeridaHabilitado, r.participanteId, r.alvoRefId, localFerida, `Dilaceração — ${r.nomeArma} (${r.nomeAtacante})`, resultadoSangramentoProfundo)) {
+                    feridaCorteJaGarantida = true;
+                }
             }
         }
     }
@@ -2806,18 +2883,26 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // ferida tipo "fratura". Chance base de 20% assim que o dano
     // ultrapassa 1/10 do PV máximo do alvo; a cada 1/10 ADICIONAL de
     // dano além desse mínimo, +20% de chance (limite 100%) — ver
-    // chanceFeridaPorDano em regras.js.
+    // chanceFeridaPorDano em regras.js. Fase C.2: quando o sangramento
+    // deste mesmo golpe já garantiu uma ferida de Corte/Perfuração
+    // (feridaCorteJaGarantida), esse bloco NEM rola a chance pro tipo
+    // "corte" — só se aplica de novo se fosse "fratura" (contusão nunca
+    // sangra por este caminho, então não tem conflito ali).
     if (criaFeridaHabilitado && (ehDanoPerfurante(r.tipoDanoKey) || ehDanoCortante(r.tipoDanoKey) || ehDanoContundente(r.tipoDanoKey))) {
-        const chance = chanceFeridaPorDano(danoParaAplicar, resultadoDano.pvMaximo);
-        if (chance > 0) {
-            const tipoFerida = ehDanoContundente(r.tipoDanoKey) ? "fratura" : "corte";
-            const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
-            const sucessoFerida = (Math.random() * 100) < chance;
-            notaEfeitoLocal += sucessoFerida
-                ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
-                : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
-            if (sucessoFerida) {
-                await criarFerida(r.alvoRefId, { tipo: tipoFerida, local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+        const tipoFerida = ehDanoContundente(r.tipoDanoKey) ? "fratura" : "corte";
+        if (tipoFerida === "corte" && feridaCorteJaGarantida) {
+            notaEfeitoLocal += ` 🩹 O sangramento deste golpe já garantiu uma ferida de Corte/Perfuração — sem chance adicional.`;
+        } else {
+            const chance = chanceFeridaPorDano(danoParaAplicar, resultadoDano.pvMaximo);
+            if (chance > 0) {
+                const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
+                const sucessoFerida = (Math.random() * 100) < chance;
+                notaEfeitoLocal += sucessoFerida
+                    ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
+                    : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
+                if (sucessoFerida) {
+                    await criarFerida(r.alvoRefId, { tipo: tipoFerida, local: localFerida, origem: `${r.nomeArma} (${r.nomeAtacante})` });
+                }
             }
         }
     }

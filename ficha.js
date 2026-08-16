@@ -113,6 +113,7 @@ import {
     ouvirFatorPrecoMateriaisVeiculo, definirFatorPrecoMateriaisVeiculo,
     ouvirFatorPrecoDarknet, definirFatorPrecoDarknet,
     mestreRolarDado, aplicarDano, causarDanoVeiculo, testarSangramento, testarSangramentoProfundo,
+    registrarFeridasDeSangramento,
     ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
@@ -147,7 +148,7 @@ import {
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
 import {
-    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida
+    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida
 } from "./saude.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -799,7 +800,11 @@ async function init() {
     // uma ficha própria pra rolar o teste (o Mestre não trata ninguém
     // por aqui — ver plano-sistema-saude-ferimentos.txt, seção 6).
     if (el.btnTratarOutroJogador) {
-        el.btnTratarOutroJogador.style.display = isMestre ? "none" : "inline-block";
+        // Fase A.2 (plano mestre-tratar-feridas): também visível pro
+        // Mestre — com uma ficha de NPC aberta (modoNpc), fichaAtual
+        // vira os dados do NPC (perícias incluídas), então esse fluxo
+        // já cobre "tratador NPC" sem nenhuma tela nova.
+        el.btnTratarOutroJogador.style.display = "inline-block";
         el.btnTratarOutroJogador.addEventListener("click", abrirModalTratarOutroJogador);
     }
 
@@ -5931,6 +5936,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // Sangramento de tiro sem mira, logo abaixo).
     const criaFeridaHabilitado = danoTotal > 0 && participante.tipo === "ficha";
     const localFerida = localMira.key === "padrao" ? "torso" : localMira.key;
+    // Fase C (plano mestre-tratar-feridas-sangramento): true assim que
+    // o sangramento (comum OU profundo, mais abaixo) já garantiu uma
+    // ferida de Corte/Perfuração neste golpe — impede o bloco de
+    // "chance de ferida por dano" de abrir uma segunda em cima do
+    // mesmo golpe.
+    let feridaCorteJaGarantida = false;
     if (danoTotal > 0 && (ehFogo || ehDanoPerfurante(tipoDanoKey)) && participante._pid && combateComIniciativaAtivo()) {
         const regraSangramentoAplicavel = ehFogo
             ? (localMira.sangramento || localMiraPorKey("torso").sangramento)
@@ -5938,14 +5949,16 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         if (regraSangramentoAplicavel) {
             const resultadoSangramento = await testarSangramento(participante._pid, constituicaoAlvo, it.nivelTag, danoTotal, regraSangramentoAplicavel, ehFogo);
             if (resultadoSangramento) notaSangramento = ` ${resultadoSangramento.detalhe}`;
-            // Sangrou -> ferida "sangramento". Não sangrou E foi tiro ->
-            // bala fica alojada (ferida "projetil" — precisa de Remover
-            // Projétil antes de poder suturar). Não sangrou e foi corpo
-            // a corpo -> resistiu, sem ferida nenhuma.
-            if (criaFeridaHabilitado && resultadoSangramento) {
-                if (resultadoSangramento.sangramento) {
-                    await criarFerida(participante.refId, { tipo: "sangramento", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
-                } else if (ehFogo) {
+            // Sangrou -> ferida "sangramento" + ferida "corte" garantida
+            // (Fase C, via registrarFeridasDeSangramento). Não sangrou E
+            // foi tiro -> bala fica alojada (ferida "projetil" —
+            // precisa de Remover Projétil antes de poder suturar). Não
+            // sangrou e foi corpo a corpo -> resistiu, sem ferida
+            // nenhuma.
+            if (resultadoSangramento) {
+                if (await registrarFeridasDeSangramento(criaFeridaHabilitado, participante._pid, participante.refId, localFerida, `${it.nome} (${nomeAtacante})`, resultadoSangramento)) {
+                    feridaCorteJaGarantida = true;
+                } else if (criaFeridaHabilitado && ehFogo && !resultadoSangramento.sangramento) {
                     await criarFerida(participante.refId, { tipo: "projetil", local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
                 }
             }
@@ -5982,6 +5995,14 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
             if (participante._pid && combateComIniciativaAtivo() && deveTestarSangramentoProfundo(dilacerou, danoTotal, resultadoDano.pvMaximo)) {
                 const resultadoSangramentoProfundo = await testarSangramentoProfundo(participante._pid, constituicaoAlvo, danoTotal);
                 if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
+                // Fase C.3: Sangramento Profundo/Dilaceração antes não
+                // criava ferida nenhuma — agora garante sangramento +
+                // corte igual ao Sangramento comum acima, com o mesmo
+                // vínculo pra sumir sozinho quando o status expirar
+                // (Fase D).
+                if (await registrarFeridasDeSangramento(criaFeridaHabilitado, participante._pid, participante.refId, localFerida, `Dilaceração — ${it.nome} (${nomeAtacante})`, resultadoSangramentoProfundo)) {
+                    feridaCorteJaGarantida = true;
+                }
             }
         }
     }
@@ -5993,18 +6014,26 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // abrem ferida tipo "corte"; Contusão abre ferida tipo "fratura".
     // Chance base de 20% assim que o dano ultrapassa 1/10 do PV máximo
     // do alvo; a cada 1/10 ADICIONAL de dano além desse mínimo, +20% de
-    // chance (limite 100%) — ver chanceFeridaPorDano em regras.js.
+    // chance (limite 100%) — ver chanceFeridaPorDano em regras.js. Fase
+    // C.2: quando o sangramento deste mesmo golpe já garantiu uma
+    // ferida de Corte/Perfuração (feridaCorteJaGarantida), esse bloco
+    // NEM rola a chance pro tipo "corte" — só se aplica de novo se
+    // fosse "fratura".
     if (criaFeridaHabilitado && (ehFogo || ehDanoPerfurante(tipoDanoKey) || ehDanoCortante(tipoDanoKey) || ehDanoContundente(tipoDanoKey))) {
-        const chance = chanceFeridaPorDano(danoTotal, resultadoDano.pvMaximo);
-        if (chance > 0) {
-            const tipoFerida = ehDanoContundente(tipoDanoKey) ? "fratura" : "corte";
-            const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
-            const sucessoFerida = (Math.random() * 100) < chance;
-            notaEfeitoLocal += sucessoFerida
-                ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
-                : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
-            if (sucessoFerida) {
-                await criarFerida(participante.refId, { tipo: tipoFerida, local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+        const tipoFerida = ehDanoContundente(tipoDanoKey) ? "fratura" : "corte";
+        if (tipoFerida === "corte" && feridaCorteJaGarantida) {
+            notaEfeitoLocal += ` 🩹 O sangramento deste golpe já garantiu uma ferida de Corte/Perfuração — sem chance adicional.`;
+        } else {
+            const chance = chanceFeridaPorDano(danoTotal, resultadoDano.pvMaximo);
+            if (chance > 0) {
+                const rotuloFerida = tipoFerida === "fratura" ? "Fratura" : "Corte/Perfuração";
+                const sucessoFerida = (Math.random() * 100) < chance;
+                notaEfeitoLocal += sucessoFerida
+                    ? ` 🩹 Chance de ferida por dano (${chance}%): ABRIU uma ferida de ${rotuloFerida}.`
+                    : ` 🩹 Chance de ferida por dano (${chance}%): não abriu ferida dessa vez.`;
+                if (sucessoFerida) {
+                    await criarFerida(participante.refId, { tipo: tipoFerida, local: localFerida, origem: `${it.nome} (${nomeAtacante})` });
+                }
             }
         }
     }
@@ -16276,10 +16305,15 @@ function renderizarSaude() {
         const badgeInfeccao = ferida.infeccaoAtiva
             ? `<span class="mod-pill negativo">🦠 Infeccionada${ferida.infeccaoGarantida ? " (garantida)" : ""}</span>`
             : "";
-        const botoesTratamento = isMestre
-            ? ""
-            : acoes.map(acao => `<button type="button" class="btn-lime btn-tratar-ferida" data-ferida-id="${ferida.id}" data-acao="${acao}">${escapeHtml(TRATAMENTOS_FERIDA[acao].label)}</button>`).join(" ");
-        const semAcao = !isMestre && !acoes.length && ferida.estado !== "tratada"
+        // Fase A.1 (plano mestre-tratar-feridas): antes os botões de
+        // tratamento ficavam escondidos por completo quando isMestre —
+        // o que também escondia o único caminho até o botão Godmode
+        // "Tratar automaticamente" (mora dentro do modal aberto por
+        // este botão). Mestre agora vê os mesmos botões que o jogador;
+        // dentro do modal, ele ganha o botão extra de Godmode (ver
+        // abrirModalTratarFerida).
+        const botoesTratamento = acoes.map(acao => `<button type="button" class="btn-lime btn-tratar-ferida" data-ferida-id="${ferida.id}" data-acao="${acao}">${escapeHtml(TRATAMENTOS_FERIDA[acao].label)}</button>`).join(" ");
+        const semAcao = !acoes.length && ferida.estado !== "tratada"
             ? `<span class="hint">Nenhum tratamento disponível no momento.</span>` : "";
         // Testar Infecção (Etapa 5 do plano): migrado pra cá, vinculado à
         // ferida específica — só o Mestre dispara, a qualquer momento
@@ -16288,6 +16322,13 @@ function renderizarSaude() {
         // Combate).
         const botaoTestarInfeccao = (isMestre && ferida.estado !== "tratada")
             ? `<button type="button" class="btn-ghost btn-testar-infeccao-ferida" data-ferida-id="${ferida.id}" title="Teste de Constituição vs. Infecção (manual: Complicações de ferimentos)">🦠 Testar Infecção</button>`
+            : "";
+        // Fase B (plano mestre-tratar-feridas): Godmode ganha um botão
+        // pra apagar a ferida inteira, sem passar por "tratada" nem
+        // deixar histórico — diferente de tratar, isso é irreversível,
+        // por isso o confirm() antes de chamar removerFerida (saude.js).
+        const botaoExcluirFerida = (isMestre && godmodeAtivo)
+            ? `<button type="button" class="btn-ghost btn-excluir-ferida-godmode" data-ferida-id="${ferida.id}" title="Apaga a ferida por completo, sem histórico — Godmode">🗑️ Excluir ferida (Godmode)</button>`
             : "";
 
         const historico = Object.values(ferida.historico || {}).sort((a, b) => (a.data || 0) - (b.data || 0));
@@ -16306,20 +16347,39 @@ function renderizarSaude() {
                 ${badgeInfeccao}
             </div>
             ${ferida.origem ? `<div class="hint">Origem: ${escapeHtml(ferida.origem)}</div>` : ""}
-            <div class="ferida-acoes">${botoesTratamento}${semAcao}${botaoTestarInfeccao}</div>
+            <div class="ferida-acoes">${botoesTratamento}${semAcao}${botaoTestarInfeccao}${botaoExcluirFerida}</div>
             ${historicoHtml}
         </div>`;
     }).join("");
 
-    if (!isMestre) {
-        el.saudeLista.querySelectorAll(".btn-tratar-ferida").forEach(btn => {
-            btn.addEventListener("click", () => abrirModalTratarFerida(btn.dataset.feridaId, btn.dataset.acao));
-        });
-    }
+    el.saudeLista.querySelectorAll(".btn-tratar-ferida").forEach(btn => {
+        btn.addEventListener("click", () => abrirModalTratarFerida(btn.dataset.feridaId, btn.dataset.acao));
+    });
     if (isMestre) {
         el.saudeLista.querySelectorAll(".btn-testar-infeccao-ferida").forEach(btn => {
             btn.addEventListener("click", () => abrirModalTestarInfeccaoFerida(btn.dataset.feridaId));
         });
+        el.saudeLista.querySelectorAll(".btn-excluir-ferida-godmode").forEach(btn => {
+            btn.addEventListener("click", () => excluirFeridaGodmode(btn.dataset.feridaId));
+        });
+    }
+}
+
+// Fase B (plano mestre-tratar-feridas): apaga a ferida por completo
+// (removerFerida, saude.js — já existia, nunca era chamada de lugar
+// nenhum) — "como se nunca tivesse acontecido", sem passar por
+// "tratada" e sem deixar linha de histórico. Só a ficha atualmente
+// aberta na tela (fichaAtualId) — mesma convenção dos outros botões
+// Godmode desta aba. feridasCache atualiza sozinho via ouvirFeridas.
+async function excluirFeridaGodmode(feridaId) {
+    if (!isMestre || !godmodeAtivo || modoNpc || !fichaAtualId) return;
+    if (!confirm("Excluir esta ferida por completo? Isso apaga o registro e o histórico dela, sem volta.")) return;
+    try {
+        await removerFerida(fichaAtualId, feridaId);
+        toast("Ferida excluída (Godmode).");
+    } catch (err) {
+        console.error(err);
+        toast("Falha ao excluir a ferida.", "erro");
     }
 }
 

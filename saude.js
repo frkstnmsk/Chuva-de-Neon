@@ -100,6 +100,24 @@ export async function removerFerida(fichaId, feridaId) {
     await sincronizarFlagInfeccaoAgregada(fichaId);
 }
 
+// Fase D (plano mestre-tratar-feridas-sangramento.txt): a ferida
+// "sangramento" (persistente, aba Saúde) e o status de combate por
+// turno ("sangramento", com contagem regressiva em statusAtivos) são
+// registros separados, mas passam a ficar vinculados na hora de criar
+// (ver registrarFeridasDeSangramento/vincularFeridaAoStatusSangramento,
+// mestre.js). Quando o status por turno expira sozinho
+// (turnosRestantes chega em 0 — ver processarStatusInicioTurno,
+// mestre.js), chama esta função pra apagar a ferida "sangramento"
+// correspondente — o sangramento parou por conta própria, não faz
+// sentido continuar pedindo Estancar Sangramento pra uma ferida que já
+// nem sangra mais. A ferida "corte" criada junto (Fase C) continua
+// existindo à parte, intacta — ainda precisa de Suturar Ferimento pra
+// fechar de vez.
+export async function resolverFimSangramentoNatural(fichaId, feridaId) {
+    if (!fichaId || !feridaId) return;
+    await removerFerida(fichaId, feridaId);
+}
+
 // ---------------------------------------------------------------------
 // Infecção — agora por ferida, em vez de flag solta na ficha.
 // dados.infeccao continua existindo (calcularTempoRecuperacaoPV lê de
