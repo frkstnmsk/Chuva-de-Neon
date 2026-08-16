@@ -238,7 +238,69 @@ remove e loga nota específica, ficha sem feridaId só loga a nota
 genérica, NPC com feridaId nunca chama a remoção mesmo se o campo
 existisse por engano).
 
-DECISÃO EM ABERTO (ver seção acima) continua NÃO implementada —
-Estancar Sangramento manual ainda não zera o status de combate ativo,
-só muda o estado da ferida. Fica pra decidir depois, se fizer falta.
+DECISÃO EM ABERTO (ver seção acima) — RESOLVIDA E IMPLEMENTADA:
+Estancar Sangramento (sucesso) e Suturar Ferimento (fechando uma
+ferida "sangramento" direto) agora TAMBÉM cancelam o status de combate
+por turno vinculado, na hora — não só mudam o estado da ferida. Nova
+`cancelarStatusSangramentoPorFerida(fichaId, feridaId)` em mestre.js:
+varre combateAtivo/participantes procurando, no participante cuja
+refId bate com a fichaId, uma entrada de statusAtivos tipo
+"sangramento" com esse feridaId vinculado (mesmo vínculo da Fase D) e
+remove ela (não zera turnosRestantes, remove de vez — não sobra motivo
+pra manter o registro). Chamada de dentro de tratarFerida (saude.js),
+nos dois caminhos (rolagem normal e Godmode), sempre que a ferida
+tratada é do tipo "sangramento" e a ação foi estancar_sangramento ou
+suturar_ferimento, com sucesso. Sem efeito (retorna false) se não
+houver combate ativo, participante, ou vínculo — trata normalmente
+como "nada a cancelar" (ex.: ferida tratada fora de combate).
+
+REMOVER PROJÉTIL (sucesso) — mudança adicional (fora do escopo
+original deste plano, feita junto por tocar o mesmo trecho): a ferida
+não fica mais com tipo "projetil" pra sempre depois de removido — vira
+tipo "corte", estado "aberta" (o ferimento que o projétil deixou),
+ainda precisando de Suturar Ferimento. Antes só o ESTADO mudava pra
+"sem_sangramento" e o tipo continuava "projetil", mostrando "Projétil
+alojado" na aba Saúde mesmo já removido.
+---------------------------------------------------------------------
+
+---------------------------------------------------------------------
+FASE E — Sangramento sobrevive ao fim do combate (tick manual)
+---------------------------------------------------------------------
+Problema: danoPorTurno/turnosRestantes do Sangramento só existiam
+dentro de combateAtivo/participantes/{id}/statusAtivos — nó que
+encerrarCombate (mestre.js) APAGA por completo quando o combate
+termina. Resultado: se o combate acabasse com um Sangramento ainda com
+turnos restantes, a ferida persistente ("sangramento", fichas/{id}/
+feridas) continuava lá, mas o contador congelava pra sempre — sem mais
+dano, sem mais contagem regressiva, e sem nenhum jeito de continuar ou
+encerrar isso fora de um novo combate.
+
+E.1 criarFerida (saude.js) passa a aceitar `danoPorTurno`/
+    `turnosRestantes` e, quando tipo === "sangramento", grava os dois
+    DIRETO na ferida (fonte de verdade independente de combate).
+E.2 registrarFeridasDeSangramento (mestre.js) repassa danoPorTurno/
+    turnos (já calculados pelo teste de Sangramento) pra criarFerida —
+    a ferida "sangramento" nasce sabendo seu próprio dano/contagem, sem
+    depender só do vínculo com statusAtivos.
+E.3 Nova `aplicarTickSangramento(fichaId, feridaId, quem)` (saude.js):
+    aplica o danoPorTurno da ferida, desconta 1 de turnosRestantes.
+    Zerou → remove a ferida "sangramento" (resolverFimSangramentoNatural)
+    e cancela qualquer vínculo de combate residual
+    (cancelarStatusSangramentoPorFerida) — mesmo efeito de "parou de
+    sangrar sozinho" de antes, só que disparado manualmente em vez de
+    pelo relógio de turno. Ainda com ticks — só desconta e loga no
+    histórico da ferida.
+E.4 Badge novo no ferida-card (renderizarSaude, ficha.js): "🩸
+    Sangrando — N tick(s) restante(s) (aplicar)", visível só pro
+    Mestre, só em ferida tipo "sangramento" com estado "aberta" e
+    turnosRestantes > 0. Clique chama aplicarTickSangramentoManual, que
+    só roda com fichaAtual aberta (mesma convenção dos outros botões
+    exclusivos do Mestre nesta aba).
+Dentro de um Gerenciador de Combate ativo, o tick automático por turno
+(processarStatusInicioTurno) continua sendo o caminho normal — o badge
+é o caminho de FORA de combate (ou depois que o combate já encerrou),
+pro Mestre aplicar os ticks restantes na cadência narrativa que fizer
+sentido (por cena, por hora in-game, etc.). Os dois caminhos levam ao
+mesmo lugar: dano fixo + contador descontado, ferida "sangramento"
+some quando zera.
 ---------------------------------------------------------------------

@@ -564,6 +564,40 @@ export async function vincularFeridaAoStatusSangramento(participanteId, statusId
     await update(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos/${statusId}`)), { feridaId });
 }
 
+// Caminho inverso do vínculo acima: quando a ferida "sangramento" é
+// tratada com SUCESSO na aba Saúde (Estancar Sangramento, ou Suturar
+// Ferimento fechando ela direto — ver tratarFerida, saude.js), o
+// sangramento para NA HORA — não faz sentido a ferida já estar
+// "estancada"/"tratada" e o status de combate continuar tickando dano
+// por turno até o timer zerar sozinho (essa era a "Decisão em aberto"
+// do plano mestre-tratar-feridas-sangramento.txt, resolvida a favor de
+// cancelar). Busca, em TODOS os participantes de combate (ficha pode
+// não estar mais em combate, ou combate pode nem estar ativo — nesses
+// casos não há nada pra cancelar e a função só retorna false sem
+// erro), a entrada de statusAtivos tipo "sangramento" vinculada a essa
+// feridaId e remove ela (não zera turnosRestantes — remove de vez, já
+// que não sobra motivo pra manter o registro). A ferida em si já foi
+// atualizada por quem chamou (tratarFerida) — esta função só mexe no
+// status de combate.
+export async function cancelarStatusSangramentoPorFerida(fichaId, feridaId) {
+    if (!fichaId || !feridaId) return false;
+    const snap = await get(ref(db, caminhoMesa("combateAtivo/participantes")));
+    if (!snap.exists()) return false;
+    const participantes = snap.val();
+    let cancelado = false;
+    for (const [participanteId, participante] of Object.entries(participantes)) {
+        if (!participante || participante.tipo !== "ficha" || participante.refId !== fichaId) continue;
+        const statusAtivos = participante.statusAtivos || {};
+        for (const [chave, status] of Object.entries(statusAtivos)) {
+            if (status && status.tipo === "sangramento" && status.feridaId === feridaId) {
+                await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos/${chave}`)));
+                cancelado = true;
+            }
+        }
+    }
+    return cancelado;
+}
+
 // Novo tipo "dano_continuo" (Parte 5.2 — Tóxico/Inflamável residual).
 // Igual ao sangramento no formato (dano fixo por turno, mesma
 // contagem regressiva), mas SEM teste de Constituição pra resistir —
@@ -766,9 +800,11 @@ export async function testarSangramentoProfundo(participanteId, constituicaoAlvo
 // dano" abrir uma segunda em cima do mesmo golpe.
 export async function registrarFeridasDeSangramento(habilitado, participanteId, alvoRefId, localFerida, origem, resultadoSangramento) {
     if (!habilitado || !resultadoSangramento || !resultadoSangramento.sangramento) return false;
-    const feridaSangramento = await criarFerida(alvoRefId, { tipo: "sangramento", local: localFerida, origem });
+    const { danoPorTurno, turnos, statusId } = resultadoSangramento.sangramento;
+    const feridaSangramento = await criarFerida(alvoRefId, {
+        tipo: "sangramento", local: localFerida, origem, danoPorTurno, turnosRestantes: turnos
+    });
     await criarFerida(alvoRefId, { tipo: "corte", local: localFerida, origem: `${origem} (sangramento)` });
-    const statusId = resultadoSangramento.sangramento.statusId;
     if (statusId) {
         await vincularFeridaAoStatusSangramento(participanteId, statusId, feridaSangramento.id);
     }

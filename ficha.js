@@ -148,7 +148,7 @@ import {
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
 import {
-    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida
+    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida, aplicarTickSangramento
 } from "./saude.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -16330,6 +16330,16 @@ function renderizarSaude() {
         const botaoExcluirFerida = (isMestre && godmodeAtivo)
             ? `<button type="button" class="btn-ghost btn-excluir-ferida-godmode" data-ferida-id="${ferida.id}" title="Apaga a ferida por completo, sem histórico — Godmode">🗑️ Excluir ferida (Godmode)</button>`
             : "";
+        // Sangramento continua existindo (e fazendo dano) mesmo fora de
+        // combate ou depois do Gerenciador de Combate encerrado — ver
+        // aplicarTickSangramento (saude.js). Badge só aparece pro Mestre,
+        // só na ferida "sangramento" ainda aberta (não tratada) e só
+        // enquanto sobrar tick — cada clique aplica 1 tick (dano fixo +
+        // desconta 1 do contador) na hora que fizer sentido narrativamente.
+        const ticksSangramentoRestantes = Number(ferida.turnosRestantes) || 0;
+        const badgeSangramentoTick = (isMestre && ferida.tipo === "sangramento" && ferida.estado === "aberta" && ticksSangramentoRestantes > 0)
+            ? `<button type="button" class="mod-pill negativo btn-tick-sangramento" data-ferida-id="${ferida.id}" title="Aplica 1 tick de sangramento agora: ${ferida.danoPorTurno || 0} de dano fixo, desconta 1 do contador. Use fora de combate (dentro de combate o tick já é automático a cada turno).">🩸 Sangrando — ${ticksSangramentoRestantes} tick(s) restante(s) (aplicar)</button>`
+            : "";
 
         const historico = Object.values(ferida.historico || {}).sort((a, b) => (a.data || 0) - (b.data || 0));
         const historicoHtml = historico.length
@@ -16347,7 +16357,7 @@ function renderizarSaude() {
                 ${badgeInfeccao}
             </div>
             ${ferida.origem ? `<div class="hint">Origem: ${escapeHtml(ferida.origem)}</div>` : ""}
-            <div class="ferida-acoes">${botoesTratamento}${semAcao}${botaoTestarInfeccao}${botaoExcluirFerida}</div>
+            <div class="ferida-acoes">${botoesTratamento}${semAcao}${botaoTestarInfeccao}${botaoExcluirFerida}${badgeSangramentoTick}</div>
             ${historicoHtml}
         </div>`;
     }).join("");
@@ -16362,6 +16372,27 @@ function renderizarSaude() {
         el.saudeLista.querySelectorAll(".btn-excluir-ferida-godmode").forEach(btn => {
             btn.addEventListener("click", () => excluirFeridaGodmode(btn.dataset.feridaId));
         });
+        el.saudeLista.querySelectorAll(".btn-tick-sangramento").forEach(btn => {
+            btn.addEventListener("click", () => aplicarTickSangramentoManual(btn.dataset.feridaId));
+        });
+    }
+}
+
+// Aplica 1 tick de sangramento fora do turno automático de combate —
+// ver aplicarTickSangramento (saude.js). Só a ficha atualmente aberta
+// na tela (fichaAtualId), mesma convenção dos outros botões exclusivos
+// do Mestre nesta aba. feridasCache atualiza sozinho via ouvirFeridas
+// quando o tick zera e a ferida some.
+async function aplicarTickSangramentoManual(feridaId) {
+    if (!isMestre || modoNpc || !fichaAtualId) return;
+    try {
+        const resultado = await aplicarTickSangramento(fichaAtualId, feridaId, "Mestre");
+        toast(resultado.encerrado
+            ? `Sangramento encerrado — ${resultado.dano} de dano aplicado no último tick.`
+            : `Tick de sangramento aplicado: ${resultado.dano} de dano. Faltam ${resultado.turnosRestantes} tick(s).`);
+    } catch (err) {
+        console.error(err);
+        toast(err.message || "Falha ao aplicar o tick de sangramento.", "erro");
     }
 }
 

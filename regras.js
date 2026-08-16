@@ -1836,6 +1836,13 @@ export const TRATAMENTOS_FERIDA = {
         dificuldadeMin: 15,
         dificuldadeMax: 20,
         itensSugeridos: "Pinça esterilizada, bisturi, ou Kit Cirúrgico (nível 3+)",
+        // NÃO usado como estado final no sucesso — sucesso em Remover
+        // Projétil é caso especial em tratarFerida (saude.js): o projétil
+        // sai e a ferida MUDA DE TIPO pra "corte" (estado "aberta"), já
+        // que o que sobra é o ferimento que ele fez, não mais um
+        // "projétil alojado". Este campo só documenta a ideia original
+        // (mantido por compatibilidade de leitura, não é lido nesse
+        // caminho).
         efeitoSucesso: "sem_sangramento"
     },
     suturar_ferimento: {
@@ -1888,11 +1895,14 @@ export const TRATAMENTOS_FERIDA = {
     }
 };
 
-// Suturar é permitido em: ferida "corte" direto ("aberta"); ferida
-// "sangramento" tanto "aberta" quanto já "estancada" (plano, seção 3 —
-// os dois caminhos levam a "tratada"); ou "projetil" já com estado
-// "sem_sangramento" (projétil removido primeiro) — ver
-// plano-sistema-saude-ferimentos.txt, seção 3.
+// Suturar é permitido em: ferida "corte" direto ("aberta") — inclui a
+// ferida que Remover Projétil bem-sucedido vira (tipo passa a "corte",
+// estado "aberta", ver tratarFerida em saude.js); ferida "sangramento"
+// tanto "aberta" quanto já "estancada" (plano, seção 3 — os dois
+// caminhos levam a "tratada"); ou "projetil" ainda com estado
+// "sem_sangramento" — só existe em fichas com ferida antiga, de antes
+// dessa mudança (registro já gravado no banco com tipo "projetil");
+// Remover Projétil não deixa mais nenhuma ferida nova nesse estado.
 export function feridaAceitaSutura(ferida) {
     if (!ferida) return false;
     if (ferida.tipo === "corte") return ferida.estado === "aberta";

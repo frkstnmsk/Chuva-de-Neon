@@ -21,7 +21,7 @@ import {
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem,
     danoPorMargemFalha
 } from "./regras.js";
-import { aplicarDano, criarAcaoPendente } from "./mestre.js";
+import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (mesmo helper que já existe, sem exportar, dentro de mestre.js —
@@ -74,7 +74,7 @@ export async function obterConstituicaoFicha(fichaId) {
 // etapa 2 vai passar "aberta" na maioria dos casos, mas fica explícito
 // aqui em vez de assumido, já que cada tipo de ferida pode nascer num
 // estado diferente no futuro).
-export async function criarFerida(fichaId, { tipo, local, origem, estadoInicial = "aberta" }) {
+export async function criarFerida(fichaId, { tipo, local, origem, estadoInicial = "aberta", danoPorTurno = null, turnosRestantes = null }) {
     if (!fichaId || !tipo) throw new Error("criarFerida: fichaId e tipo são obrigatórios.");
     const novaRef = push(ref(db, caminhoMesa(`fichas/${fichaId}/feridas`)));
     const ferida = {
@@ -87,6 +87,17 @@ export async function criarFerida(fichaId, { tipo, local, origem, estadoInicial 
         infeccaoGarantida: false,
         historico: []
     };
+    // Ferida "sangramento": guarda o dano por turno e quantos ticks
+    // faltam DIRETO na própria ferida (não só no status de combate por
+    // turno, que é apagado quando o combate termina — ver
+    // encerrarCombate, mestre.js). É esse par de campos que permite o
+    // sangramento continuar existindo (e sendo aplicado manualmente
+    // pelo Mestre, ver aplicarTickSangramento abaixo) mesmo fora de
+    // combate, ou depois que o Gerenciador de Combate já foi encerrado.
+    if (tipo === "sangramento" && danoPorTurno != null && turnosRestantes != null) {
+        ferida.danoPorTurno = Number(danoPorTurno) || 0;
+        ferida.turnosRestantes = Math.max(0, Number(turnosRestantes) || 0);
+    }
     await set(novaRef, ferida);
     return { id: novaRef.key, ...ferida };
 }
@@ -116,6 +127,52 @@ export async function removerFerida(fichaId, feridaId) {
 export async function resolverFimSangramentoNatural(fichaId, feridaId) {
     if (!fichaId || !feridaId) return;
     await removerFerida(fichaId, feridaId);
+}
+
+// Aplica UM tick de sangramento manualmente — pra quando o Mestre
+// clica no badge "🩸 Sangramento" da ferida na aba Saúde. Existe
+// porque o sangramento não pode mais depender só do Gerenciador de
+// Combate: o status por turno (combateAtivo/participantes/.../
+// statusAtivos) é apagado inteiro quando o combate termina
+// (encerrarCombate, mestre.js), então uma ferida "sangramento" que
+// ainda tinha turnos restantes ficava com o contador congelado assim
+// que a cena de combate acabava — sem mais dano, sem mais contagem,
+// mas também sem nunca "acabar" de verdade. Como a ferida agora guarda
+// seu próprio `danoPorTurno`/`turnosRestantes` (ver criarFerida acima),
+// o Mestre pode aplicar os ticks restantes na mão, fora de combate,
+// numa cadência narrativa (por cena, por hora in-game, etc.) — dentro
+// de um combate ativo o normal continua sendo o tick automático de
+// cada troca de turno (processarStatusInicioTurno); este botão é o
+// caminho de fora do combate.
+// Cada clique: aplica danoPorTurno de dano na ficha, desconta 1 de
+// turnosRestantes. Ao chegar em 0, a ferida "sangramento" é removida
+// (mesmo comportamento de esgotar sozinha em combate — a ferida
+// "corte" criada junto continua existindo, intacta, ainda precisando
+// de Suturar Ferimento) e qualquer vínculo de combate residual
+// (participante ainda em algum combate ativo apontando pra essa
+// feridaId) é cancelado junto, pra não sobrar lixo.
+export async function aplicarTickSangramento(fichaId, feridaId, quem) {
+    const ferida = await obterFerida(fichaId, feridaId);
+    if (!ferida) throw new Error("Ferida não encontrada.");
+    if (ferida.tipo !== "sangramento") throw new Error("Essa ferida não é um Sangramento ativo.");
+    if (ferida.estado !== "aberta") throw new Error("Esse sangramento já foi tratado (estancado/suturado) — não sangra mais.");
+    const turnosRestantesAtual = Number(ferida.turnosRestantes) || 0;
+    if (turnosRestantesAtual <= 0) throw new Error("Esse sangramento não tem mais ticks registrados.");
+
+    const dano = Number(ferida.danoPorTurno) || 0;
+    const danoExtra = dano > 0 ? await aplicarDano("ficha", fichaId, dano, null) : null;
+    const restante = turnosRestantesAtual - 1;
+
+    if (restante <= 0) {
+        await resolverFimSangramentoNatural(fichaId, feridaId);
+        await cancelarStatusSangramentoPorFerida(fichaId, feridaId);
+        return { dano, turnosRestantes: 0, encerrado: true, detalhe: `Sangramento: último tick aplicado (${dano} de dano) — parou de sangrar. Resta a ferida de Corte/Perfuração para suturar.` };
+    }
+
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), { turnosRestantes: restante });
+    const detalhe = `Sangramento: tick aplicado manualmente pelo Mestre — ${dano} de dano fixo. Faltam ${restante} tick(s).`;
+    await registrarHistorico(fichaId, feridaId, { acao: "Tick de Sangramento", quem, resultado: detalhe });
+    return { dano, turnosRestantes: restante, encerrado: false, detalhe };
 }
 
 // ---------------------------------------------------------------------
@@ -237,16 +294,35 @@ export async function tratarFerida(fichaId, feridaId, {
         // Cirurgia de Campo não tem efeito fixo de sucesso (efeitoSucesso
         // é null) — mesmo em Godmode, não mexe no estado da ferida.
         const ehCirurgiaDeCampo = acao === "cirurgia_de_campo";
-        const atualizacoesGodmode = ehCirurgiaDeCampo ? {} : { estado: config.efeitoSucesso };
+        const ehRemoverProjetil = acao === "remover_projetil";
+        // Remover Projétil (sucesso): o projétil sai, mas o ferimento que
+        // ele abriu continua ali — vira uma ferida de Corte/Perfuração
+        // normal (estado "aberta"), ainda precisando de Suturar Ferimento.
+        // Sem isso, a ferida ficava rotulada "Projétil alojado" pra
+        // sempre mesmo depois de removido (só o ESTADO mudava pra "Projétil
+        // removido", o TIPO nunca acompanhava).
+        const atualizacoesGodmode = ehCirurgiaDeCampo ? {}
+            : ehRemoverProjetil ? { estado: "aberta", tipo: "corte" }
+            : { estado: config.efeitoSucesso };
         const detalheGodmode = ehCirurgiaDeCampo
             ? `${config.label}: sucesso automático pelo Mestre (Godmode) — aplique manualmente o que fizer sentido na cena (reverter coma, estabilizar, etc.).`
-            : `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item.`;
+            : ehRemoverProjetil
+                ? `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item. O projétil saiu — a ferida vira Corte/Perfuração (aberta), ainda precisa ser suturada.`
+                : `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item.`;
         if (Object.keys(atualizacoesGodmode).length) {
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesGodmode);
         }
         await registrarHistorico(fichaId, feridaId, { acao: config.label, quem: tratadorNome, resultado: detalheGodmode });
         if (emHospital) {
             await marcarTratamentoHospital(fichaId);
+        }
+        // Ferida "sangramento" tratada com sucesso (Estancar Sangramento
+        // ou Suturar Ferimento fechando ela direto) para de sangrar NA
+        // HORA — cancela também o status de combate por turno vinculado
+        // a essa ferida, se houver (ver cancelarStatusSangramentoPorFerida,
+        // mestre.js). Sem efeito se não houver combate ativo/vínculo.
+        if (ferida.tipo === "sangramento" && (acao === "estancar_sangramento" || acao === "suturar_ferimento")) {
+            await cancelarStatusSangramentoPorFerida(fichaId, feridaId);
         }
         return {
             acao, dificuldade: null, bruto: null, nivelPericia: null, penalidadeItem: null, modificadorExtra: null,
@@ -285,7 +361,15 @@ export async function tratarFerida(fichaId, feridaId, {
         // — sucesso não muda o estado da ferida sozinho, só fica
         // registrado no histórico pro Mestre ler e decidir manualmente
         // via Godmode (reverter coma, estabilizar, etc.).
-        if (acao !== "cirurgia_de_campo") {
+        if (acao === "remover_projetil") {
+            // Mesma lógica do Godmode acima: sucesso em Remover Projétil
+            // não deixa a ferida "sem_sangramento" com tipo "projetil"
+            // parado pra sempre — o projétil saiu, e o que sobra é o
+            // ferimento que ele fez (Corte/Perfuração), aberto, ainda
+            // precisando de Suturar Ferimento.
+            atualizacoesFerida.estado = "aberta";
+            atualizacoesFerida.tipo = "corte";
+        } else if (acao !== "cirurgia_de_campo") {
             atualizacoesFerida.estado = config.efeitoSucesso;
         }
     } else {
@@ -325,7 +409,9 @@ export async function tratarFerida(fichaId, feridaId, {
     const detalheMargem = danoMargem > 0 ? ` ${danoMargem} PV(s) perdido(s) pela margem de falha (${dificuldade - resultado} ponto(s) abaixo da dificuldade).` : "";
     const notaCirurgiaSucesso = (sucesso && acao === "cirurgia_de_campo")
         ? " Aplique manualmente via Godmode, se fizer sentido na cena (reverter coma, estabilizar, etc.)."
-        : "";
+        : (sucesso && acao === "remover_projetil")
+            ? " O projétil saiu — a ferida vira Corte/Perfuração (aberta), ainda precisa ser suturada."
+            : "";
     const detalhe = `${config.label} (dif ${dificuldade}): d20 (${bruto}) + ${nivelPericia} perícia `
         + `${penalidadeItem ? `${penalidadeItem} item ` : ""}${modificadorExtra ? `+${modificadorExtra} item específico ` : ""}`
         + `= ${resultado} — ${sucesso ? "SUCESSO" : (complicacao ? "FALHOU COM COMPLICAÇÃO" : "FALHOU")}.${detalheMargem}${detalheExtra}${notaCirurgiaSucesso}`;
@@ -348,6 +434,12 @@ export async function tratarFerida(fichaId, feridaId, {
     }
     if (emHospital && sucesso) {
         await marcarTratamentoHospital(fichaId);
+    }
+    // Mesmo cancelamento do caminho Godmode acima: ferida "sangramento"
+    // tratada com sucesso (rolagem normal) para de sangrar na hora,
+    // cancelando também o status de combate por turno vinculado.
+    if (sucesso && ferida.tipo === "sangramento" && (acao === "estancar_sangramento" || acao === "suturar_ferimento")) {
+        await cancelarStatusSangramentoPorFerida(fichaId, feridaId);
     }
 
     return {
