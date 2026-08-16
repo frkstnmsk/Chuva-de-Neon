@@ -1,5 +1,4 @@
-haha frkstnmsk
-k
+# Chuva de Neon — Ficha Digital
 
 ## Mesas separadas (multi-Mestre)
 
@@ -18,11 +17,3 @@ normalmente igual ao `login`.
 
 Jogador escolhe a mesa (o Mestre) na aba **"Registrar Nova Ficha"**, na
 tela de login. Essa escolha fica salva na ficha e não muda mais sozinha.
-
-### Se o site já estava no ar antes dessa mudança
-
-Os dados antigos (fichas, npcs, calendário etc.) ficavam soltos na raiz
-do banco. Abra `migracao-mesas.html` uma única vez pra copiar tudo pra
-dentro de `mesas/{mesaId}` (ajuste o id da mesa de destino no campo da
-página — normalmente o login do Mestre "dono" das fichas já existentes)
-antes de apagar os dados antigos da raiz.

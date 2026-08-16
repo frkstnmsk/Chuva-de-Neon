@@ -1619,7 +1619,7 @@ function receitasModuloDetonacaoDisponiveis(nivel) {
 
 function receitasExtrasDaPericia(periciaNome) {
     return Object.entries(fichaAtual.receitasConhecidas || {})
-        .filter(([, c]) => c.periciaVinculada === periciaNome && c.origem === "mestre")
+        .filter(([, c]) => c.periciaVinculada === periciaNome && (c.origem === "mestre" || c.origem === "engenharia"))
         .map(([id, c]) => ({ id, ...c }))
         .sort((a, b) => (Number(a.nivel) || 0) - (Number(b.nivel) || 0));
 }
@@ -2902,7 +2902,7 @@ function estadoSaudeLabelAtual() {
 // Lista, em texto, cada penalidade/bônus não-zero que entrou na rolagem
 // de ataque (estado de saúde, recuo, precisão) — ex: "-4 muito machucado,
 // -1 recuo, -1 precisão". Devolve "—" quando não há nenhuma.
-function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra = 0, modMovimento = 0, modCQC = 0) {
+function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra = 0, modMovimento = 0, modCQC = 0, modEscuro = 0) {
     const partes = [];
     if (penalidadeSaude) {
         const rotulo = estadoSaudeLabelAtual().toLowerCase() || "estado de saúde";
@@ -2912,6 +2912,7 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
     if (modPrecisao) partes.push(`${modPrecisao >= 0 ? "+" : ""}${modPrecisao} precisão`);
     if (modificadorExtra) partes.push(`${modificadorExtra >= 0 ? "+" : ""}${modificadorExtra} contra-ataque (Aparar)`);
     if (modMovimento) partes.push(`${modMovimento >= 0 ? "+" : ""}${modMovimento} movimento`);
+    if (modEscuro) partes.push(`${modEscuro >= 0 ? "+" : ""}${modEscuro} escuro/mira às cegas`);
     if (modCQC) partes.push(`${modCQC >= 0 ? "+" : ""}${modCQC} CQC (1x1)`);
     return partes.length ? partes.join(", ") : "—";
 }
@@ -2926,8 +2927,8 @@ function formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modif
 // ver resolverAtaque) mostra "CRÍTICO POSITIVO" — só destaques visuais;
 // não mudam se o ataque acerta ou erra, que continua comparando
 // resultadoAtaque com a dificuldade.
-function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0, modMovimento = 0, modCQC = 0, criticoPositivo = false, criticoNegativo = false }) {
-    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra, modMovimento, modCQC);
+function formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra = 0, modMovimento = 0, modCQC = 0, modEscuro = 0, criticoPositivo = false, criticoNegativo = false }) {
+    const penalidadesTexto = formatarPenalidadesAtaque(penalidadeSaude, modRecuo, modPrecisao, modificadorExtra, modMovimento, modCQC, modEscuro);
     const resultadoTexto = criticoNegativo
         ? "CRÍTICO NEGATIVO"
         : (criticoPositivo ? `${resultadoAtaque} — CRÍTICO POSITIVO` : `${resultadoAtaque}`);
@@ -2993,16 +2994,20 @@ function abrirModalEscolhaEngenharia(modificadorRolagem) {
     });
     modal.querySelector("#btn-engenharia-criar-receita").addEventListener("click", () => {
         modal.remove();
-        abrirModalEscolherReceitaParaEngenharia();
+        abrirModalEscolherReceitaParaEngenharia(modificadorRolagem);
     });
     document.body.appendChild(modal);
 }
 
-// Picker simples: escolher uma receita já existente no Banco Global
-// (abre pra editar — mesma modal de sempre) ou partir pra uma nova do
-// zero. Reaproveita 100% de abrirModalCriarReceita — este picker só
-// existe pra dar o ponto de entrada a partir da perícia Engenharia.
-function abrirModalEscolherReceitaParaEngenharia() {
+// Picker de entrada a partir da perícia Engenharia: autorar uma receita
+// nova (vai pro Banco Global) OU aprender uma já existente — nos dois
+// casos, o personagem só ganha a receita em receitasConhecidas se
+// passar no teste de Engenharia (ver resolverTesteAprenderReceita),
+// dificuldade 10 + 2×nível do item. Escolher uma receita da lista aqui
+// NÃO edita ela (isso é feito só pelo Mestre, na Biblioteca de
+// Receitas, ou pelo autor original clicando "Editar" na aba Receitas
+// da própria ficha) — é uma tentativa de aprendê-la.
+function abrirModalEscolherReceitaParaEngenharia(modificadorEngenharia) {
     let modal = document.getElementById("modal-escolher-receita-engenharia");
     if (!modal) {
         modal = document.createElement("div");
@@ -3019,13 +3024,17 @@ function abrirModalEscolherReceitaParaEngenharia() {
             <button type="button" class="btn-lime" id="btn-engenharia-receita-nova" style="width:100%;">+ Nova receita</button>
         </div>
         <div class="modal-field">
-            <label for="engenharia-receita-busca">Ou escolha uma já existente no Banco Global pra editar</label>
+            <label for="engenharia-receita-busca">Ou escolha uma já existente no Banco Global pra tentar aprender</label>
+            <span class="hint-inline">Rola Engenharia contra dificuldade 10 + 2×nível do item — se passar, a receita entra nas suas Receitas (na aba de ${escapeHtml("Armeiro/Eletrônica/etc.")} conforme a perícia vinculada).</span>
             <input type="text" id="engenharia-receita-busca" placeholder="Buscar por nome..." autocomplete="off">
             <div class="combate-lista" id="engenharia-receita-lista" style="max-height:260px; overflow-y:auto;"></div>
         </div>
     `;
     const lista = modal.querySelector("#engenharia-receita-lista");
     const busca = modal.querySelector("#engenharia-receita-busca");
+    function jaConhece(receitaGlobalId) {
+        return Object.values(fichaAtual.receitasConhecidas || {}).some(c => c.receitaGlobalId === receitaGlobalId);
+    }
     function renderizarLista() {
         const termo = busca.value.trim().toLowerCase();
         const encontradas = receitasGlobaisCache
@@ -3037,15 +3046,17 @@ function abrirModalEscolherReceitaParaEngenharia() {
             return;
         }
         encontradas.forEach(r => {
+            const conhecida = jaConhece(r.id);
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "btn-ghost";
             btn.style.width = "100%";
             btn.style.marginBottom = "4px";
-            btn.innerText = `Nível ${Number(r.nivel) || 1} · ${r.nome || "(sem nome)"} — ${r.periciaVinculada || "?"}`;
-            btn.addEventListener("click", () => {
+            btn.disabled = conhecida;
+            btn.innerText = `Nível ${Number(r.nivel) || 1} · ${r.nome || "(sem nome)"} — ${r.periciaVinculada || "?"}${conhecida ? " (já conhecida)" : ""}`;
+            btn.addEventListener("click", async () => {
                 modal.remove();
-                abrirModalCriarReceita(r);
+                await resolverTesteAprenderReceita(r, modificadorEngenharia);
             });
             lista.appendChild(btn);
         });
@@ -3056,9 +3067,35 @@ function abrirModalEscolherReceitaParaEngenharia() {
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-engenharia-receita-nova").addEventListener("click", () => {
         modal.remove();
-        abrirModalCriarReceita(null);
+        abrirModalCriarReceita(null, null, null, { modificadorEngenharia });
     });
     document.body.appendChild(modal);
+}
+
+// Teste de Engenharia pra aprender uma receita já existente no Banco
+// Global (dificuldade 10 + 2×nível do item — ver mensagem do usuário
+// nesta conversa). Sucesso: entra em receitasConhecidas (origem
+// "engenharia"), categorizada pela perícia vinculada da receita
+// (Armeiro, Eletrônica, etc. — mesma perícia usada pra CRIAR o item,
+// não uma categoria escolhida à parte). Falha: só fica registrado no
+// Log, a receita não é aprendida (mas continua disponível no Banco
+// Global pra tentar de novo depois).
+async function resolverTesteAprenderReceita(receita, modificadorEngenharia) {
+    if (!fichaAtual) return;
+    if (Object.values(fichaAtual.receitasConhecidas || {}).some(c => c.receitaGlobalId === receita.id)) {
+        toast("Você já conhece essa receita.", "erro");
+        return;
+    }
+    const nivel = Number(receita.nivel) || 1;
+    const dificuldade = 10 + 2 * nivel;
+    const resultado = await rolarComPossibilidadeDeOcasionais("Engenharia (aprender receita)", "pericia:Engenharia", modificadorEngenharia, false, dificuldade);
+    if (!resultado) return; // cancelado no modal de Ocasião Especial
+    if (!resultado.sucesso) {
+        toast(`Não deu pra decifrar "${receita.nome}" dessa vez (dificuldade ${dificuldade}) — pode tentar de novo depois.`, "erro");
+        return;
+    }
+    await concederReceitaConhecida(receita.periciaVinculada, nivel, receita.id, "engenharia");
+    toast(`Receita "${receita.nome}" aprendida! Já aparece em Receitas → ${receita.periciaVinculada}.`);
 }
 
 function renderizarPericias(modificadoresPlanos) {
@@ -4608,6 +4645,11 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
         !(modoNpc && p.tipo === "npc" && p.refId === npcAtualId)
     );
     if (!opcoes.length) { toast("Não há outros participantes no combate pra atacar.", "erro"); return; }
+    // NPCs primeiro, jogadores (fichas) por último — evita miss-click
+    // atacando o colega sem querer, já que jogadores costumam ser o
+    // "alvo padrão" mais raro em combate (a maioria dos ataques é
+    // contra NPC). Mantém a ordem original dentro de cada grupo.
+    opcoes.sort(([, a], [, b]) => (a.tipo === "ficha" ? 1 : 0) - (b.tipo === "ficha" ? 1 : 0));
 
     contextoAtaque = { item: it, modificadoresPlanos, ocasionaisPericia: modificadoresOcasionaisDaPericia(fichaAtual, it.periciaUso) };
     el.alvoTitulo.innerText = `Atacar com ${it.nome}`;
@@ -4674,7 +4716,7 @@ function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
             <option value="ambosMovimento">Ambos em movimento (-4)</option>
         </select>
         <label class="checkbox-inline" style="margin-top:10px;">
-            <input type="checkbox" id="alvo-escuro-check"> Escuro (-5 na dificuldade)
+            <input type="checkbox" id="alvo-escuro-check"> Escuro / mira às cegas (-5 no ataque)
         </label>
         <label class="checkbox-inline" style="margin-top:6px;">
             <input type="checkbox" id="alvo-queima-roupa-check"> Tiro à queima-roupa em alvo dominado/agarrado (dano quadruplicado)
@@ -4695,6 +4737,9 @@ function preencherOpcoesDeAlvo() {
         !(p.tipo === "ficha" && p.refId === fichaAtualId) &&
         !(modoNpc && p.tipo === "npc" && p.refId === npcAtualId)
     );
+    // NPCs primeiro, jogadores por último — mesma lógica de
+    // abrirModalSelecionarAlvo, evita miss-click no colega.
+    opcoes.sort(([, a], [, b]) => (a.tipo === "ficha" ? 1 : 0) - (b.tipo === "ficha" ? 1 : 0));
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
         const opt = document.createElement("option");
@@ -4949,6 +4994,9 @@ function abrirModalDispararAvancar() {
     const participantes = (combateAtivoCache && combateAtivoCache.participantes) || {};
     const opcoes = Object.entries(participantes).filter(([pid]) => pid !== meuPid);
     if (!opcoes.length) { toast("Não há outros participantes no combate pra disparar.", "erro"); return; }
+    // Mesma lógica de abrirModalSelecionarAlvo: NPCs primeiro, jogadores
+    // por último, pra evitar miss-click disparando no colega.
+    opcoes.sort(([, a], [, b]) => (a.tipo === "ficha" ? 1 : 0) - (b.tipo === "ficha" ? 1 : 0));
 
     let modal = document.getElementById("modal-disparar-avancar-cqc");
     if (!modal) {
@@ -4986,6 +5034,9 @@ async function resolverDispararAvancar(alvoId, itemPistola) {
     }
     const alvo = combateAtivoCache.participantes && combateAtivoCache.participantes[alvoId];
     if (!alvo) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
+    if (alvo.tipo === "ficha" && !confirm(`Você está atacando outro jogador (${alvo.nome}). Tem certeza?`)) {
+        return;
+    }
 
     const modificadoresPlanos = modificadoresAtuais();
     toast(`CQC nível 4 — Disparar e Avançar: 2 disparos em ${alvo.nome}, fora da ordem de turno.`);
@@ -4995,10 +5046,13 @@ async function resolverDispararAvancar(alvoId, itemPistola) {
     toast(`Disparar e Avançar concluído — pode avançar com sua movimentação livre (igual à Velocidade) em direção aos inimigos restantes.`);
 }
 
-// "Arremessar" (CQC nível 3+): escolhe de 1 a 3 alvos entre os
-// participantes do combate (exceto o próprio atacante) — diferente do
-// resto das manobras, que sempre miram um único alvo, por isso usa uma
-// modal própria em vez do modal compartilhado (el.modalSelecionarAlvo).
+// "Arremessar" (CQC nível 3+): a ação sempre acerta UM único alvo (dano
+// + teste de Derrubar só nele) — o que escala com "até 3" é o NÚMERO
+// de combatentes envolvidos na cena, não a quantidade de gente
+// arremessada ao mesmo tempo. Por isso usa dropdown de alvo único
+// (igual ao resto das manobras) + um campo numérico "combatentes
+// adicionais" que soma ao modificador, em vez de checkboxes de
+// múltiplos alvos.
 // Manobra desarmada: arremessa o(s) PRÓPRIO ALVO (manual pg. 23: "...
 // modificador +1 para arremessá-los ou derrubá-los"), não uma arma —
 // por isso não depende de item de inventário nenhum.
@@ -5010,6 +5064,8 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
         !(modoNpc && p.tipo === "npc" && p.refId === npcAtualId)
     );
     if (!opcoes.length) { toast("Não há outros participantes no combate pra arremessar.", "erro"); return; }
+    // NPCs primeiro, jogadores por último — evita miss-click arremessando o colega.
+    opcoes.sort(([, a], [, b]) => (a.tipo === "ficha" ? 1 : 0) - (b.tipo === "ficha" ? 1 : 0));
 
     // Ocasião Especial da perícia usada (ver htmlCheckboxesOcasionais/
     // lerDeltaOcasionais acima): mesma checagem que já vale pra
@@ -5024,37 +5080,34 @@ function abrirModalArremessar(nomePericia, modificadorBase) {
         modal.className = "panel combate-painel-jogador";
         document.body.appendChild(modal);
     }
-    const linhas = opcoes.map(([pid, p]) => `
-        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
-            <input type="checkbox" data-arremessar-alvo="${pid}">
-            <span>${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</span>
-        </label>
-    `).join("");
+    const opts = opcoes.map(([pid, p]) => `<option value="${pid}">${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</option>`).join("");
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Arremessar — CQC nível 3+</span>
             <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
         </div>
-        <h4>Escolha até 3 alvos</h4>
-        <p class="hint">Arremessa cada alvo marcado (dano Força [escala C], contusão). Cada alvo extra (além do 1º) dá +1 no ataque contra TODOS os alvos desta ação.</p>
-        <div class="combate-lista">${linhas}</div>
+        <h4>Escolha o alvo</h4>
+        <p class="hint">Arremessa o alvo escolhido (dano Força [escala C], contusão). Cada combatente adicional na cena (além de 1, até 2) dá +1 no modificador do ataque.</p>
+        <label for="arremessar-alvo-select">Alvo</label>
+        <select id="arremessar-alvo-select">${opts}</select>
+        <label for="arremessar-combatentes-input" style="margin-top:8px;">Combatentes adicionais (além de 1, máx. 2)</label>
+        <input type="number" id="arremessar-combatentes-input" min="0" max="2" value="0" step="1">
         <div id="arremessar-ocasionais-lista">${htmlCheckboxesOcasionais(ocasionaisArremessar, nomePericia)}</div>
         <button type="button" class="btn-lime" id="btn-confirmar-arremessar" style="margin-top:10px;width:100%;">Arremessar</button>
     `;
-    const checks = () => Array.from(modal.querySelectorAll("[data-arremessar-alvo]"));
-    checks().forEach(chk => {
-        chk.addEventListener("change", () => {
-            const marcados = checks().filter(c => c.checked);
-            if (marcados.length > 3) chk.checked = false; // trava em 3 alvos (manual)
-        });
-    });
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-confirmar-arremessar").addEventListener("click", async () => {
-        const alvosIds = checks().filter(c => c.checked).map(c => c.dataset.arremessarAlvo);
-        if (!alvosIds.length) { toast("Marque pelo menos 1 alvo.", "erro"); return; }
+        const alvoId = document.getElementById("arremessar-alvo-select").value;
+        const alvo = combateAtivoCache.participantes && combateAtivoCache.participantes[alvoId];
+        if (!alvo) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
+        if (alvo.tipo === "ficha" && !confirm(`Você está atacando outro jogador (${alvo.nome}). Tem certeza?`)) {
+            return;
+        }
+        const combatentesInput = document.getElementById("arremessar-combatentes-input");
+        const bonusPorAlvoExtra = Math.min(2, Math.max(0, Number(combatentesInput.value) || 0));
         const deltaOcasional = lerDeltaOcasionais(modal.querySelector("#arremessar-ocasionais-lista"), ocasionaisArremessar);
         modal.remove();
-        await resolverArremessar(nomePericia, modificadorBase + deltaOcasional, alvosIds);
+        await resolverArremessar(nomePericia, modificadorBase + deltaOcasional, alvoId, bonusPorAlvoExtra);
     });
 }
 
@@ -5131,6 +5184,11 @@ function configurarModalSelecionarAlvo() {
         const pid = el.alvoSelect.value;
         const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
         if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
+        // Alvo é outro jogador (não NPC): confirma antes de prosseguir, pra
+        // evitar acertar o colega por engano (miss-click na lista).
+        if (participante.tipo === "ficha" && !confirm(`Você está atacando outro jogador (${participante.nome}). Tem certeza?`)) {
+            return;
+        }
         el.modalSelecionarAlvo.classList.remove("active");
         if (contextoAtaque) {
             const { item, modificadoresPlanos, ocasionaisPericia } = contextoAtaque;
@@ -5424,19 +5482,24 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
 
     // Modificadores Situacionais Rápidos de Combate à Distância — só
     // fazem sentido (e só aparecem no modal) pra disparo de arma de
-    // fogo de verdade. "Movimento" é um modificador direto no ATAQUE
-    // (some com modPrecisao/modRecuo/modificadorExtra, igual qualquer
-    // outra penalidade de pontaria); Escuro e Combatentes adicionais
-    // mexem na DIFICULDADE em vez do ataque (aplicados mais abaixo,
-    // depois que a dificuldade base/do local mirado é calculada);
-    // Tiro à queima-roupa em alvo dominado/agarrado quadruplica o dano
-    // (aplicado lá embaixo, junto do resto do pipeline de dano). A lista
+    // fogo de verdade. "Movimento" e "Escuro" são modificadores diretos
+    // no ATAQUE (somam com modPrecisao/modRecuo/modificadorExtra, igual
+    // qualquer outra penalidade de pontaria — mira às cegas prejudica
+    // QUEM ATIRA, não facilita o teste; antes "Escuro" reduzia a
+    // DIFICULDADE por engano, o que tinha o efeito contrário do
+    // pretendido — favorecia o atacante em vez de penalizar); só
+    // Combatentes adicionais mexe na DIFICULDADE (aplicado mais abaixo,
+    // depois que a dificuldade base/do local mirado é calculada) —
+    // mais gente na linha de tiro é um problema de MIRA NO ALVO
+    // específico, não da pontaria de quem atira. Tiro à queima-roupa em
+    // alvo dominado/agarrado quadruplica o dano (aplicado lá embaixo,
+    // junto do resto do pipeline de dano). A lista
     // notasSituacionaisLista/notaSituacional é reaproveitada mais abaixo
     // pros bônus de CQC também (nem todo item dela é "de arma de fogo").
     const situacional = ehFogo ? (opcoes.situacional || {}) : {};
     const MOD_MOVIMENTO = { alvoMovimento: -2, alvoCarro: -3, ambosMovimento: -4 };
     const modMovimentoAtaque = MOD_MOVIMENTO[situacional.movimento] || 0;
-    const difEscuro = situacional.escuro ? -5 : 0;
+    const modEscuroAtaque = situacional.escuro ? -5 : 0;
     const combatentesAdicionais = Math.max(0, Number(situacional.combatentesAdicionais) || 0);
     const difCombatentes = combatentesAdicionais * 1;
     const queimaRoupaAgarrado = !!situacional.queimaRoupa;
@@ -5444,7 +5507,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     if (situacional.movimento === "alvoMovimento") notasSituacionaisLista.push(`alvo em movimento (${modMovimentoAtaque})`);
     if (situacional.movimento === "alvoCarro") notasSituacionaisLista.push(`alvo em carro em movimento (${modMovimentoAtaque})`);
     if (situacional.movimento === "ambosMovimento") notasSituacionaisLista.push(`ambos em movimento (${modMovimentoAtaque})`);
-    if (situacional.escuro) notasSituacionaisLista.push(`escuro (${difEscuro} na dificuldade)`);
+    if (situacional.escuro) notasSituacionaisLista.push(`escuro/mira às cegas (${modEscuroAtaque} no ataque)`);
     if (combatentesAdicionais > 0) notasSituacionaisLista.push(`+${difCombatentes} na dificuldade (${combatentesAdicionais} combatente${combatentesAdicionais > 1 ? "s" : ""} indesejado${combatentesAdicionais > 1 ? "s" : ""} na linha de tiro)`);
     if (queimaRoupaAgarrado) notasSituacionaisLista.push("queima-roupa em alvo dominado/agarrado: dano quadruplicado");
 
@@ -5512,7 +5575,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     const penalidadeSaude = penalidadeTestesAtual();
     const periciaBase = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanosAtacante, 0);
     const modPericia = periciaBase + penalidadeSaude;
-    const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra + modMovimentoAtaque + modCQC1x1;
+    const modAtaque = modPericia + modPrecisao + modRecuo + modificadorExtra + modMovimentoAtaque + modEscuroAtaque + modCQC1x1;
     const brutoAtaque = rolarD20();
     const resultadoAtaque = brutoAtaque + modAtaque;
     // Acerto Crítico (manual): o RESULTADO FINAL (d20 + modificadores)
@@ -5528,7 +5591,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // batido a dificuldade ou não.
     let criticoPositivo = resultadoAtaque >= 20;
     const criticoNegativo = brutoAtaque === 1 || resultadoAtaque <= 1;
-    let detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
+    let detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, modEscuro: modEscuroAtaque, criticoPositivo, criticoNegativo });
 
     // constituicaoAlvo agora é sempre preenchida (usada mais abaixo,
     // depois do dano aplicado, pro teste de Constituição que decide SE
@@ -5628,12 +5691,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // defesa do alvo pra corpo a corpo/desarmado).
     dificuldade += difMiraAtual;
 
-    // Modificadores Situacionais Rápidos de Combate à Distância: Escuro
-    // reduz a dificuldade em 5 (favorece o atacante — ambush/mira às
-    // cegas em ambiente escuro, ver ficha.html modal de ataque);
+    // Modificadores Situacionais Rápidos de Combate à Distância:
     // Combatentes adicionais indesejados na linha de tiro aumentam a
-    // dificuldade em 1 por combatente.
-    dificuldade += difEscuro + difCombatentes;
+    // dificuldade em 1 por combatente (mais gente no meio = mais difícil
+    // acertar só quem se quer). "Escuro"/mira às cegas NÃO mexe mais
+    // aqui — virou penalidade direta no ataque (modEscuroAtaque, ver
+    // acima, somado em modAtaque) porque é uma dificuldade de QUEM
+    // ATIRA enxergar o alvo, não do alvo ser mais fácil de acertar;
+    // antes reduzia a dificuldade por engano, o que tinha o efeito
+    // contrário do pretendido (favorecia o atacante em vez de
+    // penalizar).
+    dificuldade += difCombatentes;
 
     // CQC nível 3: faca/adaga golpeia com dificuldade -1.
     if (bonusCQCFaca) dificuldade += bonusCQCFaca.difAjuste;
@@ -5659,7 +5727,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     // crítico no toast e na tela de Esquiva/Bloqueio/Aparar pendente).
     if (acertou && cobraKaiCriticoElegivel && !criticoPositivo) {
         criticoPositivo = true;
-        detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, criticoPositivo, criticoNegativo });
+        detalheRolagem = formatarDetalheRolagemAtaque({ brutoAtaque, periciaBase, penalidadeSaude, modRecuo, modPrecisao, resultadoAtaque, modificadorExtra, modMovimento: modMovimentoAtaque, modCQC: modCQC1x1, modEscuro: modEscuroAtaque, criticoPositivo, criticoNegativo });
     }
 
     // A rolagem do ataque já aconteceu e vai ser registrada de qualquer
@@ -6717,27 +6785,27 @@ async function tentarLibertarImobilizado(participanteId) {
 }
 
 // Arremessar (CQC nível 3+, manual pg. 23, dentro de "Esfaquear e
-// Arremessar"): arremessa o(s) PRÓPRIO ALVO (não uma arma) em até 3
-// alvos numa única ação. "Para cada inimigo a mais até um máximo de 3,
-// você recebe modificador +1 para arremessá-los ou derrubá-los" —
-// interpretado como bônus cumulativo aplicado à rolagem inteira (não
-// escalonado alvo a alvo), já que o manual não detalha outra forma de
-// dividir isso. Reaproveita a dificuldade -1 do nível 3 (já embutida no
-// "9 +" abaixo em vez de "10 +"). Dano escala com FORÇA [escala C]
-// (manual: "Arremessar causa Força C") e é tratado como contusão, igual
-// qualquer golpe desarmado — não há arma nem tipo de dano extra
-// envolvido. Cada acerto ainda testa Derrubar contra aquele alvo
-// específico, com dificuldade +2 (mais difícil que o Derrubar corpo a
-// corpo comum), usando a mesma infraestrutura de
-// definirDerrubado/resolverDerrubar.
-async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
+// Arremessar"): arremessa o alvo escolhido (não uma arma) — SEMPRE um
+// único alvo recebe dano/teste de Derrubar. "Para cada inimigo a mais
+// até um máximo de 3, você recebe modificador +1 para arremessá-los ou
+// derrubá-los" — interpretado como bônus por combatentes adicionais na
+// cena (até +2, pra um total de "até 3" contando o próprio alvo),
+// aplicado ao teste contra o único alvo, não como múltiplos alvos
+// atingidos simultaneamente. Reaproveita a dificuldade -1 do nível 3
+// (já embutida no "9 +" abaixo em vez de "10 +"). Dano escala com
+// FORÇA [escala C] (manual: "Arremessar causa Força C") e é tratado
+// como contusão, igual qualquer golpe desarmado — não há arma nem tipo
+// de dano extra envolvido. O acerto ainda testa Derrubar contra o
+// alvo, com dificuldade +2 (mais difícil que o Derrubar corpo a corpo
+// comum), usando a mesma infraestrutura de definirDerrubado/
+// resolverDerrubar.
+async function resolverArremessar(nomePericia, modificadorBase, alvoId, bonusPorAlvoExtra) {
     const consumo = checarConsumoDeAcao(true); // Arremessar só rola CQC (MANOBRA_ARREMESSAR_CQC)
     if (!consumo) return;
     const participanteIdParaGastarAcao = consumo.participanteId;
 
     const nomeAtacante = fichaAtual?.config?.nomeExibicao || sessao?.nome || "Jogador";
     const meuPid = modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
-    const bonusPorAlvoExtra = Math.max(0, alvosIds.length - 1);
     const modificadorAtaque = modificadorBase + bonusPorAlvoExtra;
     const forcaAtacante = Number(fichaAtual.dados.forca) || 0;
     const danoArremesso = calcularDanoTotalArma({ danoBase: 0, escalaMult: 2 }, forcaAtacante); // escala C = 2x Força
@@ -6748,87 +6816,83 @@ async function resolverArremessar(nomePericia, modificadorBase, alvosIds) {
             tipo: "gastar_acao_combate",
             fichaId: fichaAtualId,
             nomeJogador: nomeAtacante,
-            detalhe: `${nomeAtacante} arremessou ${alvosIds.length} alvo(s) e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
+            detalhe: `${nomeAtacante} arremessou um alvo e quer gastar 1 ação${consumo.extraCQC ? " EXTRA de CQC (nível 5)" : ""} do turno.`,
             payload: { participanteId: participanteIdParaGastarAcao, extraCQC: consumo.extraCQC, ehArmaFogo: false }
         });
         toast("Gasto de ação enviado pro Mestre aprovar.");
     }
 
-    const linhasLog = [];
-    for (const pid of alvosIds) {
-        const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[pid];
-        if (!participante) { linhasLog.push("Alvo inválido (saiu do combate)."); continue; }
+    const participante = combateAtivoCache.participantes && combateAtivoCache.participantes[alvoId];
+    if (!participante) { toast("Alvo inválido — pode ter saído do combate.", "erro"); return; }
 
-        let dificuldade, nomeAlvo, constituicaoAlvo = 0;
-        try {
-            if (participante.tipo === "ficha") {
-                const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
-                if (!snap.exists()) { linhasLog.push(`${participante.nome}: ficha não encontrada.`); continue; }
-                const fichaAlvo = normalizarFicha(snap.val());
-                nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
-                const modsAlvo = coletarModificadores(fichaAlvo);
-                const agilidadeAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "agilidade", modsAlvo, 0);
-                constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
-                dificuldade = 9 + agilidadeAlvo; // 10 base -1 (CQC nível 3)
-            } else {
-                const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
-                if (!snap.exists()) { linhasLog.push(`${participante.nome}: NPC não encontrado.`); continue; }
-                const npc = snap.val();
-                nomeAlvo = npc.nome || participante.nome;
-                // Mesmo recálculo ao vivo do bloco de resolverAtaque acima —
-                // ver comentário lá pra detalhes de por que não usa mais
-                // npc.agilidade/npc.constituicao direto.
-                if (npc.modoDetalhado && npc.atributosPrimarios) {
-                    const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
-                    const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
-                    dificuldade = 9 + secundariosNpcAlvo.secundarios.agilidade.valor;
-                    constituicaoAlvo = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
-                } else {
-                    dificuldade = 9 + (Number(npc.agilidade) || 0);
-                    constituicaoAlvo = Number(npc.constituicao) || 0;
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            linhasLog.push(`${participante.nome}: falha ao buscar dados do alvo.`);
-            continue;
-        }
-
-        const brutoAtaque = rolarD20();
-        const resultadoAtaque = brutoAtaque + modificadorAtaque;
-        if (resultadoAtaque < dificuldade) {
-            linhasLog.push(`${nomeAlvo}: ERRO (${brutoAtaque}+${modificadorAtaque}=${resultadoAtaque} vs. dificuldade ${dificuldade}).`);
-            continue;
-        }
-
-        let resultadoDano;
-        try {
-            resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoArremesso, tipoDanoKey, null);
-        } catch (err) {
-            console.error(err);
-            linhasLog.push(`${nomeAlvo}: ACERTO (${resultadoAtaque} vs. ${dificuldade}), mas falhou ao aplicar o dano — resolva manualmente.`);
-            continue;
-        }
-
-        // Teste de Derrubar embutido (dificuldade +2) — só em quem foi
-        // de fato acertado pelo arremesso.
-        const dificuldadeDerrubar = 10 + constituicaoAlvo + 2;
-        const brutoDerrubar = rolarD20();
-        const resultadoDerrubar = brutoDerrubar + modificadorAtaque;
-        let notaDerrubar;
-        if (resultadoDerrubar >= dificuldadeDerrubar) {
-            await definirDerrubado(pid, meuPid, nomeAtacante);
-            notaDerrubar = ` DERRUBADO (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+    let dificuldade, nomeAlvo, constituicaoAlvo = 0;
+    try {
+        if (participante.tipo === "ficha") {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
+            if (!snap.exists()) { toast(`${participante.nome}: ficha não encontrada.`, "erro"); return; }
+            const fichaAlvo = normalizarFicha(snap.val());
+            nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
+            const modsAlvo = coletarModificadores(fichaAlvo);
+            const agilidadeAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "agilidade", modsAlvo, 0);
+            constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
+            dificuldade = 9 + agilidadeAlvo; // 10 base -1 (CQC nível 3)
         } else {
-            notaDerrubar = ` não derrubou (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+            const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
+            if (!snap.exists()) { toast(`${participante.nome}: NPC não encontrado.`, "erro"); return; }
+            const npc = snap.val();
+            nomeAlvo = npc.nome || participante.nome;
+            // Mesmo recálculo ao vivo do bloco de resolverAtaque acima —
+            // ver comentário lá pra detalhes de por que não usa mais
+            // npc.agilidade/npc.constituicao direto.
+            if (npc.modoDetalhado && npc.atributosPrimarios) {
+                const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
+                const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
+                dificuldade = 9 + secundariosNpcAlvo.secundarios.agilidade.valor;
+                constituicaoAlvo = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
+            } else {
+                dificuldade = 9 + (Number(npc.agilidade) || 0);
+                constituicaoAlvo = Number(npc.constituicao) || 0;
+            }
         }
-
-        linhasLog.push(`${nomeAlvo}: ACERTO (${resultadoAtaque} vs. ${dificuldade}) — dano ${danoArremesso}, ${resultadoDano.reducao} de redução = ${resultadoDano.danoFinal} aplicado, PV restante ${resultadoDano.novoPv}.${notaDerrubar}`);
+    } catch (err) {
+        console.error(err);
+        toast(`${participante.nome}: falha ao buscar dados do alvo.`, "erro");
+        return;
     }
 
-    const notaBonus = bonusPorAlvoExtra ? ` (base ${modificadorBase >= 0 ? "+" : ""}${modificadorBase} +${bonusPorAlvoExtra} por alvo extra)` : "";
-    const detalhe = `${nomeAtacante} ARREMESSOU (CQC nível 3+) ${alvosIds.length} alvo(s) — modificador ${modificadorAtaque >= 0 ? "+" : ""}${modificadorAtaque}${notaBonus}:\n${linhasLog.map(l => `• ${l}`).join("\n")}`;
-    await registrarRolagem({ quem: nomeAtacante, modificador: modificadorAtaque, resultado: `${alvosIds.length} alvo(s)`, detalhe });
+    const brutoAtaque = rolarD20();
+    const resultadoAtaque = brutoAtaque + modificadorAtaque;
+    const notaBonus = bonusPorAlvoExtra ? ` (base ${modificadorBase >= 0 ? "+" : ""}${modificadorBase} +${bonusPorAlvoExtra} por combatente adicional)` : "";
+    if (resultadoAtaque < dificuldade) {
+        const detalhe = `${nomeAtacante} ARREMESSOU (CQC nível 3+) ${nomeAlvo} — ERRO (${brutoAtaque}+${modificadorAtaque}=${resultadoAtaque} vs. dificuldade ${dificuldade})${notaBonus}.`;
+        await registrarRolagem({ quem: nomeAtacante, modificador: modificadorAtaque, resultado: "erro", detalhe });
+        toast(detalhe, "erro");
+        return;
+    }
+
+    let resultadoDano;
+    try {
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoArremesso, tipoDanoKey, null);
+    } catch (err) {
+        console.error(err);
+        toast(`${nomeAlvo}: ACERTO (${resultadoAtaque} vs. ${dificuldade}), mas falhou ao aplicar o dano — resolva manualmente.`, "erro");
+        return;
+    }
+
+    // Teste de Derrubar embutido (dificuldade +2) — só se o arremesso acertou.
+    const dificuldadeDerrubar = 10 + constituicaoAlvo + 2;
+    const brutoDerrubar = rolarD20();
+    const resultadoDerrubar = brutoDerrubar + modificadorAtaque;
+    let notaDerrubar;
+    if (resultadoDerrubar >= dificuldadeDerrubar) {
+        await definirDerrubado(alvoId, meuPid, nomeAtacante);
+        notaDerrubar = ` DERRUBADO (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+    } else {
+        notaDerrubar = ` não derrubou (${brutoDerrubar}+${modificadorAtaque}=${resultadoDerrubar} vs. ${dificuldadeDerrubar}).`;
+    }
+
+    const detalhe = `${nomeAtacante} ARREMESSOU (CQC nível 3+) ${nomeAlvo} — ACERTO (${resultadoAtaque} vs. ${dificuldade})${notaBonus} — dano ${danoArremesso}, ${resultadoDano.reducao} de redução = ${resultadoDano.danoFinal} aplicado, PV restante ${resultadoDano.novoPv}.${notaDerrubar}`;
+    await registrarRolagem({ quem: nomeAtacante, modificador: modificadorAtaque, resultado: resultadoAtaque, detalhe });
     toast(detalhe);
 }
 
@@ -11023,7 +11087,7 @@ function renderizarReceitas() {
 
             const extras = receitasExtrasDaPericia(p.nome);
             const extrasHtml = extras.length
-                ? `<div class="hint-inline" style="margin-top:10px;">Receitas adquiridas em jogo (adicionadas pelo Mestre)</div>
+                ? `<div class="hint-inline" style="margin-top:10px;">Receitas adquiridas em jogo (adicionadas pelo Mestre ou aprendidas com Engenharia)</div>
                    <ul class="entity-list">${extras.map(x => {
                        const r = receitasGlobaisCache.find(g => g.id === x.receitaGlobalId);
                        const podeCriar = r && Number(x.nivel) <= nivelPericia;
@@ -11038,7 +11102,7 @@ function renderizarReceitas() {
                                 ${podeCriar ? `<button type="button" class="btn-rolar btn-blue receita-criar" data-receita-id="${r.id}" data-pericia="${escapeHtml(p.nome)}" data-modificador="${calcPericia.total}" title="Rolar ${p.nome} (${calcPericia.total >= 0 ? "+" : ""}${calcPericia.total}) pra criar">🎲 Criar</button>` : ""}
                                 ${r ? `<button type="button" class="btn-ghost receita-editar" data-receita-editar-id="${r.id}" title="Editar essa receita no Banco Global">Editar</button>` : ""}
                             </div>
-                            <span class="hint-inline">adicionada por ${escapeHtml(x.adicionadoPorNome || "—")}</span>
+                            <span class="hint-inline">${x.origem === "engenharia" ? `aprendida com Engenharia por ${escapeHtml(x.adicionadoPorNome || "—")}` : `adicionada por ${escapeHtml(x.adicionadoPorNome || "—")}`}</span>
                             ${isMestre ? `<button type="button" class="btn-red receita-remover" data-id="${x.id}">Remover</button>` : ""}
                         </li>`;
                    }).join("")}</ul>`
@@ -11177,7 +11241,7 @@ function renderizarReceitas() {
 // problema também, é só adicionar aqui.
 const PERICIAS_QUE_EXIGEM_ITEM_VINCULADO = ["Armeiro", "Explosivos", "Eletrônica", "Ofícios Utilitários", "Química"];
 
-function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
+function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais, contextoEngenharia) {
     let modal = document.getElementById("modal-criar-receita");
     if (!modal) {
         modal = document.createElement("div");
@@ -11539,6 +11603,15 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais) {
                 toast(`Receita "${nome}" criada no Banco Global.`);
                 if (opcoesSlot?.periciaVinculada && fichaAtual) {
                     await concederReceitaConhecida(receita.periciaVinculada, receita.nivel, novoId, opcoesSlot.origem || "livre");
+                } else if (contextoEngenharia && fichaAtual) {
+                    // Autorar não garante aprender: ainda precisa passar no
+                    // teste de Engenharia (dif. 10 + 2×nível do item) pra
+                    // essa receita entrar nas Receitas do personagem — ver
+                    // resolverTesteAprenderReceita, mesma trava aplicada
+                    // pra quando escolhe uma receita já existente.
+                    modal.remove();
+                    await resolverTesteAprenderReceita({ ...receita, id: novoId }, contextoEngenharia.modificadorEngenharia);
+                    return;
                 }
             }
             modal.remove();
@@ -12893,11 +12966,16 @@ document.addEventListener("input", (e) => {
     }
 });
 
-// Recursos atuais (PV/Energia atual) — qualquer um pode editar (dano, cura...),
-// mas nunca pode passar do máximo calculado (Constituição/fórmula do manual,
-// ou do override de Godmode — ver maximoComOverride) nem ficar negativo. Sem
-// essa trava, o campo aceitava qualquer número digitado (inclusive durante a
-// Criação, antes de a ficha estar fechada), inflando o PV permanentemente.
+// Recursos atuais (PV/Energia atual): o Mestre pode editar livremente
+// (ajuste manual, godmode). Jogadores só podem REGISTRAR DANO (baixar o
+// valor) por aqui — nunca aumentar. Cura/recuperação de PV é sempre via
+// sistema (Tratar Feridas, Timeskip, ação do Mestre), nunca digitando um
+// número maior direto no campo — sem essa trava, dava pra "curar" o
+// personagem só digitando um valor mais alto no campo. Nunca pode passar
+// do máximo calculado (Constituição/fórmula do manual, ou do override de
+// Godmode — ver maximoComOverride) nem ficar negativo. Sem essa trava, o
+// campo aceitava qualquer número digitado (inclusive durante a Criação,
+// antes de a ficha estar fechada), inflando o PV permanentemente.
 //
 // Campo vazio (ex: selecionou o valor antigo pra apagar e digitar um novo)
 // NÃO grava nada — só quando há um número de verdade no campo. Isso corrige
@@ -12928,9 +13006,20 @@ document.addEventListener("input", (e) => {
     const max = maximoComOverride(recursoKey, fichaAtual.dados, totalCalculado);
     if (valor > max) valor = max;
     if (valor < 0) valor = 0;
-    if (Number(e.target.value) !== valor) e.target.value = valor; // reflete o clamp na tela
 
     const campo = recursoKey + "Atual";
+    // Jogador (não-Mestre): só pode digitar um valor MENOR ou IGUAL ao
+    // atual — nunca se "curar" digitando um número maior aqui.
+    if (!isMestre) {
+        const atualSalvo = (fichaAtual.dados[campo] === null || fichaAtual.dados[campo] === undefined) ? max : Number(fichaAtual.dados[campo]);
+        if (valor > atualSalvo) {
+            e.target.value = atualSalvo;
+            toast("Você não pode aumentar seu PV/Energia digitando aqui — isso é feito por cura, Tratar Feridas ou pelo Mestre.", "erro");
+            return;
+        }
+    }
+    if (Number(e.target.value) !== valor) e.target.value = valor; // reflete o clamp na tela
+
     fichaAtual.dados[campo] = valor;
     agendarSalvamento(`dados/${campo}`, valor);
 });
