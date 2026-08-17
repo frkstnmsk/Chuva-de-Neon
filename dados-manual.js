@@ -636,12 +636,12 @@ export function tagTemQuantidadeGeral(tagKey) {
 // uma arma de fogo, pra confronto direto arma x colete na hora do dano.
 // ---------------------------------------------------------------------
 export const CLASSES_PROTECAO = [
-    { key: "I", label: "Classe I — .22 LR, .380 ACP (baixo poder)" },
-    { key: "II", label: "Classe II — 9mm, .40 S&W, .45 ACP" },
-    { key: "III", label: "Classe III — .357 Magnum, .44 Magnum" },
-    { key: "IIIA", label: "Classe IIIA — 5.56x45mm, 7.62x39mm (fuzis leves)" },
-    { key: "IV", label: "Classe IV — 7.62x51mm (.308), .30-06" },
-    { key: "V", label: "Classe V — .338 Lapua, .50 BMG (pesado)" }
+    { key: "I", label: "Classe I — .22 LR, .380 ACP, .38 Special (baixo poder)" },
+    { key: "II", label: "Classe II — 9mm, .40 S&W, .45 ACP, 10mm Auto" },
+    { key: "III", label: "Classe III — .357 SIG, .41 Magnum, .44 Magnum" },
+    { key: "IIIA", label: "Classe IIIA — 5.56x45mm, 5.45x39mm, 7.62x39mm (fuzis leves)" },
+    { key: "IV", label: "Classe IV — 7.62x51mm (.308), 6.5 Creedmoor, 7.62x54mmR" },
+    { key: "V", label: "Classe V — .338 Lapua, .50 BMG, 14.5x114mm (pesado)" }
 ];
 
 export function rotuloClasseProtecao(classeKey) {
@@ -678,27 +678,72 @@ export function tagExigeClasseProtecao(tagKey, periciaUso) {
 // não mais a classe inteira.
 // ---------------------------------------------------------------------
 export const CALIBRES = [
+    // Classe I — abaixo do que um colete de serviço padrão (9mm/.40)
+    // já resolve. .38 Special entra aqui (não na II): é mais fraco que
+    // 9mm/.45 na prática, apesar do nome parecer "maior" que 9mm.
     { key: "22lr", label: ".22 LR", classeProtecao: "I" },
     { key: "380acp", label: ".380 ACP", classeProtecao: "I" },
+    { key: "32acp", label: ".32 ACP", classeProtecao: "I" },
+    { key: "38special", label: ".38 Special", classeProtecao: "I" },
+    // Classe II — pistola de serviço padrão (polícia/segurança privada
+    // em qualquer lugar do mundo hoje). 10mm Auto é o "irmão mais forte"
+    // do .45 ACP na mesma família de pistola semiauto de serviço.
     { key: "9mm", label: "9mm", classeProtecao: "II" },
     { key: "40sw", label: ".40 S&W", classeProtecao: "II" },
     { key: "45acp", label: ".45 ACP", classeProtecao: "II" },
-    { key: "357mag", label: ".357 Magnum", classeProtecao: "III" },
+    { key: "10mmauto", label: "10mm Auto", classeProtecao: "II" },
+    // Classe III — o teto do que colete macio (não-rígido) ainda para.
+    // .357 SIG + .44 Magnum são literalmente o par de referência do
+    // nível real equivalente (não o .357 Magnum, que é mais fraco e
+    // pertence à mesma faixa do 9mm/.45 da Classe II). .41 Magnum fica
+    // no meio dos dois, como na vida real.
+    { key: "357sig", label: ".357 SIG", classeProtecao: "III" },
+    { key: "41mag", label: ".41 Magnum", classeProtecao: "III" },
     { key: "44mag", label: ".44 Magnum", classeProtecao: "III" },
+    // Classe IIIA — fuzil leve/carabina: já exige placa rígida, nenhum
+    // colete macio (I/II/III) para. 5.45x39mm é o calibre do AK-74 (o
+    // "outro" AK, ao lado do 7.62x39 do AK-47/AKM); .300 AAC Blackout é
+    // a carabina americana moderna mais comum em fuzil compacto/silenciado.
     { key: "556x45", label: "5.56x45mm", classeProtecao: "IIIA" },
+    { key: "545x39", label: "5.45x39mm", classeProtecao: "IIIA" },
     { key: "762x39", label: "7.62x39mm", classeProtecao: "IIIA" },
+    { key: "300blk", label: ".300 AAC Blackout", classeProtecao: "IIIA" },
+    // Classe IV — fuzil pesado/DMR de longo alcance. Trocado o .30-06
+    // (fora de uso militar desde os anos 50, hoje é calibre de arma de
+    // caça/colecionador) por três calibres que continuam em uso real
+    // hoje: 6.5 Creedmoor (o mais popular em fuzil de precisão militar e
+    // civil atualmente) e 7.62x54mmR (o par "do outro lado", calibre do
+    // Dragunov/PKM, ainda padrão em vários exércitos e milícias).
     { key: "762x51", label: "7.62x51mm (.308)", classeProtecao: "IV" },
-    { key: "3006", label: ".30-06", classeProtecao: "IV" },
+    { key: "65creedmoor", label: "6.5 Creedmoor", classeProtecao: "IV" },
+    { key: "300wm", label: ".300 Winchester Magnum", classeProtecao: "IV" },
+    { key: "762x54r", label: "7.62x54mmR", classeProtecao: "IV" },
+    // Classe V — anti-material/sniper pesado, acima de qualquer colete
+    // vestível. 14.5x114mm é o calibre soviético de metralhadora
+    // pesada/fuzil anti-material (KPV), o equivalente "do outro lado"
+    // do .50 BMG, ainda em uso em conflitos atuais.
     { key: "338lapua", label: ".338 Lapua", classeProtecao: "V" },
     { key: "50bmg", label: ".50 BMG", classeProtecao: "V" },
-    // Escopeta 12 gauge — mesmo cano, duas munições bem diferentes:
-    // buckshot (chumbo grosso, mais fraco contra colete) e slug (projétil
-    // único, mais perfurante). Por isso entram como duas entradas de
-    // CALIBRES em vez de uma só, cada uma na Classe de Proteção que
-    // corresponde ao impacto real dela — é o mesmo padrão já usado pra
-    // qualquer outro calibre aqui (1 calibre = 1 Classe).
+    { key: "145x114", label: "14.5x114mm", classeProtecao: "V" },
+    // Escopeta 12 gauge — mesmo cano, munições bem diferentes entre si em
+    // poder real. Por isso entram como várias entradas de CALIBRES em vez
+    // de uma só, cada uma na Classe de Proteção que corresponde ao
+    // impacto real dela — mesmo padrão já usado pra qualquer outro
+    // calibre aqui (1 calibre = 1 Classe):
+    //   - Chumbo fino/Birdshot: munição de caça de pequeno porte, é
+    //     parada até por colete fraco — Classe I.
+    //   - Buckshot: chumbo grosso, os grãos se comportam como pistola de
+    //     baixa velocidade — Classe II.
+    //   - Slug (chumbo maciço comum): bate forte mas achata contra colete
+    //     de topo, não perfura de verdade — Classe III (par do .44 Mag).
+    //   - Slug Sabot (encamisado moderno, alta velocidade): aí sim já
+    //     deixa de ser "ameaça de pistola" — derruba colete macio de topo
+    //     e é tratado como ameaça de classe rifle — Classe IIIA, junto
+    //     dos fuzis leves.
+    { key: "12gauge_birdshot", label: "12 Gauge — Chumbo fino (Birdshot)", classeProtecao: "I" },
     { key: "12gauge_buckshot", label: "12 Gauge — Buckshot", classeProtecao: "II" },
-    { key: "12gauge_slug", label: "12 Gauge — Slug", classeProtecao: "III" }
+    { key: "12gauge_slug", label: "12 Gauge — Slug", classeProtecao: "III" },
+    { key: "12gauge_slug_sabot", label: "12 Gauge — Slug Sabot", classeProtecao: "IIIA" }
 ];
 
 export function calibresPorClasse(classeKey) {
@@ -765,10 +810,10 @@ export function calibreSugereDilacera(calibreKey) {
 // qualquer outra arma de fogo do sistema, uma arma nesse calibre NÃO usa
 // carregador. Ela é carregada projétil a projétil, direto do estoque de
 // munição no inventário (ver consumirMunicaoSeArmaDeFogo em ficha.js).
-// Buckshot e slug saem do mesmo cano, então uma arma cadastrada em
-// qualquer um dos dois aceita munição do outro também.
+// Todas as variantes saem do mesmo cano, então uma arma cadastrada em
+// qualquer uma delas aceita munição de qualquer uma das outras também.
 // ---------------------------------------------------------------------
-export const CALIBRES_ESCOPETA = ["12gauge_buckshot", "12gauge_slug"];
+export const CALIBRES_ESCOPETA = ["12gauge_birdshot", "12gauge_buckshot", "12gauge_slug", "12gauge_slug_sabot"];
 
 export function ehCalibreEscopeta(calibreKey) {
     return CALIBRES_ESCOPETA.includes(calibreKey);

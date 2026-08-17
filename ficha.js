@@ -3362,16 +3362,6 @@ function descontarUmProjetil(carregadorCfg) {
     };
 }
 
-// Soma toda a munição compatível (do calibre da arma) que o personagem
-// está levando consigo — usado pra exibição de armas "sem carregador"
-// (revólver, escopeta 12 gauge...), que não têm um carregador anexado
-// pra mostrar munição atual/máxima.
-function municaoEscopetaDisponivel(calibreArma) {
-    return listaProjeteisInventario(fichaAtual, calibreArma)
-        .filter(p => p.categoria === "levando")
-        .reduce((acc, p) => acc + (Number(p.projetil?.quantidade) || 0), 0);
-}
-
 // Desconta 1 projétil direto do estoque no inventário (sem carregador) —
 // usado por armas marcadas como "não usa carregador" (revólver, escopeta
 // 12 gauge...) e pra carregar a câmara de armas com Capacidade +1. Pega
@@ -3412,11 +3402,23 @@ async function consumirMunicaoSeArmaDeFogo(it) {
     if (!ehArmaComCarregador(it)) return true;
 
     if (!armaUsaCarregador(it)) {
-        const descontou = await descontarProjetilDiretoDoEstoque(it.calibre);
-        if (!descontou) {
-            toast(`Sem munição ${rotuloCalibre(it.calibre) || "compatível"} em "Levando consigo" pra disparar esta arma.`, "erro");
+        // Antes disparava direto do estoque solto no inventário, sem
+        // limite de "quanto cabe na arma" — um revólver de tambor 6
+        // disparava o 10º projétil do bolso igual ao 1º. Agora a munição
+        // mora dentro da própria arma (arma.carregadorInterno, preenchido
+        // via "Recarregar" — ver recarregarArmaSemCarregador), do mesmo
+        // jeito que um carregador removível: dispara consome daqui, não
+        // mais do inventário solto.
+        const cfg = it.arma && it.arma.carregadorInterno;
+        const municaoAtual = Number(cfg?.municaoAtual) || 0;
+        if (municaoAtual <= 0) {
+            toast(`${it.nome} está sem munição carregada. Use "Recarregar" pra encher o tambor/câmara com ${rotuloCalibre(it.calibre) || "munição compatível"} do inventário.`, "erro");
             return false;
         }
+        const cfgAtualizado = descontarUmProjetil(cfg);
+        const armaAtualizada = { ...it, arma: { ...it.arma, carregadorInterno: cfgAtualizado } };
+        fichaAtual.inventario[it.id] = armaAtualizada;
+        await update(ref(db, `${caminhoBase()}/inventario/${it.id}/arma/carregadorInterno`), cfgAtualizado);
         return true;
     }
 
@@ -3530,15 +3532,83 @@ async function carregarCarregador(carregadorId, carregadorItem) {
 }
 
 // ---------------------------------------------------------------------
+// "Recarregar" uma arma SEM carregador removível (revólver, escopeta
+// 12 gauge...): pega projéteis do mesmo calibre que estiverem soltos no
+// inventário (categoria "levando") e enche o carregadorInterno da própria
+// arma até a capacidade máxima (arma.capacidade) — mesma lógica de
+// carregarCarregador, só que o "recipiente" é a arma em vez de um item
+// separado. Ex.: revólver de tambor 6, 10 projéteis soltos no bolso →
+// recarregar move 6 pra dentro da arma, sobram 4 soltos no inventário.
+// ---------------------------------------------------------------------
+async function recarregarArmaSemCarregador(armaId, armaItem) {
+    if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
+    const cfg = armaItem.arma && armaItem.arma.carregadorInterno;
+    if (!cfg) {
+        toast(`${armaItem.nome} ainda não tem uma Capacidade definida — edite a arma e preencha o campo "Capacidade" (ex: 6 pra um revólver) antes de recarregar.`, "erro");
+        return;
+    }
+    let espacoLivre = Math.max(0, (cfg.capacidadeMax || 0) - (cfg.municaoAtual || 0));
+    if (espacoLivre <= 0) { toast(`${armaItem.nome} já está com o tambor/câmara cheio.`, "erro"); return; }
+
+    const candidatos = listaProjeteisInventario(fichaAtual, armaItem.calibre)
+        .filter(p => p.categoria === "levando");
+    if (!candidatos.length) { toast("Não há projéteis desse calibre soltos no inventário.", "erro"); return; }
+
+    const projeteisCarregados = (cfg.projeteisCarregados || []).map(p => ({ ...p }));
+    const inventarioAtualizado = { ...fichaAtual.inventario };
+    let carregouAlgo = false;
+
+    for (const proj of candidatos) {
+        if (espacoLivre <= 0) break;
+        const disponivel = Number(proj.projetil?.quantidade) || 0;
+        if (disponivel <= 0) continue;
+        const movido = Math.min(disponivel, espacoLivre);
+        espacoLivre -= movido;
+        carregouAlgo = true;
+
+        const restante = disponivel - movido;
+        if (restante > 0) {
+            const volumeAtualizado = Math.floor((Number(proj.volumeUnitario) || 0) * restante);
+            inventarioAtualizado[proj.id] = { ...proj, projetil: { ...proj.projetil, quantidade: restante }, volume: volumeAtualizado };
+        } else {
+            inventarioAtualizado[proj.id] = null;
+        }
+
+        const grupoExistente = projeteisCarregados.find(g => g.nome === proj.nome);
+        if (grupoExistente) grupoExistente.quantidade += movido;
+        else projeteisCarregados.push({ nome: proj.nome, quantidade: movido });
+    }
+
+    if (!carregouAlgo) { toast("Não havia projéteis disponíveis pra carregar.", "erro"); return; }
+
+    const capacidadeMax = cfg.capacidadeMax || 0;
+    const cfgAtualizado = {
+        ...cfg,
+        municaoAtual: capacidadeMax - espacoLivre,
+        projeteisCarregados
+    };
+    inventarioAtualizado[armaId] = { ...armaItem, arma: { ...armaItem.arma, carregadorInterno: cfgAtualizado } };
+
+    const inventarioLocal = {};
+    for (const [itId, itVal] of Object.entries(inventarioAtualizado)) {
+        if (itVal !== null) inventarioLocal[itId] = itVal;
+    }
+    fichaAtual.inventario = inventarioLocal;
+    await update(ref(db, `${caminhoBase()}/inventario`), inventarioAtualizado);
+    toast(`${armaItem.nome} recarregada (${cfgAtualizado.municaoAtual}/${capacidadeMax}).`);
+}
+
+// ---------------------------------------------------------------------
 // "Recarregar" uma arma: troca o carregador anexado por outro carregador
 // do mesmo calibre, no inventário, que tenha mais munição do que o atual.
-// Escolhe o de maior munição entre os candidatos.
+// Escolhe o de maior munição entre os candidatos. Pra arma sem carregador
+// removível, delega pra recarregarArmaSemCarregador (mesmo botão "Recarregar"
+// na UI, comportamento certo pra cada tipo de arma).
 // ---------------------------------------------------------------------
 async function recarregarArma(armaId, armaItem) {
     if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
     if (!armaUsaCarregador(armaItem)) {
-        toast("Esta arma não usa carregador — ela dispara direto do estoque de munição.", "erro");
-        return;
+        return recarregarArmaSemCarregador(armaId, armaItem);
     }
     const calibre = armaItem.calibre;
     const carregadorAtualId = armaItem.arma && armaItem.arma.carregadorId;
@@ -7132,10 +7202,13 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
     const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
     const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
-    const armaEstaCarregadaItem = ehFogo && !semCarregador && !!carregadorAnexadoObjItem;
+    const carregadorInternoItem = (it.arma && it.arma.carregadorInterno) || null;
+    const armaEstaCarregadaItem = ehFogo && (semCarregador
+        ? (Number(carregadorInternoItem?.municaoAtual) || 0) > 0
+        : !!carregadorAnexadoObjItem);
     const carregadorAnexadoLabel = (ehFogo && it.arma)
         ? (semCarregador
-            ? ` · Munição em estoque: ${municaoEscopetaDisponivel(it.calibre)} (sem carregador)`
+            ? ` · Munição: ${carregadorInternoItem?.municaoAtual || 0}/${carregadorInternoItem?.capacidadeMax || 0}`
             : (carregadorAnexadoObjItem
                 ? ` · Carregador: ${escapeHtml(carregadorAnexadoObjItem.nome)} (${carregadorAnexadoObjItem.carregador?.municaoAtual || 0}/${carregadorAnexadoObjItem.carregador?.capacidadeMax || 0})`
                 : " · Sem carregador anexado"))
@@ -7249,13 +7322,13 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${avisoArmarSemCenarioLabel}</span>
         </div>
         <div class="entity-badges">
-            ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+            ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="${semCarregador ? "Tem munição carregada no tambor/câmara" : "Tem um carregador anexado"}">🔵 Carregada</span>` : ""}
             ${camaraCarregadaItem ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
             ${temEfeitoItem ? `<button type="button" class="btn-toggle-ativo ${ativoItem ? "ligado" : "desligado"}" title="${ativoItem ? "Efeito ativo agora — clique pra desativar" : "Efeito desativado agora — clique pra ativar"}">${ativoItem ? "● Ativo" : "○ Inativo"}</button>` : ""}
             ${mostrarBtnEquipar ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquiparBtn ? "" : "disabled"} title="${tituloBtnEquipar}">${textoBtnEquipar}</button>` : ""}
             <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
             ${it.tag === "droga" ? `<button type="button" class="btn-consumir-droga btn-lime" title="Consome 1 unidade: aplica o efeito (modificadores do item) pelo tempo em horas escrito na descrição (ex: 'por 4h') — sem isso, dura até o fim do dia em jogo — e zera a abstinência do vício correspondente, se houver">Consumir</button>` : ""}
-            ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+            ${ehFogo ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="${semCarregador ? "Encher o tambor/câmara com munição solta compatível do inventário" : "Trocar o carregador anexado por um com mais munição"}">Recarregar</button>` : ""}
             ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
             ${(ehFogo && temCamaraExtraItem) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(itemPodeUsar(it) && !camaraCarregadaItem) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
             ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
@@ -7667,7 +7740,7 @@ function renderizarCombate() {
             const camaraCarregadaArma = temCamaraExtraArma && !!cfg.camaraCarregada;
             const municaoLabel = ehFogo
                 ? (semCarregador
-                    ? ` · Munição em estoque: ${municaoEscopetaDisponivel(arma.calibre)} (sem carregador)`
+                    ? ` · Munição: ${cfg.carregadorInterno?.municaoAtual || 0}/${cfg.carregadorInterno?.capacidadeMax || 0}`
                     : (carregadorAnexado
                         ? ` · Munição: ${carregadorAnexado.carregador?.municaoAtual || 0}/${carregadorAnexado.carregador?.capacidadeMax || 0}`
                         : " · Sem carregador anexado"))
@@ -7684,11 +7757,11 @@ function renderizarCombate() {
                     ${cfg.efeitoExtra ? `<span class="entity-sub">Efeito extra: ${escapeHtml(cfg.efeitoExtra)}</span>` : ""}
                 </div>
                 <div class="entity-badges">
-                    ${(ehFogo && !semCarregador && carregadorAnexado) ? `<span class="mod-pill positivo" title="Tem um carregador anexado">🔵 Carregada</span>` : ""}
+                    ${(ehFogo && (semCarregador ? (Number(cfg.carregadorInterno?.municaoAtual) || 0) > 0 : !!carregadorAnexado)) ? `<span class="mod-pill positivo" title="${semCarregador ? "Tem munição carregada no tambor/câmara" : "Tem um carregador anexado"}">🔵 Carregada</span>` : ""}
                     ${camaraCarregadaArma ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
                     <button type="button" class="btn-toggle-equipada ${equipadaArma ? "ligado" : "desligado"}" ${podeEquiparArma ? "" : "disabled"} title="${!itemPodeEquipar(arma) ? "Precisa estar em 'Levando consigo' pra equipar" : (semMaosLivresArma ? `Sem mãos livres (${maosLivresCombate}/2)` : (equipadaArma ? "Empunhada agora — clique pra desequipar" : "Desequipada — clique pra empunhar e poder usar em combate"))}">${equipadaArma ? "🗡️ Equipada" : "○ Desequipada"}</button>
                     <button type="button" class="btn-usar-item btn-blue" data-quick-key="arma:${escapeHtml(arma.id)}" ${podeUsar ? "" : "disabled"} title="${podeUsar ? `Rolar d20 + ${arma.periciaUso}` : (equipadaArma ? "Precisa estar em 'Levando consigo' e ter perícia vinculada" : "Equipe a arma pra poder usá-la em combate")}">Usar</button>
-                    ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="Trocar o carregador anexado por um com mais munição">Recarregar</button>` : ""}
+                    ${ehFogo ? `<button type="button" class="btn-recarregar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${semCarregador ? "Encher o tambor/câmara com munição solta compatível do inventário" : "Trocar o carregador anexado por um com mais munição"}">Recarregar</button>` : ""}
                     ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(podeUsar && carregadorAnexado) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
                     ${(ehFogo && temCamaraExtraArma) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(podeUsar && !camaraCarregadaArma) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
                 </div>
@@ -14781,16 +14854,11 @@ async function salvarPericiaDoModal(id) {
 // tipoDano; escala só se não for arma de fogo; e as características de
 // Arma de Fogo (capacidade, disparos por turno, precisão, dificuldade
 // de acerto, alcance, recuo, efeito extra) só quando a perícia vinculada
-// for uma perícia de Arma de Fogo.
-// Monta o objeto `arma` a partir do modal — compartilhado entre item de
-// inventário e item do Banco Global. Sempre grava danoBase (número) e
-// tipoDano; escala só se não for arma de fogo; e as características de
-// Arma de Fogo (capacidade, disparos por turno, precisão, dificuldade
-// de acerto, alcance, recuo, efeito extra) só quando a perícia vinculada
 // for uma perícia de Arma de Fogo. `armaExistente` é o `arma` do item
 // antes de editar (ou null pra item novo/Banco Global) — só serve pra
-// preservar `camaraCarregada`, que é estado de jogo (bala já carregada
-// na câmara), não um campo que o modal deixa o jogador escolher direto.
+// preservar `camaraCarregada` e `carregadorInterno.municaoAtual`, que são
+// estado de jogo (bala já carregada), não campos que o modal deixa o
+// jogador escolher direto.
 function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     const ehFogo = ehArmaDeFogo(periciaUso);
     const armaTag = ehArma(tag);
@@ -14800,6 +14868,14 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
     // ainda tenha um valor antigo.
     const usaCarregador = ehFogo && !!(el.modalArmaUsaCarregador ? el.modalArmaUsaCarregador.checked : true);
     const temCamaraExtra = ehFogo && usaCarregador && !!(el.modalArmaTemCamaraExtra && el.modalArmaTemCamaraExtra.checked);
+    // Sem carregador removível (revólver, escopeta...), a "Capacidade"
+    // vira a capacidade real do tambor/câmara — a munição mora dentro da
+    // própria arma (arma.carregadorInterno), igual ao carregador de uma
+    // arma normal, só que sem ser um item separado. Preserva a munição já
+    // carregada ao editar (clampada pra nova capacidade, pra não sobrar
+    // munição "fantasma" se o jogador reduzir a capacidade depois).
+    const capacidadeInterna = ehFogo ? (Number(el.modalArmaCapacidade.value) || 0) : 0;
+    const carregadorInternoExistente = (armaExistente && !usaCarregador) ? armaExistente.carregadorInterno : null;
     return {
         danoBase: Number(el.modalArmaDanoBase.value) || 0,
         tipoDano: el.modalArmaTipoDano.value,
@@ -14815,7 +14891,12 @@ function lerConfigArmaDoModal(periciaUso, calibre, armaExistente, tag) {
         dilacera: armaTag ? !!el.modalArmaDilacera.checked : false,
         dilaceraEmGolpeNormal: (armaTag && !ehFogo) ? !!el.modalArmaDilaceraGolpeNormal.checked : false,
         modificacoesArma: lerModificacoesArmaDoModal(),
-        capacidade: ehFogo ? (Number(el.modalArmaCapacidade.value) || 0) : null,
+        capacidade: capacidadeInterna,
+        carregadorInterno: (ehFogo && !usaCarregador) ? {
+            capacidadeMax: capacidadeInterna,
+            municaoAtual: Math.min(capacidadeInterna, (carregadorInternoExistente && Number(carregadorInternoExistente.municaoAtual)) || 0),
+            projeteisCarregados: carregadorInternoExistente ? (carregadorInternoExistente.projeteisCarregados || []) : []
+        } : null,
         disparosPorTurno: ehFogo ? (Number(el.modalArmaDisparosTurno.value) || 1) : null,
         precisao: ehFogo ? (Number(el.modalArmaPrecisao.value) || 0) : null,
         dificuldadeAcerto: ehFogo ? (Number(el.modalArmaDificuldadeAcerto.value) || 0) : null,
