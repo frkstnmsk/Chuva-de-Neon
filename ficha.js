@@ -11719,20 +11719,55 @@ function renderizarDarknetENotas() {
 // renderizarCredenciaisDarknet(). Também popula o <select> do botão
 // único "Adicionar credenciais" do topo da aba.
 let darknetGridMontada = false;
+// Sites com a caixa expandida no momento — só jogador/Mestre local, não
+// salvo no Firebase (cada um abre o que quiser sem afetar o outro,
+// mesmo padrão de credenciaisDarknetAbertas). Array porque a ORDEM
+// importa: os abertos ficam empilhados na ordem em que foram abertos,
+// sempre acima do grupo dos minimizados — sem limite de quantos podem
+// estar abertos ao mesmo tempo.
+const darknetSitesAbertos = [];
 function montarGradeDarknetSeNecessario() {
     const grid = document.getElementById("darknet-grid");
     if (!grid || darknetGridMontada) return;
 
     grid.innerHTML = "";
+
+    // Dois "poços" dentro da grade: os sites expandidos (empilhados,
+    // ocupam a largura toda, essa área cresce pra baixo e rola com a
+    // página) e os minimizados (só o nome, lado a lado, sem ocupar
+    // espaço). Mover a caixa de um poço pro outro ao expandir/minimizar
+    // preserva o elemento (e os listeners/estado dos campos dentro).
+    const abertos = document.createElement("div");
+    abertos.className = "darknet-abertos";
+    abertos.id = "darknet-abertos";
+    grid.appendChild(abertos);
+
+    const minimizados = document.createElement("div");
+    minimizados.className = "darknet-minimizados";
+    minimizados.id = "darknet-minimizados";
+    grid.appendChild(minimizados);
+
     DARKNET_SITES.forEach(site => {
         const box = document.createElement("div");
-        box.className = "darknet-site";
+        box.className = "darknet-site darknet-site--minimizado";
         box.dataset.site = site.id;
 
-        const header = document.createElement("div");
+        const header = document.createElement("button");
+        header.type = "button";
         header.className = "darknet-site-header";
         header.textContent = site.nome;
+        header.addEventListener("click", () => alternarSiteDarknet(site.id));
         box.appendChild(header);
+
+        const listaLabel = document.createElement("div");
+        listaLabel.className = "hint-inline";
+        listaLabel.textContent = "Credenciais";
+        box.appendChild(listaLabel);
+
+        const lista = document.createElement("div");
+        lista.className = "darknet-credenciais-lista";
+        lista.dataset.siteCredenciais = site.id;
+        box.appendChild(lista);
 
         const campo = document.createElement("div");
         campo.className = "campo";
@@ -11748,17 +11783,7 @@ function montarGradeDarknetSeNecessario() {
         campo.appendChild(input);
         box.appendChild(campo);
 
-        const listaLabel = document.createElement("div");
-        listaLabel.className = "hint-inline";
-        listaLabel.textContent = "Credenciais";
-        box.appendChild(listaLabel);
-
-        const lista = document.createElement("div");
-        lista.className = "darknet-credenciais-lista";
-        lista.dataset.siteCredenciais = site.id;
-        box.appendChild(lista);
-
-        grid.appendChild(box);
+        minimizados.appendChild(box);
     });
     darknetGridMontada = true;
 
@@ -11766,6 +11791,56 @@ function montarGradeDarknetSeNecessario() {
     if (select) {
         select.innerHTML = DARKNET_SITES.map(s => `<option value="${s.id}">${s.nome}</option>`).join("");
     }
+}
+
+// Expande/minimiza a caixa de um site — sem limite de quantos podem
+// ficar abertos; os abertos ficam sempre empilhados acima dos
+// minimizados, na ordem em que foram clicados (ver reordenarSitesDarknet).
+function alternarSiteDarknet(siteId) {
+    const idx = darknetSitesAbertos.indexOf(siteId);
+    if (idx !== -1) {
+        darknetSitesAbertos.splice(idx, 1);
+    } else {
+        darknetSitesAbertos.push(siteId);
+    }
+    reordenarSitesDarknet();
+}
+
+function expandirSiteDarknet(siteId) {
+    if (darknetSitesAbertos.includes(siteId)) return;
+    darknetSitesAbertos.push(siteId);
+    reordenarSitesDarknet();
+}
+
+// Move cada caixa de site pro poço certo (aberto/minimizado) e aplica
+// as classes que controlam o CSS — chamada sempre que o conjunto de
+// sites abertos muda.
+function reordenarSitesDarknet() {
+    const abertos = document.getElementById("darknet-abertos");
+    const minimizados = document.getElementById("darknet-minimizados");
+    if (!abertos || !minimizados) return;
+
+    DARKNET_SITES.forEach(site => {
+        const box = document.querySelector(`.darknet-site[data-site="${site.id}"]`);
+        if (!box) return;
+        const estaAberto = darknetSitesAbertos.includes(site.id);
+        box.classList.toggle("darknet-site--minimizado", !estaAberto);
+        box.classList.toggle("darknet-site--expandido", estaAberto);
+        const header = box.querySelector(".darknet-site-header");
+        if (header) header.setAttribute("aria-expanded", estaAberto ? "true" : "false");
+    });
+
+    // Reinsere na ordem de abertura (o mais recente por último) dentro
+    // do poço de abertos, e na ordem do manual dentro do de minimizados.
+    darknetSitesAbertos.forEach(siteId => {
+        const box = document.querySelector(`.darknet-site[data-site="${siteId}"]`);
+        if (box) abertos.appendChild(box);
+    });
+    DARKNET_SITES.forEach(site => {
+        if (darknetSitesAbertos.includes(site.id)) return;
+        const box = document.querySelector(`.darknet-site[data-site="${site.id}"]`);
+        if (box) minimizados.appendChild(box);
+    });
 }
 
 // Credenciais da Dark Net: cada site guarda uma lista de CARDS — objetos
@@ -12547,6 +12622,7 @@ function adicionarCredencialDarknet(siteId) {
         contatos: [], stats: { seguidores: 0, posts: 0, seguindo: 0 }, itens: []
     });
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+    expandirSiteDarknet(siteId);
     renderizarCredenciaisDarknet();
     setTimeout(() => {
         const campos = document.querySelectorAll(`input[data-darknet-credencial-nome="${siteId}"]`);

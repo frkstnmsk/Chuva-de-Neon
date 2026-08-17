@@ -494,31 +494,83 @@
     min-width: 160px;
 }
 .darknet-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
-@media (max-width: 900px) {
-    .darknet-grid { grid-template-columns: repeat(2, 1fr); }
+/* Poço dos sites abertos (no máx. 2) — empilhados, largura toda,
+   cresce pra baixo; a página rola se tiver muito conteúdo. */
+.darknet-abertos {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
-@media (max-width: 600px) {
-    .darknet-grid { grid-template-columns: 1fr; }
+.darknet-abertos:empty { display: none; }
+/* Poço dos sites minimizados — só o nome, lado a lado, sem ocupar
+   espaço; quebra linha quando não cabem mais. */
+.darknet-minimizados {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 .darknet-site {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 14px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.02);
 }
+.darknet-site--expandido {
+    padding: 14px;
+    width: 100%;
+}
+/* Minimizado: só a "pill" do nome fica visível — o resto do conteúdo
+   (link/acesso, lista de credenciais) some sem ocupar espaço. */
+.darknet-site--minimizado {
+    padding: 0;
+    border-color: rgba(255, 255, 255, 0.05);
+}
+.darknet-site--minimizado > *:not(.darknet-site-header) { display: none; }
 .darknet-site-header {
     font-family: var(--font-mono);
     font-size: 0.78rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--neon-lime);
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+}
+.darknet-site--minimizado .darknet-site-header {
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.darknet-site--minimizado .darknet-site-header:hover {
+    background: rgba(190, 255, 60, 0.08);
+    border-color: rgba(190, 255, 60, 0.3);
+}
+.darknet-site--expandido .darknet-site-header {
+    padding: 0 0 4px;
+}
+.darknet-site--expandido .darknet-site-header:hover {
+    background: none;
+    box-shadow: none;
+    color: white;
+}
+.darknet-site--expandido .darknet-site-header::after {
+    content: " ▲";
+    font-size: 0.7em;
+    opacity: 0.7;
+}
+.darknet-site--minimizado .darknet-site-header::after {
+    content: " ▾";
+    font-size: 0.7em;
+    opacity: 0.5;
 }
 .darknet-credenciais-lista {
     display: flex;
