@@ -2843,11 +2843,11 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // resolverAtaque em ficha.js). Ausente (reação antiga, de antes
     // dessa mudança) cai em `null`, preservando o comportamento antigo
     // de não filtrar por local.
-    // Local detalhado (plano-silhueta-saude.txt, Fase 1 e Fase 6):
-    // sorteado ANTES de aplicarDano, mesmo motivo do ramo direto em
-    // ficha.js — repassado como 8º parâmetro pra amputação (se este
-    // golpe bater o limiar) apontar pro local certo, e reaproveitado
-    // embaixo sem sortear de novo.
+    // Local detalhado (plano-silhueta-saude.txt, Fase 1/Fase 6; golpes
+    // mirados por lado depois disso): resolvido ANTES de aplicarDano,
+    // mesmo motivo do ramo direto em ficha.js — repassado como 8º
+    // parâmetro pra amputação (se este golpe bater o limiar) apontar
+    // pro local certo, e reaproveitado embaixo sem chamar de novo.
     const localFerida = (r.localMiraKey && r.localMiraKey !== "padrao") ? sortearLocalDetalhado(r.localMiraKey) : "torso";
     const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null, r.ignorarArmaduraPontos ?? 0, null, localFerida);
 

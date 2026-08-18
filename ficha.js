@@ -6073,14 +6073,17 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         // arma de fogo — arma branca/contundente manda null, e
         // aplicarDano já ignora a regra nova quando calibreProjetil é
         // null).
-        // Local detalhado (plano-silhueta-saude.txt, Fase 1 e Fase 6):
-        // sorteado ANTES de aplicarDano (não depende do resultado dele)
-        // pra poder ser repassado como 8º parâmetro — se este golpe
-        // bater o limiar de Amputação (regras.js, dentro de
-        // aplicarDano), o Mestre confirma contra ESSE local específico,
-        // não um genérico. Reaproveitado embaixo pra toda ferida criada
-        // por este mesmo golpe (Sangramento + Corte vinculados, "chance
-        // de ferida por dano" etc.) — nunca sorteado de novo.
+        // Local detalhado (plano-silhueta-saude.txt, Fase 1/Fase 6; golpes
+        // mirados por lado depois disso): resolvido ANTES de aplicarDano
+        // (não depende do resultado dele) pra poder ser repassado como 8º
+        // parâmetro — se este golpe bater o limiar de Amputação (regras.js,
+        // dentro de aplicarDano), o Mestre confirma contra ESSE local
+        // específico, não um genérico. Reaproveitado embaixo pra toda
+        // ferida criada por este mesmo golpe (Sangramento + Corte
+        // vinculados, "chance de ferida por dano" etc.) — sortearLocalDetalhado
+        // só sorteia de fato no caso de compatibilidade com chave antiga
+        // genérica; pra qualquer local específico (o normal agora) ele só
+        // devolve a própria chave.
         const localFerida = localMira.key === "padrao" ? "torso" : sortearLocalDetalhado(localMira.key);
         resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos, it.calibre || null, localFerida);
     } catch (err) {
@@ -6112,12 +6115,12 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     let notaEfeitoLocal = "";
     // Feridas persistentes (ver plano-sistema-saude-ferimentos.txt) — só
     // pra fichas de JOGADOR nesta fase (NPC fica de fora por enquanto).
-    // Local salvo na ferida (plano-silhueta-saude.txt, Fase 1): "padrao"
-    // convertido pra "torso" (mesma convenção já usada pro Sangramento
-    // de tiro sem mira, logo abaixo); "membro"/"extremidade" passam por
-    // sortearLocalDetalhado, que sorteia UM lado específico (braço E/D,
-    // perna E/D, mão E/D ou pé E/D) — já sorteado ANTES de aplicarDano
-    // (ver comentário lá em cima, Fase 6), reaproveitado aqui via a
+    // Local salvo na ferida (plano-silhueta-saude.txt, Fase 1; golpes
+    // mirados por lado depois disso): "padrao" convertido pra "torso"
+    // (mesma convenção já usada pro Sangramento de tiro sem mira, logo
+    // abaixo); qualquer outra chave já é o local específico escolhido
+    // pelo jogador (braço/perna/mão/pé E ou D) — calculado ANTES de
+    // aplicarDano (ver comentário lá em cima, Fase 6), reaproveitado aqui via a
     // mesma variável `localFerida`, sem sortear de novo.
     const criaFeridaHabilitado = danoTotal > 0 && participante.tipo === "ficha";
     // Fase C (plano mestre-tratar-feridas-sangramento): true assim que

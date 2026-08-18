@@ -1435,11 +1435,35 @@ export const TIPOS_DANO = [
 // duração e o dano fixo por turno (fração do dano causado pelo golpe
 // que sangrou — SEM rolar dado, valor fixo).
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Golpes Mirados por lado (extensão da diferenciação de local — o
+// jogador antes só mirava em "Membro"/"Extremidade" de forma genérica
+// e o lado (esquerdo/direito) era sorteado depois só pra fins de
+// registro da ferida, plano-silhueta-saude.txt Fase 1). Agora o
+// próprio jogador escolhe o lado NA HORA de atacar — os 8 locais
+// específicos abaixo substituem as duas entradas genéricas antigas
+// ("membro"/"extremidade"), cada um herdando exatamente o mesmo difMod/
+// localArmadura/sangramento do grupo a que pertencia (o manual não
+// diferencia mecanicamente braço de perna, nem mão de pé — só Membro
+// vs. Extremidade). sortearLocalDetalhado (mais abaixo) não precisa
+// mudar: quando a chave já é uma das 8 específicas (sem grupo em
+// SUB_LOCAIS_FERIDA), ela já devolve a própria chave sem sortear nada.
+//
+// Redução de armadura (Proteção) continua igual — colete/braçadeira
+// não tem lado, então localArmadura continua "membro"/"extremidade"
+// genérico nos 8 locais novos, só pra saber COM QUAL peça de Proteção
+// a redução deve ser calculada (ver aplicarDano em mestre.js).
 export const LOCAIS_MIRA = [
     { key: "padrao", label: "Padrão (sem mirar)", difMod: 0, localArmadura: "torso", sangramento: null },
     { key: "torso", label: "Torso", difMod: 1, localArmadura: "torso", sangramento: { difExtra: 1, turnos: 3, fracaoDano: 1 / 4 } },
-    { key: "membro", label: "Membro (braço ou perna)", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
-    { key: "extremidade", label: "Extremidade (mão ou pé)", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "braco_esquerdo", label: "Braço esquerdo", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "braco_direito", label: "Braço direito", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "perna_esquerda", label: "Perna esquerda", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "perna_direita", label: "Perna direita", difMod: 2, localArmadura: "membro", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "mao_esquerda", label: "Mão esquerda", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "mao_direita", label: "Mão direita", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "pe_esquerda", label: "Pé esquerdo", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
+    { key: "pe_direita", label: "Pé direito", difMod: 3, localArmadura: "extremidade", sangramento: { difExtra: 0, turnos: 2, fracaoDano: 1 / 4 } },
     // Cabeça: dificuldade normal +2 (corpo a corpo/arma branca); só um
     // TIRO de arma de fogo especificamente na cabeça usa +4 — e é o
     // único caso que aumenta o dano em 1/3 (ver difModLocalMira e
@@ -1453,18 +1477,24 @@ export function localMiraPorKey(key) {
 
 // ---------------------------------------------------------------------
 // Lateralidade da FERIDA registrada (plano-silhueta-saude.txt, Fase 1):
-// o jogador só mira em "Membro" ou "Extremidade" de forma genérica
-// (nunca escolhe o lado — não existe essa opção na hora de atacar), mas
-// a ferida gravada na ficha (pra silhueta visual de Saúde) precisa
-// saber QUAL braço/perna/mão/pé foi atingido, pra acender só um membro
-// em vez dos dois. Por isso o lado é sorteado (uniforme, 1 em 4) só na
-// hora de criar a ferida — depois do dano já resolvido.
+// desde a diferenciação de Golpes Mirados por lado (acima), o próprio
+// jogador já escolhe o braço/perna/mão/pé específico no ataque — a
+// chave de LOCAIS_MIRA JÁ chega pronta pra virar ferida.local, sem
+// precisar sortear nada.
+//
+// SUB_LOCAIS_FERIDA/sortearLocalDetalhado abaixo ficam só por
+// COMPATIBILIDADE: uma Ação Pendente antiga (golpe resolvido antes
+// desta mudança, ainda na fila com localMiraKey = "membro"/
+// "extremidade" genérico) ou qualquer chamador externo que ainda passe
+// essas duas chaves genéricas continua sorteando um lado em vez de
+// quebrar. Nenhum caminho novo do sistema gera mais essas duas chaves.
 //
 // Isso é PURAMENTE cosmético/de registro: a redução de dano por
-// Proteção continua usando a chave genérica de LOCAIS_MIRA acima
+// Proteção continua usando a chave genérica de localArmadura acima
 // ("membro"/"extremidade", sem lado) — colete/braçadeira de Proteção
 // não tem lado hoje, então não faz diferença nenhuma pra armadura qual
-// lado foi sorteado (ver plano, seção "FORA DESTE PLANO").
+// braço/perna específico foi escolhido (ver plano, seção "FORA DESTE
+// PLANO").
 export const SUB_LOCAIS_FERIDA = {
     membro: ["braco_esquerdo", "braco_direito", "perna_esquerda", "perna_direita"],
     extremidade: ["mao_esquerda", "mao_direita", "pe_esquerda", "pe_direita"]
@@ -1505,13 +1535,18 @@ export function labelLocalFerida(localKey) {
     return LABELS_LOCAL_FERIDA[localKey] || localKey;
 }
 
-// Sorteia o local DETALHADO de uma ferida a partir da chave de
-// LOCAIS_MIRA escolhida no ataque ("membro"/"extremidade" viram um dos
-// 4 sub-locais correspondentes, sorteados uniformemente; "torso" e
-// "cabeca" não têm lado, voltam como vieram). Chamar UMA vez por golpe
-// só — reaproveitar o mesmo resultado se o mesmo golpe gerar mais de
-// uma ferida (ex.: Sangramento + Corte vinculados), pra não sortear
-// lados diferentes pro mesmo ferimento.
+// Sorteia o local DETALHADO de uma ferida a partir de uma chave de
+// LOCAIS_MIRA. Desde a diferenciação de Golpes Mirados por lado, a
+// própria chave de LOCAIS_MIRA já é um local específico (braco_esquerdo,
+// pe_direita etc.) na imensa maioria dos casos — SUB_LOCAIS_FERIDA não
+// tem grupo pra essas chaves, então a função só devolve a própria
+// chave de volta, sem sortear nada. O sorteio de verdade só acontece
+// por COMPATIBILIDADE, se alguma coisa ainda passar a chave genérica
+// antiga "membro"/"extremidade" (ex.: uma Ação Pendente criada antes
+// desta mudança). Chamar UMA vez por golpe só — reaproveitar o mesmo
+// resultado se o mesmo golpe gerar mais de uma ferida (ex.: Sangramento
+// + Corte vinculados), pra não sortear lados diferentes pro mesmo
+// ferimento (só relevante mesmo no caso de compatibilidade acima).
 export function sortearLocalDetalhado(localMiraKey) {
     const grupo = SUB_LOCAIS_FERIDA[localMiraKey];
     if (!grupo) return localMiraKey;
