@@ -30,7 +30,8 @@ import {
     slotsAcessoriosVeiculo, slotsAcessoriosUsados, slotsAcessoriosLivres, podeInstalarAcessorio,
     efeitoOleoVeiculo, efeitoCospePregoVeiculo,
     itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO,
-    modificadorDarknet, dificuldadeItemDarknet, sortearItemPorResultado
+    modificadorDarknet, dificuldadeItemDarknet, sortearItemPorResultado,
+    chipEstaAtivo, tomadaSlotsOcupados
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -50,7 +51,7 @@ import {
     modificadorRecuo, ESCALA_MULT_DESARMADO, ehGolpeDesarmadoComDano,
     calcularEspecificidadeGolpe, bonusEsquivaBoxe, baseDificuldadeAtaque,
     atendeRequisitoPericia, atendeRequisitoCriarReceita, PERICIAS_ARMA_BRANCA, PERICIAS_APARAR,
-    LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira,
+    LOCAIS_MIRA, localMiraPorKey, difModLocalMira, bonusDanoFracaoLocalMira, sortearLocalDetalhado, labelLocalFerida,
     ehDanoPerfurante, ehDanoCortante, ehDanoContundente,
     bonusCQC1x1, ehFacaOuAdaga, bonusCQCFacaAdaga, bonusCQCDesarmar, MANOBRA_ARREMESSAR_CQC,
     cobraKaiCriticoAutomatico,
@@ -70,12 +71,14 @@ import {
     calcularDificuldadeQuimico, EFEITOS_MATERIAL_QUIMICO, resolverNivelMaterial,
     NOME_MATERIAL_VEICULO_TRANSPORTE, resolverTipoEntregaQuimico,
     SUBTIPOS_IMPLANTE, rotuloSubtipoImplante, subtipoContaComoImplante,
-    PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA
+    PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA,
+    TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip,
+    ZONAS_SILHUETA
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
-    calcularCargaAtual, itemPodeUsar, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
+    calcularCargaAtual, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
     listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado,
     ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis,
     TAMANHOS_ITEM, rotuloTamanho, itemCabeNoContainer, volumeTotalDentroDe,
@@ -148,7 +151,8 @@ import {
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
 import {
-    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida, aplicarTickSangramento
+    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida, aplicarTickSangramento,
+    agruparFeridasPorLocal, estadoVisualFerida
 } from "./saude.js";
 import {
     ouvirItensGlobais, buscarItensGlobaisPorNome, salvarItemNoBanco,
@@ -239,6 +243,13 @@ let idBancoParaRetomarReceita = null;
 // salvarItemDoModal pular a gravação em fichaAtual.inventario e salvar
 // SÓ no Banco Global — ver criarItemApenasNoBanco mais abaixo.
 let criarItemApenasNoBanco = false;
+// Quando setado (ver abrirModalNovoItemParaCenario), o próximo save do
+// modal de item "itensGlobais" não grava no Banco Global — grava direto
+// como item solto no cenário com este id (salvarItemBancoDoModal decide
+// o destino olhando essa variável). Sempre resetado depois de usado, e
+// também ao abrir/fechar o modal por qualquer outro caminho, pra nunca
+// vazar pra uma criação de item comum.
+let cenarioIdParaCriarItem = null;
 let godmodeAtivo = false;
 // Sub-opção do Godmode: só some a penalidade de Machucado/Muito
 // Machucado quando ESSA também estiver marcada (ver configurarGodmode).
@@ -520,6 +531,13 @@ const el = {
     btnAddVeiculo: document.getElementById("btn-add-veiculo"),
     cenarioLista: document.getElementById("cenario-lista"),
     saudeLista: document.getElementById("saude-lista"),
+    saudeSilhuetaSvg: document.getElementById("saude-silhueta-svg"),
+    saudeSilhuetaWrap: document.getElementById("saude-silhueta-wrap"),
+    saudeSilhuetaOverlays: document.getElementById("saude-silhueta-overlays"),
+    saudeSilhuetaLegenda: document.getElementById("saude-silhueta-legenda"),
+    saudeSilhuetaPopover: document.getElementById("saude-silhueta-popover"),
+    saudeSilhuetaPopoverCorpo: document.getElementById("saude-silhueta-popover-corpo"),
+    saudeSilhuetaPopoverFechar: document.getElementById("saude-silhueta-popover-fechar"),
     implantesLista: document.getElementById("implantes-lista"),
     implantesContador: document.getElementById("implantes-contador"),
     mestreComaPainel: document.getElementById("mestre-coma-painel"),
@@ -642,6 +660,14 @@ const el = {
     modalImplanteSubtipo: document.getElementById("modal-implante-subtipo"),
     modalImplanteDificuldadeInstalar: document.getElementById("modal-implante-dificuldade-instalar"),
     modalImplanteFuncoesEspeciais: document.getElementById("modal-implante-funcoes-especiais"),
+    modalImplanteTomadaInfo: document.getElementById("modal-implante-tomada-info"),
+    modalImplanteChipBloco: document.getElementById("modal-implante-chip-bloco"),
+    modalImplanteChipTomada: document.getElementById("modal-implante-chip-tomada"),
+    modalImplanteChipEfeitoHint: document.getElementById("modal-implante-chip-efeito-hint"),
+    modalImplanteChipBlocoModificador: document.getElementById("modal-implante-chip-bloco-modificador"),
+    modalImplanteChipAlvo: document.getElementById("modal-implante-chip-alvo"),
+    modalImplanteChipBlocoEspecializacao: document.getElementById("modal-implante-chip-bloco-especializacao"),
+    modalImplanteChipEspecializacaoPericia: document.getElementById("modal-implante-chip-especializacao-pericia"),
     modalConfigQuimico: document.getElementById("modal-config-quimico"),
     modalQuimicoRaio: document.getElementById("modal-quimico-raio"),
     modalQuimicoMateriaisLista: document.getElementById("modal-quimico-materiais-lista"),
@@ -3808,11 +3834,19 @@ function limiteRolagemCriacaoParaPericia(nomePericia) {
     return niveis.length ? Math.max(...niveis) : null;
 }
 
+// Item usado direto "Em casa" (kit de bancada, notebook etc. — ver
+// itemPodeUsarEmCasa em inventario.js) ganha esse sufixo no nome que
+// vai pro Log de Dados, pra ficar claro de onde a ferramenta veio sem
+// precisar abrir a ficha e conferir.
+function rotuloUsoItem(it) {
+    return itemPodeUsarEmCasa(it) ? `${it.nome} (em casa)` : it.nome;
+}
+
 async function rolarComPericiaDoItem(it, nomePericia, modificadoresPlanos) {
     const ocasionais = modificadoresOcasionaisDaPericia(fichaAtual, nomePericia);
     if (!ocasionais.length) {
         const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it));
-        await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+        await rolarERegistrar(`${rotuloUsoItem(it)} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
         return;
     }
     abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, ocasionais);
@@ -3843,7 +3877,7 @@ function abrirModalConfirmarOcasionaisUso(it, nomePericia, modificadoresPlanos, 
         const delta = lerDeltaOcasionais(modal.querySelector("#ocasionais-uso-item-lista"), ocasionais);
         modal.remove();
         const modificadorFinal = modificadorDePericiaComPenalidade(nomePericia, fichaAtual.dados, fichaAtual.pericias, modificadoresPlanos, penalidadeTestesAtual(), limiteRolagemDoItem(it)) + delta;
-        await rolarERegistrar(`${it.nome} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
+        await rolarERegistrar(`${rotuloUsoItem(it)} (${nomePericia})`, modificadorFinal, nomePericia === "CQC");
     });
     document.body.appendChild(modal);
 }
@@ -6039,7 +6073,16 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         // arma de fogo — arma branca/contundente manda null, e
         // aplicarDano já ignora a regra nova quando calibreProjetil é
         // null).
-        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos, it.calibre || null);
+        // Local detalhado (plano-silhueta-saude.txt, Fase 1 e Fase 6):
+        // sorteado ANTES de aplicarDano (não depende do resultado dele)
+        // pra poder ser repassado como 8º parâmetro — se este golpe
+        // bater o limiar de Amputação (regras.js, dentro de
+        // aplicarDano), o Mestre confirma contra ESSE local específico,
+        // não um genérico. Reaproveitado embaixo pra toda ferida criada
+        // por este mesmo golpe (Sangramento + Corte vinculados, "chance
+        // de ferida por dano" etc.) — nunca sorteado de novo.
+        const localFerida = localMira.key === "padrao" ? "torso" : sortearLocalDetalhado(localMira.key);
+        resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos, it.calibre || null, localFerida);
     } catch (err) {
         console.error(err);
         toast("Ataque acertou, mas falhou ao aplicar o dano no alvo.", "erro");
@@ -6069,11 +6112,14 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     let notaEfeitoLocal = "";
     // Feridas persistentes (ver plano-sistema-saude-ferimentos.txt) — só
     // pra fichas de JOGADOR nesta fase (NPC fica de fora por enquanto).
-    // Local salvo na ferida usa a mesma chave de LOCAIS_MIRA, com
-    // "padrao" convertido pra "torso" (mesma convenção já usada pro
-    // Sangramento de tiro sem mira, logo abaixo).
+    // Local salvo na ferida (plano-silhueta-saude.txt, Fase 1): "padrao"
+    // convertido pra "torso" (mesma convenção já usada pro Sangramento
+    // de tiro sem mira, logo abaixo); "membro"/"extremidade" passam por
+    // sortearLocalDetalhado, que sorteia UM lado específico (braço E/D,
+    // perna E/D, mão E/D ou pé E/D) — já sorteado ANTES de aplicarDano
+    // (ver comentário lá em cima, Fase 6), reaproveitado aqui via a
+    // mesma variável `localFerida`, sem sortear de novo.
     const criaFeridaHabilitado = danoTotal > 0 && participante.tipo === "ficha";
-    const localFerida = localMira.key === "padrao" ? "torso" : localMira.key;
     // Fase C (plano mestre-tratar-feridas-sangramento): true assim que
     // o sangramento (comum OU profundo, mais abaixo) já garantiu uma
     // ferida de Corte/Perfuração neste golpe — impede o bloco de
@@ -7305,6 +7351,28 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const veiculoDaChave = it.tag === "chave" && it.veiculoId ? fichaAtual.veiculos?.[it.veiculoId] : null;
     const chaveLabel = veiculoDaChave ? ` · Destranca: ${escapeHtml(veiculoDaChave.nome || "(sem nome)")}` : "";
 
+    // Tomada/Chip (manual pg. 84 — ver slotsTomada/efeitoChip em
+    // dados-manual.js e chipEstaAtivo/tomadaSlotsOcupados em regras.js):
+    // mostra a informação mecânica que só esses dois subtipos de
+    // implante têm (slots ocupados da Tomada / status de encaixe do
+    // Chip), direto na lista do inventário, sem precisar abrir o item.
+    let implanteInfoLabel = "";
+    if (it.tag === "biomecanica" && it.implante?.subtipo === "tomada") {
+        const ocupados = tomadaSlotsOcupados(fichaAtual.inventario, id);
+        const slots = slotsTomada(it.nivelTag);
+        implanteInfoLabel = ` · Slots de chip: ${ocupados}/${slots}`;
+    } else if (it.tag === "biomecanica" && it.implante?.subtipo === "chip") {
+        const tomadaVinculada = it.implante.tomadaId ? fichaAtual.inventario?.[it.implante.tomadaId] : null;
+        if (!it.implante.tomadaId) {
+            implanteInfoLabel = " · Sem Tomada vinculada";
+        } else if (!tomadaVinculada) {
+            implanteInfoLabel = " · Tomada vinculada não existe mais";
+        } else {
+            const ativo = chipEstaAtivo(fichaAtual.inventario, id);
+            implanteInfoLabel = ` · Tomada: ${escapeHtml(tomadaVinculada.nome || "(sem nome)")} — ${ativo ? "efeito ativo" : "sem vaga/inativo"}`;
+        }
+    }
+
     // Explosivo fora de qualquer cenário ativo (ver
     // plano-explosivos-cenario.txt, Fase 5.2 — nice-to-have): avisa aqui
     // ANTES de clicar "Armar" e esbarrar no toast de bloqueio
@@ -7319,7 +7387,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     li.innerHTML = `
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
-            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${avisoArmarSemCenarioLabel}</span>
+            <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${implanteInfoLabel}${avisoArmarSemCenarioLabel}</span>
         </div>
         <div class="entity-badges">
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="${semCarregador ? "Tem munição carregada no tambor/câmara" : "Tem um carregador anexado"}">🔵 Carregada</span>` : ""}
@@ -8999,7 +9067,7 @@ function renderizarCenarios() {
         const itensHtml = itens.length
             ? itens.map(([itemId, it]) => `
                 <div class="cenario-item-linha" data-cenario-item-id="${itemId}">
-                    <span>📦 ${escapeHtml(it.nome || "(sem nome)")}${it.observacao ? ` <span class="entity-sub">— ${escapeHtml(it.observacao)}</span>` : ""}</span>
+                    <span>📦 ${escapeHtml(it.nome || "(sem nome)")}${it.tag ? ` <span class="entity-sub">(${escapeHtml(rotuloTag(it.tag))}${it.peso ? ` · ${it.peso} kg` : ""})</span>` : ""}${it.observacao ? ` <span class="entity-sub">— ${escapeHtml(it.observacao)}</span>` : ""}</span>
                     ${isMestre ? "" : `<button type="button" class="btn-lime btn-cenario-pegar-item" data-cenario-id="${cenario.id}" data-item-id="${itemId}" data-item-nome="${escapeHtml(it.nome || "item")}">Pegar</button>`}
                 </div>`).join("")
             : `<p class="hint">Nenhum item solto neste cenário.</p>`;
@@ -12284,17 +12352,6 @@ function criarItemContatoDm(site, credencial, contato) {
     const item = document.createElement("div");
     item.className = "darknet-contato-item";
 
-    const inputNumero = document.createElement("input");
-    inputNumero.type = "text";
-    inputNumero.className = "darknet-contato-numero";
-    inputNumero.placeholder = "Número";
-    inputNumero.value = contato.numero || "";
-    inputNumero.dataset.darknetContatoCampo = "numero";
-    inputNumero.dataset.darknetContatoSite = site.id;
-    inputNumero.dataset.darknetCredencialId = credencial.id;
-    inputNumero.dataset.darknetContatoId = contato.id;
-    item.appendChild(inputNumero);
-
     const inputNome = document.createElement("input");
     inputNome.type = "text";
     inputNome.className = "darknet-contato-nome";
@@ -12305,6 +12362,17 @@ function criarItemContatoDm(site, credencial, contato) {
     inputNome.dataset.darknetCredencialId = credencial.id;
     inputNome.dataset.darknetContatoId = contato.id;
     item.appendChild(inputNome);
+
+    const inputNumero = document.createElement("input");
+    inputNumero.type = "text";
+    inputNumero.className = "darknet-contato-numero";
+    inputNumero.placeholder = "Número";
+    inputNumero.value = contato.numero || "";
+    inputNumero.dataset.darknetContatoCampo = "numero";
+    inputNumero.dataset.darknetContatoSite = site.id;
+    inputNumero.dataset.darknetCredencialId = credencial.id;
+    inputNumero.dataset.darknetContatoId = contato.id;
+    item.appendChild(inputNumero);
 
     const remover = document.createElement("button");
     remover.type = "button";
@@ -12321,15 +12389,15 @@ function criarFormNovoContatoDm(site, credencial) {
     const form = document.createElement("div");
     form.className = "darknet-form-contato";
 
-    const inputNumero = document.createElement("input");
-    inputNumero.type = "text";
-    inputNumero.placeholder = "Número...";
-    form.appendChild(inputNumero);
-
     const inputNome = document.createElement("input");
     inputNome.type = "text";
     inputNome.placeholder = "Nome do contato...";
     form.appendChild(inputNome);
+
+    const inputNumero = document.createElement("input");
+    inputNumero.type = "text";
+    inputNumero.placeholder = "Número...";
+    form.appendChild(inputNumero);
 
     const btnAdd = document.createElement("button");
     btnAdd.type = "button";
@@ -13256,13 +13324,31 @@ function abrirModalNovo(lista) {
     }
     modalContexto = { lista, id: null };
     criarItemApenasNoBanco = false;
+    cenarioIdParaCriarItem = null;
     prepararModalParaLista(lista, null);
+    el.modal.classList.add("active");
+}
+
+// Abre o modal de item completo (mesmos campos do Banco Global: tag,
+// peso, perícia, dano etc.) mas com o resultado indo direto pro
+// cenário informado em vez da Biblioteca de Itens — ver
+// cenarioIdParaCriarItem e o branch correspondente em
+// salvarItemBancoDoModal. Só o Mestre chega até aqui (o próprio
+// Gerenciador de Cenário já é uma tela exclusiva dele).
+function abrirModalNovoItemParaCenario(cenarioId) {
+    if (!isMestre) { toast("Só o Mestre pode criar itens no cenário.", "erro"); return; }
+    modalContexto = { lista: "itensGlobais", id: null };
+    criarItemApenasNoBanco = false;
+    cenarioIdParaCriarItem = cenarioId;
+    prepararModalParaLista("itensGlobais", null);
+    el.modalTitulo.innerText = "Novo item no cenário";
     el.modal.classList.add("active");
 }
 
 function abrirModalEdicao(lista, id) {
     modalContexto = { lista, id };
     criarItemApenasNoBanco = false;
+    cenarioIdParaCriarItem = null;
     const objeto = lista === "itensGlobais"
         ? itensGlobaisCache.find(it => it.id === id)
         : fichaAtual[lista] && fichaAtual[lista][id];
@@ -13273,6 +13359,7 @@ function abrirModalEdicao(lista, id) {
 function fecharModal() {
     el.modal.classList.remove("active");
     modalContexto = null;
+    cenarioIdParaCriarItem = null;
     // Retoma o modal de receita que ficou pendente (ver comentário na
     // declaração de receitaAguardandoVinculo) — dispara em QUALQUER
     // fechamento do modal de item enquanto há uma receita esperando
@@ -14329,10 +14416,26 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
                 el.modalImplanteSubtipo.appendChild(opt);
             });
             el.modalImplanteSubtipo.dataset.montado = "1";
+            // Tomada/Chip (manual pg. 84): trocar o subtipo (ou o Nível,
+            // ver listener de modal-nivel-tag mais abaixo) muda qual
+            // sub-bloco aparece e recalcula a dificuldade de instalar
+            // automática — reagem em tempo real, sem precisar reabrir o
+            // modal.
+            el.modalImplanteSubtipo.addEventListener("change", () => atualizarBlocoSubtipoImplante(null));
+            el.modalImplanteDificuldadeInstalar.addEventListener("input", () => {
+                el.modalImplanteDificuldadeInstalar.dataset.autoGerado = "0";
+            });
         }
         el.modalImplanteSubtipo.value = (implanteConfigAtual && implanteConfigAtual.subtipo) || "";
         el.modalImplanteDificuldadeInstalar.value = (implanteConfigAtual && implanteConfigAtual.dificuldadeInstalar) ?? 0;
+        // Item novo (sem dificuldade salva ainda) começa "automático" —
+        // Tomada/Chip preenchem esse campo sozinhos a partir do Nível
+        // (ver atualizarBlocoSubtipoImplante); item já existente com
+        // dificuldade salva é tratado como valor escolhido à mão, pra
+        // reabrir pra edição não sobrescrever o que a mesa já ajustou.
+        el.modalImplanteDificuldadeInstalar.dataset.autoGerado = (implanteConfigAtual && implanteConfigAtual.dificuldadeInstalar) ? "0" : "1";
         el.modalImplanteFuncoesEspeciais.value = (implanteConfigAtual && implanteConfigAtual.funcoesEspeciais) || "";
+        atualizarBlocoSubtipoImplante(implanteConfigAtual);
     }
 
     // Configuração do Produto Químico (Parte 4 do plano de automação dos
@@ -14507,6 +14610,10 @@ document.getElementById("modal-tag")?.addEventListener("change", (e) => {
 // tag muda — o nível é o que decide quantos slots a arma ocupa.
 document.getElementById("modal-nivel-tag")?.addEventListener("change", () => {
     if (el.modalTag.value === "arma") atualizarCampoInstalarVeiculo();
+    // Tomada/Chip (manual pg. 84): slots da Tomada e efeito do Chip
+    // dependem diretamente do Nível — recalcula o sub-bloco (ver
+    // atualizarBlocoSubtipoImplante) toda vez que ele muda.
+    if (el.modalTag.value === "biomecanica") atualizarBlocoSubtipoImplante(null);
 });
 
 document.getElementById("modal-equipavel")?.addEventListener("change", atualizarCampoJaEquipar);
@@ -15178,6 +15285,103 @@ function recalcularQuimicoAutoPreenchido() {
 // array de resolverNivelMaterial(...) pra cada material com pontos > 0
 // na receita — é isso que os pontos de disparo (Parte 6, ainda não
 // fiada) vão ler pra aplicar o efeito de verdade num alvo.
+// Sub-bloco de Tomada/Chip (manual pg. 84) dentro da Configuração do
+// implante. Só Tomada e Chip têm efeito mecânico 100% determinístico
+// no manual (slots por nível / +1,+2,especialização por nível) — os
+// outros cinco subtipos (membro, extremidade, olho, endoesqueleto,
+// órgão) têm bônus "a critério do narrador" (manual pg. 83) e por isso
+// continuam só no editor genérico de Modificadores automáticos, sem
+// bloco próprio. `implanteConfigAtual` só é usado pra SEMEAR os campos
+// a primeira vez que o modal abre pra um item existente — chamadas de
+// re-render vindas dos listeners (troca de subtipo/nível) passam `null`
+// e preservam o que já estiver selecionado nos próprios campos.
+function atualizarBlocoSubtipoImplante(implanteConfigAtual) {
+    const subtipo = el.modalImplanteSubtipo.value;
+    const nivel = Number(el.modalNivelTag.value) || 0;
+    const ehTomada = subtipo === "tomada";
+    const ehChip = subtipo === "chip";
+
+    // Dificuldade de instalar automática (mesmo padrão de "autoGerado"
+    // do bloco Químico): só sobrescreve enquanto a mesa não tiver
+    // digitado um valor à mão nesse campo.
+    if ((ehTomada || ehChip) && nivel >= 1 && nivel <= 5 && el.modalImplanteDificuldadeInstalar.dataset.autoGerado !== "0") {
+        const tabela = ehTomada ? TOMADA_NIVEIS : CHIP_NIVEIS;
+        const linha = tabela.find(t => t.nivel === nivel);
+        if (linha) el.modalImplanteDificuldadeInstalar.value = linha.dificuldadeInstalar;
+    }
+
+    el.modalImplanteTomadaInfo.style.display = ehTomada ? "block" : "none";
+    if (ehTomada) {
+        const linha = TOMADA_NIVEIS.find(t => t.nivel === nivel);
+        el.modalImplanteTomadaInfo.innerText = linha
+            ? `Suporta até ${linha.slots} chip(s) encaixado(s) simultaneamente (slots = nível da tomada). Receita: ${linha.receita}. Preço: CN$ ${linha.preco.toLocaleString("pt-BR")}. Dificuldade de criar: ${linha.dificuldadeCriar}.`
+            : "Defina o Nível (1 a 5) pra calcular quantos chips essa tomada suporta.";
+    }
+
+    el.modalImplanteChipBloco.style.display = ehChip ? "block" : "none";
+    if (ehChip) {
+        // Select de Tomada de destino: reconstrói toda vez (lista de
+        // tomadas do inventário pode mudar entre uma abertura e outra do
+        // modal), listando quanto de slot já está ocupado em cada uma
+        // (tomadaSlotsOcupados/slotsTomada, regras.js/dados-manual.js).
+        const inventarioAtual = (fichaAtual && fichaAtual.inventario) || {};
+        const tomadaSelecionadaAntes = el.modalImplanteChipTomada.value;
+        const tomadas = Object.entries(inventarioAtual)
+            .filter(([, tit]) => tit && tit.tag === "biomecanica" && tit.implante?.subtipo === "tomada")
+            .map(([tid, tit]) => ({ id: tid, ...tit }));
+        el.modalImplanteChipTomada.innerHTML = `<option value="">Nenhuma (fora do corpo — sem efeito)</option>` +
+            tomadas.map(t => {
+                const ocupados = tomadaSlotsOcupados(inventarioAtual, t.id);
+                const slots = slotsTomada(t.nivelTag);
+                const statusInstalacao = t.implante?.instalado ? "" : " — NÃO instalada ainda";
+                return `<option value="${t.id}">${escapeHtml(t.nome || "(sem nome)")} — nível ${t.nivelTag || "?"} (${ocupados}/${slots} slots)${statusInstalacao}</option>`;
+            }).join("");
+        el.modalImplanteChipTomada.value = (implanteConfigAtual && implanteConfigAtual.tomadaId) || tomadaSelecionadaAntes || "";
+
+        const efeito = efeitoChip(nivel);
+        const ehModificador = efeito?.tipo === "modificador";
+        const ehEspecializacao = efeito?.tipo === "especializacao";
+
+        el.modalImplanteChipBlocoModificador.style.display = ehModificador ? "flex" : "none";
+        if (ehModificador) {
+            if (!el.modalImplanteChipAlvo.dataset.montado) {
+                const pericias = Object.values((fichaAtual && fichaAtual.pericias) || {});
+                listaAlvosModificador(pericias).forEach(a => {
+                    const opt = document.createElement("option");
+                    opt.value = a.value;
+                    opt.innerText = a.label;
+                    el.modalImplanteChipAlvo.appendChild(opt);
+                });
+                el.modalImplanteChipAlvo.dataset.montado = "1";
+            }
+            el.modalImplanteChipAlvo.value = (implanteConfigAtual && implanteConfigAtual.chipAlvo) || el.modalImplanteChipAlvo.value || "";
+        }
+
+        el.modalImplanteChipBlocoEspecializacao.style.display = ehEspecializacao ? "flex" : "none";
+        if (ehEspecializacao) {
+            if (!el.modalImplanteChipEspecializacaoPericia.dataset.montado) {
+                PERICIAS_MANUAL.forEach(p => {
+                    const opt = document.createElement("option");
+                    opt.value = p.nome;
+                    opt.innerText = p.nome;
+                    el.modalImplanteChipEspecializacaoPericia.appendChild(opt);
+                });
+                el.modalImplanteChipEspecializacaoPericia.dataset.montado = "1";
+            }
+            el.modalImplanteChipEspecializacaoPericia.value = (implanteConfigAtual && implanteConfigAtual.especializacaoPericia) || el.modalImplanteChipEspecializacaoPericia.value || "";
+        }
+
+        const linhaChip = CHIP_NIVEIS.find(c => c.nivel === nivel);
+        if (ehModificador) {
+            el.modalImplanteChipEfeitoHint.innerText = `Nível ${nivel}: modificador automático +${efeito.valor} na rolagem escolhida acima, enquanto o chip estiver encaixado numa Tomada instalada com vaga.${linhaChip ? ` Receita: ${linhaChip.receita}. Preço: CN$ ${linhaChip.preco.toLocaleString("pt-BR")}. Dificuldade de criar: ${linhaChip.dificuldadeCriar}.` : ""}`;
+        } else if (ehEspecializacao) {
+            el.modalImplanteChipEfeitoHint.innerText = `Nível ${nivel}: concede uma Especialização de nível ${efeito.valor} na perícia escolhida acima, enquanto o chip estiver encaixado numa Tomada instalada com vaga (o efeito exato da especialização é escolhido com o Mestre, no catálogo da perícia — cadastre-o em Especializações).${linhaChip ? ` Receita: ${linhaChip.receita}. Preço: CN$ ${linhaChip.preco.toLocaleString("pt-BR")}. Dificuldade de criar: ${linhaChip.dificuldadeCriar}.` : ""}`;
+        } else {
+            el.modalImplanteChipEfeitoHint.innerText = "Defina o Nível do chip (1 a 5) pra ver o efeito (manual pg. 84).";
+        }
+    }
+}
+
 // Lê a Configuração do implante (tag "biomecanica" — ver
 // plano-implantes-biomecanica.txt). `existenteImplante` preserva os
 // campos que este modal não edita (instalado, testesAdaptacaoFeitos,
@@ -15186,16 +15390,25 @@ function recalcularQuimicoAutoPreenchido() {
 // municaoAtual ao editar só a capacidadeMax). `quebrado` é gravado só
 // pela Fase 5 (confirmarAcaoPendente "instalar_implante", mestre.js)
 // numa falha crítica de instalação — ver Fase 9 do plano pra exibição.
+// tomadaId/chipAlvo/especializacaoPericia (manual pg. 84) só existem de
+// verdade pra subtipo "chip" — lidos do sub-bloco Tomada/Chip
+// (atualizarBlocoSubtipoImplante); pros demais subtipos, preservam o
+// que já estava salvo (mesma régua defensiva do resto da função).
 function lerConfigImplanteDoModal(existenteImplante) {
+    const subtipo = el.modalImplanteSubtipo.value || null;
+    const ehChip = subtipo === "chip";
     return {
-        subtipo: el.modalImplanteSubtipo.value || null,
+        subtipo,
         dificuldadeInstalar: Number(el.modalImplanteDificuldadeInstalar.value) || 0,
         funcoesEspeciais: el.modalImplanteFuncoesEspeciais.value.trim(),
         instalado: existenteImplante?.instalado ?? false,
         testesAdaptacaoFeitos: existenteImplante?.testesAdaptacaoFeitos ?? 0,
         rejeicaoParcial: existenteImplante?.rejeicaoParcial ?? 0,
         historico: existenteImplante?.historico || [],
-        quebrado: existenteImplante?.quebrado ?? false
+        quebrado: existenteImplante?.quebrado ?? false,
+        tomadaId: ehChip ? (el.modalImplanteChipTomada.value || null) : (existenteImplante?.tomadaId ?? null),
+        chipAlvo: ehChip ? (el.modalImplanteChipAlvo.value || null) : (existenteImplante?.chipAlvo ?? null),
+        especializacaoPericia: ehChip ? (el.modalImplanteChipEspecializacaoPericia.value || null) : (existenteImplante?.especializacaoPericia ?? null)
     };
 }
 
@@ -15750,6 +15963,19 @@ async function salvarItemBancoDoModal(id) {
     };
 
     try {
+        if (cenarioIdParaCriarItem) {
+            // Item novo pro cenário (ver abrirModalNovoItemParaCenario):
+            // não passa pela Biblioteca de Itens — grava direto como item
+            // solto no cenário. categoriaBanco não faz sentido fora do
+            // Banco Global, não é gravada aqui.
+            const cenarioAlvo = cenarioIdParaCriarItem;
+            cenarioIdParaCriarItem = null;
+            const { categoriaBanco, ...registroCenario } = registro;
+            await adicionarItemCenario(cenarioAlvo, registroCenario);
+            toast(`"${nome}" criado e colocado no cenário.`);
+            fecharModal();
+            return;
+        }
         if (id) {
             await atualizarItemBanco(id, registro);
             toast("Item do Banco Global atualizado.");
@@ -16453,7 +16679,7 @@ function tituloTipoFerida(tipo) {
     }[tipo] || tipo;
 }
 function tituloLocalFerida(local) {
-    return { cabeca: "Cabeça", torso: "Torso", membro: "Membro", extremidade: "Extremidade" }[local] || local;
+    return labelLocalFerida(local);
 }
 function tituloEstadoFerida(estado) {
     return {
@@ -16477,8 +16703,234 @@ function acoesDeTratamentoParaFerida(ferida) {
         .map(([acao]) => acao);
 }
 
+// Silhueta visual (plano-silhueta-saude.txt, Fases 2-4): o SVG em
+// ficha.html é markup estático (as 10 zonas não são recriadas a cada
+// renderizarSaude, diferente da lista de cards abaixo dele), então os
+// listeners de clique só precisam ser ligados UMA vez — guardado por
+// este flag. `zonaSilhuetaSelecionada` e `ultimoAgrupadoSilhueta`
+// ficam fora da função pra o clique (que não tem os dados de novo)
+// conseguir reconstruir a legenda com o estado mais recente conhecido.
+let silhuetaSaudeInicializada = false;
+let zonaSilhuetaSelecionada = null;
+let ultimoAgrupadoSilhueta = null;
+
+// Mapa fixo id-da-zona -> chave de ferida.local: mesmas 10 chaves de
+// ZONAS_SILHUETA (dados-manual.js), só convertendo "_" (usado nas
+// chaves) pra "-" (usado nos ids do SVG). Centro (cx/cy) de cada zona é
+// hardcoded a partir da geometria fixa desenhada em ficha.html — usado
+// só pra posicionar ícone/badge por cima da forma (Fase 4).
+const CENTROS_ZONA_SILHUETA = {
+    cabeca: { x: 100, y: 32 },
+    torso: { x: 100, y: 135 },
+    braco_direito: { x: 47, y: 132 },
+    braco_esquerdo: { x: 153, y: 132 },
+    perna_direita: { x: 81, y: 267 },
+    perna_esquerda: { x: 119, y: 267 },
+    mao_direita: { x: 47, y: 204 },
+    mao_esquerda: { x: 153, y: 204 },
+    pe_direita: { x: 81, y: 354 },
+    pe_esquerda: { x: 119, y: 354 }
+};
+
+const ICONE_POR_ESTADO_VISUAL = { sangrando: "🩸", infeccionada: "🦠", amputado: "✂️" };
+const CLASSE_POR_ESTADO_VISUAL = {
+    amputado: "zona-amputada", sangrando: "zona-sangrando",
+    infeccionada: "zona-infeccionada", aberta: "zona-aberta", tratada: "zona-tratada"
+};
+const TODAS_CLASSES_ESTADO_SILHUETA = ["zona-aberta", "zona-sangrando", "zona-infeccionada", "zona-amputada", "zona-tratada", "zona-indefinida"];
+
+const NS_SVG = "http://www.w3.org/2000/svg";
+function criarElementoSvg(tag, atributos) {
+    const elemento = document.createElementNS(NS_SVG, tag);
+    Object.entries(atributos || {}).forEach(([chave, valor]) => elemento.setAttribute(chave, valor));
+    return elemento;
+}
+
+// Fecha a caixinha flutuante e desmarca a zona selecionada — usado ao
+// clicar de novo na mesma zona, clicar fora, no "×", ou quando a zona
+// selecionada fica sem feridas depois de um tratamento (renderizarSilhuetaSaude
+// chama isso na atualização ao vivo).
+function fecharPopoverSilhueta() {
+    zonaSilhuetaSelecionada = null;
+    if (el.saudeSilhuetaSvg) {
+        el.saudeSilhuetaSvg.querySelectorAll(".zona-corpo").forEach(z => z.classList.remove("zona-selecionada"));
+    }
+    if (el.saudeSilhuetaPopover) el.saudeSilhuetaPopover.style.display = "none";
+    if (el.saudeSilhuetaLegenda) {
+        el.saudeSilhuetaLegenda.innerText = "Clique numa parte do corpo para ver as feridas daquele local.";
+    }
+}
+
+// Posiciona a caixinha (left/top em % do wrap) do lado do marcador que
+// sobra mais espaço na tela: zona na metade esquerda do desenho (braço/
+// mão/perna/pé DIREITO do personagem, que fica desenhado à esquerda —
+// ver comentário em ficha.html) abre a caixinha pra direita dela; zona
+// na metade direita do desenho abre pra esquerda. Usa os mesmos
+// centros hardcoded de CENTROS_ZONA_SILHUETA (viewBox 200x400) que a
+// Fase 4 já usa pra posicionar ícone/badge.
+function posicionarPopoverSilhueta(zonaKey) {
+    if (!el.saudeSilhuetaPopover) return;
+    const centro = CENTROS_ZONA_SILHUETA[zonaKey];
+    if (!centro) return;
+    const leftPercent = (centro.x / 200) * 100;
+    const topPercent = (centro.y / 400) * 100;
+    const abrePraDireita = leftPercent < 50;
+    el.saudeSilhuetaPopover.classList.remove("seta-esquerda", "seta-direita");
+    if (abrePraDireita) {
+        el.saudeSilhuetaPopover.classList.add("seta-esquerda");
+        el.saudeSilhuetaPopover.style.left = `calc(${leftPercent}% + 20px)`;
+        el.saudeSilhuetaPopover.style.right = "auto";
+        el.saudeSilhuetaPopover.style.transform = "translateY(-50%)";
+    } else {
+        el.saudeSilhuetaPopover.classList.add("seta-direita");
+        el.saudeSilhuetaPopover.style.left = "auto";
+        el.saudeSilhuetaPopover.style.right = `calc(${100 - leftPercent}% + 20px)`;
+        el.saudeSilhuetaPopover.style.transform = "translateY(-50%)";
+    }
+    el.saudeSilhuetaPopover.style.top = `${topPercent}%`;
+}
+
+// Monta o conteúdo da caixinha (Fase 5): lista de feridas da zona, cada
+// uma com os MESMOS botões de tratamento que já existem na lista de
+// cards abaixo — reaproveita acoesDeTratamentoParaFerida e
+// abrirModalTratarFerida (ficha.js), nenhuma lógica de tratamento nova.
+function renderizarPopoverSilhueta(zonaKey, zona) {
+    if (!el.saudeSilhuetaPopoverCorpo) return;
+    const nomeLocal = labelLocalFerida(zonaKey);
+    if (!zona || !zona.feridas.length) {
+        el.saudeSilhuetaPopoverCorpo.innerHTML = `<p class="saude-silhueta-popover-titulo">${escapeHtml(nomeLocal)}</p><p class="saude-silhueta-popover-vazio">Nenhuma ferida aqui.</p>`;
+        return;
+    }
+    const avisoIndefinido = zona.indefinido
+        ? `<p class="hint">Inclui ferida antiga de lado indefinido (registrada antes deste sistema saber diferenciar esquerdo/direito).</p>` : "";
+    const feridasHtml = zona.feridas.map(ferida => {
+        const acoes = acoesDeTratamentoParaFerida(ferida);
+        const botoes = acoes.map(acao => `<button type="button" class="btn-lime btn-tratar-ferida" data-ferida-id="${ferida.id}" data-acao="${acao}">${escapeHtml(TRATAMENTOS_FERIDA[acao].label)}</button>`).join(" ");
+        const semAcao = !acoes.length && ferida.estado !== "tratada" ? `<span class="hint">Nenhum tratamento disponível no momento.</span>` : "";
+        const badgeInfeccao = ferida.infeccaoAtiva ? `<span class="mod-pill negativo">🦠 Infeccionada</span>` : "";
+        return `<div class="saude-silhueta-popover-ferida">
+            <div class="saude-silhueta-popover-ferida-topo">
+                <strong>${tituloTipoFerida(ferida.tipo)}</strong>
+                <span class="mod-pill${ferida.estado === "tratada" ? " positivo" : ""}">${tituloEstadoFerida(ferida.estado)}</span>
+                ${badgeInfeccao}
+            </div>
+            <div class="saude-silhueta-popover-acoes">${botoes}${semAcao}</div>
+        </div>`;
+    }).join("");
+    el.saudeSilhuetaPopoverCorpo.innerHTML = `<p class="saude-silhueta-popover-titulo">${escapeHtml(nomeLocal)}</p>${avisoIndefinido}${feridasHtml}`;
+    el.saudeSilhuetaPopoverCorpo.querySelectorAll(".btn-tratar-ferida").forEach(btn => {
+        btn.addEventListener("click", () => abrirModalTratarFerida(btn.dataset.feridaId, btn.dataset.acao));
+    });
+}
+
+function configurarSilhuetaSaude() {
+    if (silhuetaSaudeInicializada || !el.saudeSilhuetaSvg) return;
+    silhuetaSaudeInicializada = true;
+    el.saudeSilhuetaSvg.querySelectorAll(".zona-corpo").forEach(zona => {
+        zona.addEventListener("click", (evento) => {
+            evento.stopPropagation();
+            const jaSelecionada = zona.dataset.zona === zonaSilhuetaSelecionada;
+            if (jaSelecionada) {
+                fecharPopoverSilhueta();
+                return;
+            }
+            const zonaDados = ultimoAgrupadoSilhueta ? ultimoAgrupadoSilhueta[zona.dataset.zona] : null;
+            if (!zonaDados || !zonaDados.feridas.length) {
+                // Clicar numa zona sem ferida não abre a caixinha (plano,
+                // Fase 5) — só um aviso rápido na legenda, sem selecionar nada.
+                if (el.saudeSilhuetaLegenda) el.saudeSilhuetaLegenda.innerText = "Nenhuma ferida aqui.";
+                return;
+            }
+            el.saudeSilhuetaSvg.querySelectorAll(".zona-corpo").forEach(z => z.classList.remove("zona-selecionada"));
+            zonaSilhuetaSelecionada = zona.dataset.zona;
+            zona.classList.add("zona-selecionada");
+            if (el.saudeSilhuetaLegenda) el.saudeSilhuetaLegenda.innerText = "";
+            renderizarPopoverSilhueta(zona.dataset.zona, zonaDados);
+            posicionarPopoverSilhueta(zona.dataset.zona);
+            if (el.saudeSilhuetaPopover) el.saudeSilhuetaPopover.style.display = "";
+        });
+    });
+    if (el.saudeSilhuetaPopoverFechar) {
+        el.saudeSilhuetaPopoverFechar.addEventListener("click", (evento) => {
+            evento.stopPropagation();
+            fecharPopoverSilhueta();
+        });
+    }
+    if (el.saudeSilhuetaPopover) {
+        // Clique DENTRO da caixinha (ex.: nos botões de tratamento) não
+        // deve borbulhar até o listener de "clicar fora fecha" abaixo.
+        el.saudeSilhuetaPopover.addEventListener("click", (evento) => evento.stopPropagation());
+    }
+    // "Fecha ao clicar fora" (plano, Fase 5) — um único listener no
+    // documento, só ativo enquanto alguma zona estiver selecionada.
+    document.addEventListener("click", () => {
+        if (zonaSilhuetaSelecionada) fecharPopoverSilhueta();
+    });
+}
+
+// Redesenha as 10 zonas conforme o agrupamento mais recente de
+// feridasCache (plano, Fases 3-4): classe de cor por "pior estado",
+// contorno tracejado pra zona com ferida de lado indefinido, ícone de
+// estado e badge numérico quando há 2+ feridas na mesma zona.
+function renderizarSilhuetaSaude() {
+    if (!el.saudeSilhuetaSvg) return;
+
+    const agrupado = modoNpc ? null : agruparFeridasPorLocal(feridasCache);
+    ultimoAgrupadoSilhueta = agrupado;
+
+    if (el.saudeSilhuetaOverlays) el.saudeSilhuetaOverlays.innerHTML = "";
+
+    ZONAS_SILHUETA.forEach(zonaKey => {
+        const idSvg = `zona-${zonaKey.replace(/_/g, "-")}`;
+        const elementoZona = document.getElementById(idSvg);
+        if (!elementoZona) return;
+
+        elementoZona.classList.remove(...TODAS_CLASSES_ESTADO_SILHUETA);
+        const zona = agrupado ? agrupado[zonaKey] : null;
+        if (!zona || !zona.piorEstado) return; // zona vazia — fica só no contorno neutro
+
+        const classeEstado = CLASSE_POR_ESTADO_VISUAL[zona.piorEstado];
+        if (classeEstado) elementoZona.classList.add(classeEstado);
+        if (zona.indefinido) elementoZona.classList.add("zona-indefinida");
+
+        if (!el.saudeSilhuetaOverlays) return;
+        const centro = CENTROS_ZONA_SILHUETA[zonaKey];
+        if (!centro) return;
+
+        const icone = ICONE_POR_ESTADO_VISUAL[zona.piorEstado];
+        if (icone) {
+            const textoIcone = criarElementoSvg("text", { x: centro.x, y: centro.y, class: `zona-icone${zona.piorEstado === "sangrando" ? " zona-icone-pulsando" : ""}` });
+            textoIcone.textContent = icone;
+            el.saudeSilhuetaOverlays.appendChild(textoIcone);
+        }
+
+        // Badge de contagem: só quando há 2+ feridas na mesma zona (Fase
+        // 4) — canto superior direito da forma, deslocado do centro.
+        if (zona.feridas.length >= 2) {
+            const bx = centro.x + 14, by = centro.y - 14;
+            el.saudeSilhuetaOverlays.appendChild(criarElementoSvg("circle", { cx: bx, cy: by, r: 8, class: "zona-badge-fundo" }));
+            const textoBadge = criarElementoSvg("text", { x: bx, y: by, class: "zona-badge-texto" });
+            textoBadge.textContent = String(zona.feridas.length);
+            el.saudeSilhuetaOverlays.appendChild(textoBadge);
+        }
+    });
+
+    // Se a zona atualmente selecionada mudou de conteúdo (ex: ferida
+    // tratada/removida agora mesmo), atualiza a caixinha sem esperar
+    // outro clique — fecha sozinha se a zona ficou sem nenhuma ferida.
+    if (zonaSilhuetaSelecionada) {
+        const zonaDados = agrupado ? agrupado[zonaSilhuetaSelecionada] : null;
+        if (!zonaDados || !zonaDados.feridas.length) {
+            fecharPopoverSilhueta();
+        } else {
+            renderizarPopoverSilhueta(zonaSilhuetaSelecionada, zonaDados);
+        }
+    }
+}
+
 function renderizarSaude() {
     if (!el.saudeLista) return;
+    configurarSilhuetaSaude();
 
     // Painel do Mestre pra reverter coma (item 6 do plano de saúde/
     // complicações) — sempre manual, nunca automático (ver
@@ -16536,9 +16988,12 @@ function renderizarSaude() {
     }
 
     if (modoNpc) {
+        if (el.saudeSilhuetaWrap) el.saudeSilhuetaWrap.style.display = "none";
         el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de feridas.</p>`;
         return;
     }
+    if (el.saudeSilhuetaWrap) el.saudeSilhuetaWrap.style.display = "";
+    renderizarSilhuetaSaude();
     if (!feridasCache.length) {
         el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">Nenhuma ferida registrada.</p>`;
         return;
@@ -16719,13 +17174,55 @@ function renderizarImplantes() {
         const feitos = Number(imp.testesAdaptacaoFeitos) || 0;
         const restantes = Math.max(0, nivel - feitos);
         const rejeicao = Number(imp.rejeicaoParcial) || 0;
-        const dificuldadeAdaptacao = 10 + 2 * nivel;
+        // Manual (pág. Biomecânica/Próteses): "irá fazer um número de
+        // testes de Constituição igual ao nível da prótese, dif 10 +
+        // nível da prótese". O 2× é só pro dano por uso com rejeição
+        // parcial (danoUso abaixo) — não pra dificuldade do teste. Era
+        // 10 + 2×nível aqui por engano, deixando a adaptação bem mais
+        // difícil do que deveria.
+        const dificuldadeAdaptacao = 10 + nivel;
         const danoUso = 2 * nivel;
 
         const badgeRejeicao = rejeicao > 0
             ? `<span class="mod-pill negativo">⚠️ Rejeição parcial: ${rejeicao}</span>` : "";
         const badgeQuebrado = imp.quebrado
             ? `<span class="mod-pill negativo">💥 Quebrado</span>` : "";
+
+        // Tomada/Chip (manual pg. 84 — ver atualizarBlocoSubtipoImplante
+        // no modal de item, onde esses dois campos são preenchidos):
+        // mesma informação de slots/vínculo que já aparece na lista do
+        // Inventário, só que aqui, junto dos testes de adaptação, pra
+        // quem só olha a aba Saúde também enxergar se o chip está de
+        // fato surtindo efeito.
+        let implanteTomadaChipHtml = "";
+        if (imp.subtipo === "tomada") {
+            const ocupados = tomadaSlotsOcupados(fichaAtual.inventario, it.id);
+            const slots = slotsTomada(nivel);
+            implanteTomadaChipHtml = `<div class="hint">Slots de chip: ${ocupados}/${slots} ocupado(s).</div>`;
+        } else if (imp.subtipo === "chip") {
+            const tomadaVinculada = imp.tomadaId ? fichaAtual.inventario?.[imp.tomadaId] : null;
+            const ativo = chipEstaAtivo(fichaAtual.inventario, it.id);
+            if (!imp.tomadaId) {
+                implanteTomadaChipHtml = `<div class="hint">Sem Tomada vinculada — sem efeito. Edite o item pra escolher uma.</div>`;
+            } else if (!tomadaVinculada) {
+                implanteTomadaChipHtml = `<div class="hint">⚠️ Tomada vinculada não existe mais no inventário.</div>`;
+            } else {
+                implanteTomadaChipHtml = `<div class="hint">Tomada: ${escapeHtml(tomadaVinculada.nome || "(sem nome)")} — ${ativo ? "efeito ativo ✅" : "sem vaga/inativo ⚠️"}</div>`;
+            }
+            // Efeito automático (manual pg. 84 — ver efeitoChip em
+            // dados-manual.js): pro modificador de nível 1/2, mostra aqui
+            // o valor de verdade que está entrando na conta (não fica
+            // gravado em it.modificadores, é calculado na hora em
+            // coletarModificadores — resumoModificadores acima não pega).
+            // Pra especialização nível 3-5, só reforça que o efeito
+            // exato mora no cadastro em Especializações.
+            const efeitoAuto = efeitoChip(nivel);
+            if (ativo && efeitoAuto?.tipo === "modificador" && imp.chipAlvo) {
+                implanteTomadaChipHtml += `<div class="hint">Efeito automático: ${rotuloAlvo(imp.chipAlvo)} +${efeitoAuto.valor}.</div>`;
+            } else if (efeitoAuto?.tipo === "especializacao" && imp.especializacaoPericia) {
+                implanteTomadaChipHtml += `<div class="hint">Concede Especialização de nível ${efeitoAuto.valor} em ${escapeHtml(imp.especializacaoPericia)}${ativo ? "" : " (só quando o chip estiver ativo)"} — efeito exato cadastrado em Especializações.</div>`;
+            }
+        }
 
         // Fase 9.2: modificadores estruturados do item formatados igual
         // ao resto da ficha (resumoModificadores, mesma função que
@@ -16767,6 +17264,7 @@ function renderizarImplantes() {
                 ${badgeRejeicao}${badgeQuebrado}
             </div>
             <div class="hint">Testes de adaptação: ${feitos}/${nivel} feito(s)${restantes > 0 ? ` — ${restantes} restante(s)` : ""}.</div>
+            ${implanteTomadaChipHtml}
             ${modificadoresHtml}
             ${imp.funcoesEspeciais ? `<div class="hint">Funções especiais: ${escapeHtml(imp.funcoesEspeciais)}</div>` : ""}
             <div class="ferida-acoes">${botaoTestar}${avisoSemTestes}${botaoDanoUso}</div>
@@ -16788,10 +17286,12 @@ function renderizarImplantes() {
 // Fase 6.2: cada clique rola Constituição (mesmo cálculo estruturado —
 // atributo + modificadores — usado em qualquer outro teste de
 // Constituição do sistema, via buscarConstituicaoAlvo) contra
-// dif 10 + 2×nível. NÃO passa por Ação Pendente (sem terceiro
-// envolvido — ver cabeçalho da seção acima) — grava direto, igual
-// tratarFerida em si mesmo. Cada falha soma +1 em rejeicaoParcial;
-// sucesso ou falha, sempre consome uma tentativa (testesAdaptacaoFeitos).
+// dif 10 + nível (manual, pg. 86 — não 2×nível, esse multiplicador é só
+// pro dano de uso com rejeição parcial mais abaixo). NÃO passa por Ação
+// Pendente (sem terceiro envolvido — ver cabeçalho da seção acima) —
+// grava direto, igual tratarFerida em si mesmo. Cada falha soma +1 em
+// rejeicaoParcial; sucesso ou falha, sempre consome uma tentativa
+// (testesAdaptacaoFeitos).
 async function testarAdaptacaoImplante(itemId) {
     if (isMestre || modoNpc || !fichaAtualId || !fichaAtual) return;
 
@@ -16807,7 +17307,9 @@ async function testarAdaptacaoImplante(itemId) {
     const feitos = Number(imp.testesAdaptacaoFeitos) || 0;
     if (feitos >= nivel) { toast("Os testes de adaptação desse implante já acabaram.", "erro"); return; }
 
-    const dificuldade = 10 + 2 * nivel;
+    // Mesma correção de fórmula da exibição em renderizarImplantes acima
+    // — manual pede dif 10 + nível, não 10 + 2×nível.
+    const dificuldade = 10 + nivel;
     const constituicaoMod = await buscarConstituicaoAlvo("ficha", fichaAtualId);
     const bruto = rolarD20();
     const resultado = bruto + constituicaoMod;
@@ -18815,7 +19317,7 @@ function montarPainelNpcs(corpo) {
             ? reducoesParaExibir.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")
             : "nenhuma";
         card.innerHTML = `
-            <strong>${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}</strong>
+            <strong>${npc.modelo ? "⭐ " : ""}${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}</strong>
             ${npc.vulgo || npc.funcaoNarrativa ? `<span>${escapeHtml([npc.vulgo, npc.funcaoNarrativa].filter(Boolean).join(" · "))}</span>` : ""}
             ${npc.categoria ? `<span class="hint-inline">Categoria: ${escapeHtml(npc.categoria)}</span>` : ""}
             <span>PV: ${npc.pvAtual ?? npc.pvs} / ${npc.pvs}</span>
@@ -18927,17 +19429,68 @@ function abrirEdicaoNpcDetalhado(npc) {
 // `npcExistente` = null pra criar um novo; passe o objeto do NPC (com
 // `.id`) pra editar um já existente.
 // ---------------------------------------------------------------------
-function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
-    const npcDet = npcExistente && npcExistente.modoDetalhado
+// `prefillModelo` (só usado quando npcExistente é null, ou seja, na
+// criação de um NPC NOVO): objeto de um NPC já salvo com `modelo: true`,
+// escolhido no seletor logo abaixo. Serve só pra pré-preencher todos os
+// campos do formulário — o resultado do "Criar NPC" continua sendo uma
+// entrada 100% independente (novo id, sem vínculo nenhum com o modelo
+// original). Editar à vontade antes de salvar, e opcionalmente marcar
+// esse novo NPC como modelo também (checkbox "Marcar como modelo" mais
+// abaixo) — ver plano-npc-modelo.txt.
+function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillModelo = null) {
+    const fontePrefill = npcExistente || prefillModelo;
+    const npcDet = fontePrefill && fontePrefill.modoDetalhado
         ? {
-            vulgo: npcExistente.vulgo || "",
-            idade: npcExistente.idade || "",
-            funcaoNarrativa: npcExistente.funcaoNarrativa || "",
-            atributosPrimarios: { ...estadoInicialNpcDetalhado().atributosPrimarios, ...(npcExistente.atributosPrimarios || {}) },
-            secundariosOverride: { ...estadoInicialNpcDetalhado().secundariosOverride, ...(npcExistente.secundariosOverride || {}) },
-            periciasNpc: { ...(npcExistente.periciasNpc || {}) }
+            vulgo: fontePrefill.vulgo || "",
+            idade: fontePrefill.idade || "",
+            funcaoNarrativa: fontePrefill.funcaoNarrativa || "",
+            atributosPrimarios: { ...estadoInicialNpcDetalhado().atributosPrimarios, ...(fontePrefill.atributosPrimarios || {}) },
+            secundariosOverride: { ...estadoInicialNpcDetalhado().secundariosOverride, ...(fontePrefill.secundariosOverride || {}) },
+            periciasNpc: { ...(fontePrefill.periciasNpc || {}) },
+            // Inventário completo (armas, munição, etc. — Módulo 3). Só
+            // faz sentido copiar de um MODELO (npcExistente continua
+            // editado à parte, via "Atuar como NPC" — não por aqui), daí
+            // o fallback pro próprio inventário quando editando. Clonado
+            // via JSON round-trip pra nunca compartilhar referência com
+            // o objeto original em npcsCache/npcExistente.
+            inventario: JSON.parse(JSON.stringify(fontePrefill.inventario || {})),
+            categoriasInventario: JSON.parse(JSON.stringify(fontePrefill.categoriasInventario || {})),
+            energiaAtual: fontePrefill.energiaAtual ?? null
         }
         : estadoInicialNpcDetalhado();
+
+    // ---- Preencher a partir de um modelo (só na criação de NPC novo) ----
+    if (!npcExistente) {
+        const modelosDisponiveis = (npcsCache || []).filter(n => n.modelo && n.modoDetalhado);
+        if (modelosDisponiveis.length) {
+            const secModelo = document.createElement("div");
+            secModelo.className = "section-header";
+            secModelo.innerText = "Preencher a partir de um modelo";
+            container.appendChild(secModelo);
+            const hintModelo = document.createElement("p");
+            hintModelo.className = "hint";
+            hintModelo.innerText = "Escolha um modelo salvo pra já vir tudo preenchido abaixo — depois é só ajustar o que quiser antes de criar. O NPC criado fica independente do modelo.";
+            container.appendChild(hintModelo);
+            const selectModelo = document.createElement("select");
+            selectModelo.innerHTML = '<option value="">— em branco —</option>';
+            modelosDisponiveis
+                .slice()
+                .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""))
+                .forEach(n => {
+                    const opt = document.createElement("option");
+                    opt.value = n.id;
+                    opt.innerText = n.categoria ? `${n.nome} (${n.categoria})` : n.nome;
+                    selectModelo.appendChild(opt);
+                });
+            if (prefillModelo) selectModelo.value = prefillModelo.id;
+            selectModelo.addEventListener("change", () => {
+                const escolhido = selectModelo.value ? modelosDisponiveis.find(n => n.id === selectModelo.value) : null;
+                container.innerHTML = "";
+                montarFormularioNpcDetalhado(container, null, onSalvo, escolhido);
+            });
+            container.appendChild(selectModelo);
+        }
+    }
 
     // ---- Informações básicas ----
     const secBasico = document.createElement("div");
@@ -18950,7 +19503,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
     gridBasico.style.gridTemplateColumns = "1fr 1fr";
     gridBasico.style.gap = "8px";
     const inputNome = criarInput("text", "Nome");
-    inputNome.value = npcExistente ? npcExistente.nome || "" : "";
+    inputNome.value = fontePrefill ? fontePrefill.nome || "" : "";
     const inputVulgo = criarInput("text", "Vulgo");
     inputVulgo.value = npcDet.vulgo;
     const inputIdade = criarInput("text", "Idade");
@@ -18969,7 +19522,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
     const labelCategoria = document.createElement("label");
     labelCategoria.innerText = "Categoria (opcional)";
     const inputCategoria = criarInput("text", "Ex.: Capangas, Contatos...");
-    inputCategoria.value = npcExistente ? npcExistente.categoria || "" : "";
+    inputCategoria.value = fontePrefill ? fontePrefill.categoria || "" : "";
     const datalistCategoria = document.createElement("datalist");
     datalistCategoria.id = "datalist-categoria-npc";
     categoriasDistintas(npcsCache).forEach(cat => {
@@ -19138,9 +19691,9 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
     container.appendChild(hintProtecao);
     // Migra automaticamente NPC antigo (1 tipo só, protecaoTipo/Valor)
     // pro checklist assim que ele é aberto pra edição.
-    const reducoesExistentes = (npcExistente?.reducoesDano && npcExistente.reducoesDano.length)
-        ? npcExistente.reducoesDano
-        : (npcExistente?.protecaoTipo ? [{ tipo: npcExistente.protecaoTipo, valor: npcExistente.protecaoValor || 0 }] : []);
+    const reducoesExistentes = (fontePrefill?.reducoesDano && fontePrefill.reducoesDano.length)
+        ? fontePrefill.reducoesDano
+        : (fontePrefill?.protecaoTipo ? [{ tipo: fontePrefill.protecaoTipo, valor: fontePrefill.protecaoValor || 0 }] : []);
     const checklistProtecao = montarChecklistReducaoNpc(reducoesExistentes);
     container.appendChild(checklistProtecao);
 
@@ -19158,6 +19711,24 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
         var refInputPvAtual = inputPvAtual; // usado no salvar, abaixo
     }
 
+    // ---- Marcar como modelo (plano-npc-modelo.txt) — aparece tanto
+    // criando quanto editando. Um NPC marcado aqui passa a aparecer no
+    // seletor "Preencher a partir de um modelo" acima, pra qualquer novo
+    // NPC. Não afeta em nada esse NPC em combate; é só metadado. ----
+    const campoModelo = document.createElement("div");
+    campoModelo.className = "modal-field";
+    campoModelo.style.marginTop = "8px";
+    const labelModelo = document.createElement("label");
+    labelModelo.style.display = "flex";
+    labelModelo.style.alignItems = "center";
+    labelModelo.style.gap = "6px";
+    const chkModelo = document.createElement("input");
+    chkModelo.type = "checkbox";
+    chkModelo.checked = !!(npcExistente && npcExistente.modelo);
+    labelModelo.append(chkModelo, document.createTextNode("⭐ Marcar como modelo (reaproveitar pra preencher NPCs novos)"));
+    campoModelo.appendChild(labelModelo);
+    container.appendChild(campoModelo);
+
     const btnSalvar = document.createElement("button");
     btnSalvar.className = "btn-lime"; btnSalvar.type = "button";
     btnSalvar.innerText = npcExistente ? "Salvar mini-ficha" : "Criar NPC (mini-ficha)";
@@ -19173,13 +19744,17 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo) {
         const payload = {
             nome: inputNome.value.trim(),
             categoria: inputCategoria.value.trim(),
+            modelo: chkModelo.checked,
             npcDetalhado: {
                 vulgo: inputVulgo.value.trim(),
                 idade: inputIdade.value.trim(),
                 funcaoNarrativa: inputFuncaoNarrativa.value.trim(),
                 atributosPrimarios: npcDet.atributosPrimarios,
                 secundariosOverride: npcDet.secundariosOverride,
-                periciasNpc: npcDet.periciasNpc
+                periciasNpc: npcDet.periciasNpc,
+                inventario: npcDet.inventario,
+                categoriasInventario: npcDet.categoriasInventario,
+                energiaAtual: npcDet.energiaAtual
             },
             reducoesDano: checklistProtecao.lerReducoes()
         };
@@ -20167,7 +20742,7 @@ function montarDetalheCenario(detalhe, cenario) {
         linha.style.display = "flex";
         linha.style.justifyContent = "space-between";
         linha.style.alignItems = "center";
-        linha.innerHTML = `<span>📦 ${escapeHtml(it.nome || "(sem nome)")}</span>`;
+        linha.innerHTML = `<span>📦 ${escapeHtml(it.nome || "(sem nome)")}${it.tag ? ` <span class="entity-sub">(${escapeHtml(rotuloTag(it.tag))}${it.peso ? ` · ${it.peso} kg` : ""})</span>` : ""}</span>`;
         const btnRemover = document.createElement("button");
         btnRemover.className = "btn-red"; btnRemover.type = "button"; btnRemover.innerText = "Remover";
         btnRemover.addEventListener("click", async () => { await removerItemCenario(cenario.id, itemId); toast("Item removido do cenário."); });
@@ -20175,14 +20750,61 @@ function montarDetalheCenario(detalhe, cenario) {
         detalhe.appendChild(linha);
     });
 
+    // Puxar do Banco Global: clona um item já cadastrado na Biblioteca
+    // de Itens (com peso/tag/perícia/tudo) direto pro cenário — assim,
+    // quando o jogador "Pegar" depois, o item chega completo no
+    // inventário em vez de só um nome solto. Campos que só fazem
+    // sentido dentro de uma ficha (categoria levando/casa) ou do molde
+    // do Banco (categoriaBanco, origemFichaId) não vêm junto.
+    const selectPuxarBanco = document.createElement("select");
+    const optPuxarVazia = document.createElement("option");
+    optPuxarVazia.value = ""; optPuxarVazia.innerText = "Puxar do Banco Global...";
+    selectPuxarBanco.appendChild(optPuxarVazia);
+    itensGlobaisCache.slice().sort((a, b) => (a.nome || "").localeCompare(b.nome || "")).forEach(it => {
+        const opt = document.createElement("option");
+        opt.value = it.id;
+        opt.innerText = it.nome;
+        selectPuxarBanco.appendChild(opt);
+    });
+    const btnPuxarBanco = document.createElement("button");
+    btnPuxarBanco.className = "btn-blue"; btnPuxarBanco.type = "button"; btnPuxarBanco.innerText = "+ Puxar";
+    btnPuxarBanco.addEventListener("click", async () => {
+        const idEscolhido = selectPuxarBanco.value;
+        if (!idEscolhido) { toast("Escolha um item do Banco Global.", "erro"); return; }
+        const itemBanco = itensGlobaisCache.find(it => it.id === idEscolhido);
+        if (!itemBanco) { toast("Item não encontrado no Banco Global.", "erro"); return; }
+        const { id: _id, categoriaBanco: _categoriaBanco, origemFichaId: _origemFichaId, ...itemLimpo } = itemBanco;
+        await adicionarItemCenario(cenario.id, itemLimpo);
+        selectPuxarBanco.value = "";
+        toast(`"${itemBanco.nome}" adicionado ao cenário.`);
+    });
+    const linhaPuxarBanco = document.createElement("div");
+    linhaPuxarBanco.style.display = "flex"; linhaPuxarBanco.style.gap = "6px"; linhaPuxarBanco.style.flexWrap = "wrap";
+    linhaPuxarBanco.append(selectPuxarBanco, btnPuxarBanco);
+    detalhe.appendChild(linhaPuxarBanco);
+
+    // Criar item novo, com stats completos (tag, peso, perícia etc.) —
+    // reaproveita o mesmo modal de item do Banco Global (ver
+    // abrirModalNovoItemParaCenario/salvarItemBancoDoModal), mas em vez
+    // de salvar na Biblioteca, grava direto no cenário. Não fica
+    // guardado no Banco Global depois — se quiser reaproveitar em
+    // outra mesa/cena, crie pela Biblioteca de Itens e puxe de lá.
+    const btnCriarCompleto = document.createElement("button");
+    btnCriarCompleto.className = "btn-lime"; btnCriarCompleto.type = "button"; btnCriarCompleto.innerText = "+ Criar item completo";
+    btnCriarCompleto.addEventListener("click", () => abrirModalNovoItemParaCenario(cenario.id));
+    detalhe.appendChild(btnCriarCompleto);
+
+    // Item narrativo rápido (só nome + observação, sem stats) — mantido
+    // pra loot puramente descritivo que o Mestre não quer detalhar
+    // mecanicamente (ex: "Fotos comprometedoras", "Bilhete rasgado").
     const inputNomeItem = document.createElement("input");
     inputNomeItem.type = "text";
-    inputNomeItem.placeholder = "Nome do item (ex: Pistola Militech)";
+    inputNomeItem.placeholder = "Item narrativo rápido, sem stats (ex: Bilhete rasgado)";
     const inputObsItem = document.createElement("input");
     inputObsItem.type = "text";
     inputObsItem.placeholder = "Observação (opcional)";
     const btnAddItem = document.createElement("button");
-    btnAddItem.className = "btn-lime"; btnAddItem.type = "button"; btnAddItem.innerText = "+ Add item";
+    btnAddItem.className = "btn-ghost"; btnAddItem.type = "button"; btnAddItem.innerText = "+ Add narrativo";
     btnAddItem.addEventListener("click", async () => {
         if (!inputNomeItem.value.trim()) { toast("Dê um nome ao item.", "erro"); return; }
         await adicionarItemCenario(cenario.id, { nome: inputNomeItem.value.trim(), observacao: inputObsItem.value.trim() || "" });

@@ -356,6 +356,54 @@ export function subtipoContaComoImplante(subtipo) {
     return subtipo !== "chip";
 }
 
+// ---------------------------------------------------------------------
+// Tomada e Chips (manual pg. 84) — os dois únicos subtipos de implante
+// com valores MECÂNICOS fixos e determinísticos no texto do manual
+// (diferente de Membro/Extremidade/Olho/Endoesqueleto/Órgão, cujos
+// "diversos bônus possíveis" ficam "a cargo do narrador quantos desses
+// bônus a prótese terá no jogo" — manual pg. 83). Por isso só esses
+// dois ganham automação de efeito aqui; os demais continuam resolvidos
+// pelo editor genérico de "Modificadores automáticos" do item (mesma
+// mesa decide o que aplicar).
+//
+// Tomada: implante atrás da orelha que acopla Chips. Sua única função
+// mecânica é oferecer um número de vagas (slots) igual ao próprio
+// nível — daí `slots: nivel` em toda a tabela.
+export const TOMADA_NIVEIS = [
+    { nivel: 1, slots: 1, receita: "3 metais leves, 3 eletrônicos, 2 eletrônicos avançados, 1 material especial", preco: 6050, dificuldadeCriar: 15, dificuldadeInstalar: 18 },
+    { nivel: 2, slots: 2, receita: "3 metais leves, 3 eletrônicos, 3 eletrônicos avançados, 2 materiais especiais", preco: 11150, dificuldadeCriar: 16, dificuldadeInstalar: 19 },
+    { nivel: 3, slots: 3, receita: "sem receita definida no manual", preco: 19700, dificuldadeCriar: 17, dificuldadeInstalar: 20 },
+    { nivel: 4, slots: 4, receita: "4 metais leves, 5 eletrônicos, 5 eletrônicos avançados, 4 materiais especiais", preco: 24700, dificuldadeCriar: 18, dificuldadeInstalar: 21 },
+    { nivel: 5, slots: 5, receita: "5 metais leves, 6 eletrônicos, 6 eletrônicos avançados, 5 materiais especiais", preco: 36100, dificuldadeCriar: 19, dificuldadeInstalar: 22 }
+];
+
+// Chip: drive inserido numa Tomada. Nível 1-2 dá um modificador
+// numérico fixo (+1 / +2) numa rolagem à escolha; nível 3-5 concede
+// uma Especialização (nível igual ao do chip) numa perícia à escolha —
+// o EFEITO exato dessa especialização vem do catálogo de
+// especializações da perícia (fora do escopo desta tabela), então só o
+// "slot" da especialização é automático aqui, igual prótese comum.
+export const CHIP_NIVEIS = [
+    { nivel: 1, tipoEfeito: "modificador", valorEfeito: 1, receita: "2 eletrônicos, 1 eletrônico avançado", preco: 1800, dificuldadeCriar: 13, dificuldadeInstalar: 14 },
+    { nivel: 2, tipoEfeito: "modificador", valorEfeito: 2, receita: "3 eletrônicos, 2 eletrônicos avançados", preco: 3500, dificuldadeCriar: 15, dificuldadeInstalar: 16 },
+    { nivel: 3, tipoEfeito: "especializacao", valorEfeito: 3, receita: "3 eletrônicos, 2 eletrônicos avançados, 1 material especial", preco: 7000, dificuldadeCriar: 17, dificuldadeInstalar: 18 },
+    { nivel: 4, tipoEfeito: "especializacao", valorEfeito: 4, receita: "4 eletrônicos, 3 eletrônicos avançados, 2 materiais especiais", preco: 13000, dificuldadeCriar: 19, dificuldadeInstalar: 20 },
+    { nivel: 5, tipoEfeito: "especializacao", valorEfeito: 5, receita: "4 eletrônicos, 4 eletrônicos avançados, 3 materiais especiais", preco: 22000, dificuldadeCriar: 21, dificuldadeInstalar: 22 }
+];
+
+// Slots de chip que uma Tomada de dado nível suporta. Cai pra 0 fora da
+// faixa 1-5 (nível inválido/não definido ainda) em vez de estourar.
+export function slotsTomada(nivel) {
+    const linha = TOMADA_NIVEIS.find(t => t.nivel === Number(nivel));
+    return linha ? linha.slots : 0;
+}
+
+// Efeito mecânico do Chip por nível — null fora da faixa 1-5.
+export function efeitoChip(nivel) {
+    const linha = CHIP_NIVEIS.find(c => c.nivel === Number(nivel));
+    return linha ? { tipo: linha.tipoEfeito, valor: linha.valorEfeito } : null;
+}
+
 export function rotuloTag(tagKey) {
     const t = TAGS_ITEM.find(t => t.key === tagKey);
     return t ? t.label : tagKey;
@@ -1401,6 +1449,73 @@ export const LOCAIS_MIRA = [
 
 export function localMiraPorKey(key) {
     return LOCAIS_MIRA.find(l => l.key === key) || LOCAIS_MIRA[0];
+}
+
+// ---------------------------------------------------------------------
+// Lateralidade da FERIDA registrada (plano-silhueta-saude.txt, Fase 1):
+// o jogador só mira em "Membro" ou "Extremidade" de forma genérica
+// (nunca escolhe o lado — não existe essa opção na hora de atacar), mas
+// a ferida gravada na ficha (pra silhueta visual de Saúde) precisa
+// saber QUAL braço/perna/mão/pé foi atingido, pra acender só um membro
+// em vez dos dois. Por isso o lado é sorteado (uniforme, 1 em 4) só na
+// hora de criar a ferida — depois do dano já resolvido.
+//
+// Isso é PURAMENTE cosmético/de registro: a redução de dano por
+// Proteção continua usando a chave genérica de LOCAIS_MIRA acima
+// ("membro"/"extremidade", sem lado) — colete/braçadeira de Proteção
+// não tem lado hoje, então não faz diferença nenhuma pra armadura qual
+// lado foi sorteado (ver plano, seção "FORA DESTE PLANO").
+export const SUB_LOCAIS_FERIDA = {
+    membro: ["braco_esquerdo", "braco_direito", "perna_esquerda", "perna_direita"],
+    extremidade: ["mao_esquerda", "mao_direita", "pe_esquerda", "pe_direita"]
+};
+
+// As 10 zonas "finais" que a silhueta de Saúde desenha (plano-silhueta-
+// saude.txt, Fase 2/3) — mesmas chaves usadas em ferida.local depois do
+// sorteio de lado (sortearLocalDetalhado abaixo), mais "torso"/"cabeca"
+// que não têm lado. Usado por agruparFeridasPorLocal (saude.js) pra
+// sempre devolver as 10 zonas, mesmo as sem nenhuma ferida.
+export const ZONAS_SILHUETA = [
+    "cabeca", "torso",
+    "braco_esquerdo", "braco_direito",
+    "perna_esquerda", "perna_direita",
+    "mao_esquerda", "mao_direita",
+    "pe_esquerda", "pe_direita"
+];
+
+export const LABELS_LOCAL_FERIDA = {
+    cabeca: "Cabeça",
+    torso: "Torso",
+    braco_esquerdo: "Braço esquerdo",
+    braco_direito: "Braço direito",
+    perna_esquerda: "Perna esquerda",
+    perna_direita: "Perna direita",
+    mao_esquerda: "Mão esquerda",
+    mao_direita: "Mão direita",
+    pe_esquerda: "Pé esquerdo",
+    pe_direita: "Pé direito",
+    // Chaves genéricas antigas (feridas criadas ANTES deste plano, sem
+    // lado sorteado) — mantidas só pra rótulo continuar legível em
+    // fichas antigas; sortearLocalDetalhado nunca produz essas duas.
+    membro: "Membro (lado indefinido)",
+    extremidade: "Extremidade (lado indefinido)"
+};
+
+export function labelLocalFerida(localKey) {
+    return LABELS_LOCAL_FERIDA[localKey] || localKey;
+}
+
+// Sorteia o local DETALHADO de uma ferida a partir da chave de
+// LOCAIS_MIRA escolhida no ataque ("membro"/"extremidade" viram um dos
+// 4 sub-locais correspondentes, sorteados uniformemente; "torso" e
+// "cabeca" não têm lado, voltam como vieram). Chamar UMA vez por golpe
+// só — reaproveitar o mesmo resultado se o mesmo golpe gerar mais de
+// uma ferida (ex.: Sangramento + Corte vinculados), pra não sortear
+// lados diferentes pro mesmo ferimento.
+export function sortearLocalDetalhado(localMiraKey) {
+    const grupo = SUB_LOCAIS_FERIDA[localMiraKey];
+    if (!grupo) return localMiraKey;
+    return grupo[Math.floor(Math.random() * grupo.length)];
 }
 
 // Dificuldade efetiva de mirar num local: só a Cabeça muda conforme o

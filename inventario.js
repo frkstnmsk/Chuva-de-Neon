@@ -78,7 +78,23 @@ export function itemEhEquipavel(item) {
     return ehArmaOuExplosivo(item.tag) || !!item.equipavel;
 }
 
+// Ferramentas de criação e eletrônicos são o tipo de item que também
+// faz sentido ficar parado "Em casa" e ser usado de lá direto (kit de
+// bancada, notebook, PC gamer etc.) — sem precisar do vai-e-volta de
+// mover pra "Levando consigo" só pra rolar e devolver depois. Arma,
+// explosivo, produto químico e implante ficam de fora de propósito:
+// esses têm um efeito físico/de combate que só faz sentido com o item
+// realmente em mãos (ver itemPodeUsar abaixo).
+const TAGS_USAVEIS_EM_CASA = ["ferramenta_criacao", "ferramenta_criacao_quimica", "ferramenta_criacao_biomecanica", "eletronico"];
+
+export function itemPodeUsarEmCasa(item) {
+    return item.categoria === "casa" && TAGS_USAVEIS_EM_CASA.includes(item.tag);
+}
+
 export function itemPodeUsar(item) {
+    // Exceção: ferramenta/eletrônico "Em casa" pode ser usado direto de
+    // lá (ver itemPodeUsarEmCasa acima) — pula a regra de baixo.
+    if (itemPodeUsarEmCasa(item)) return true;
     // Regra de ouro do inventário: só dá pra "usar" item/arma que está
     // na categoria "levando consigo". Itens equipáveis (armas ou
     // qualquer item marcado como tal — ver itemEhEquipavel acima) têm

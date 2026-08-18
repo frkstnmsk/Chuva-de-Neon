@@ -4,7 +4,7 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL, custoUpgradeVeiculoTabela, ehFerramentaCriacaoGeral, TABELA_PONTUACAO_FUGA, ehArma } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL, custoUpgradeVeiculoTabela, ehFerramentaCriacaoGeral, TABELA_PONTUACAO_FUGA, ehArma, slotsTomada, efeitoChip } from "./dados-manual.js";
 
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
@@ -132,6 +132,60 @@ const FONTES_MODIFICADOR = [
     { lista: "fatosUniversais", tipo: "Fato universal" }
 ];
 
+// ---------------------------------------------------------------------
+// Tomada e Chips (manual pg. 84 — ver dados-manual.js, slotsTomada/
+// efeitoChip). Diferente dos demais subtipos de implante (bônus "a
+// cargo do narrador"), esses dois têm uma trava mecânica extra: o chip
+// só funciona enquanto encaixado numa Tomada que exista de verdade no
+// MESMO inventário, esteja instalada (cirurgia já feita) e ainda tenha
+// vaga — cada Tomada só aceita um número de chips igual ao próprio
+// nível (slotsTomada). Chips que excedem a vaga (ordem de cadastro no
+// inventário, os mais antigos entram primeiro) ficam "plugados" pra
+// fins de ficha, mas inertes — sem efeito mecânico — até sobrar espaço
+// (ex.: removendo outro chip da mesma Tomada).
+// ---------------------------------------------------------------------
+
+// Ids (chaves do inventário) de todos os chips instalados e apontando
+// pra essa Tomada, na ordem em que entraram no inventário (chave do
+// Firebase é cronológica) — usado tanto pra achar o índice de UM chip
+// (chipEstaAtivo) quanto pra mostrar "X/N slots" na UI (ficha.js).
+export function chipsInstaladosNaTomada(inventario, tomadaId) {
+    const inv = inventario || {};
+    if (!tomadaId) return [];
+    return Object.keys(inv).filter(id => {
+        const it = inv[id];
+        return it && it.tag === "biomecanica" && it.implante?.subtipo === "chip" &&
+            it.implante?.instalado && !it.implante?.quebrado &&
+            it.implante?.tomadaId === tomadaId;
+    });
+}
+
+export function tomadaSlotsOcupados(inventario, tomadaId) {
+    return chipsInstaladosNaTomada(inventario, tomadaId).length;
+}
+
+// Um chip só está "ativo" (contribuindo efeito mecânico) quando: (a)
+// ele próprio já passou pela cirurgia de instalação e não está
+// quebrado; (b) aponta pra uma Tomada que existe, também está
+// instalada e não quebrada; (c) ele cabe dentro do limite de slots
+// dessa Tomada (slotsTomada do nível dela).
+export function chipEstaAtivo(inventario, chipId) {
+    const inv = inventario || {};
+    const chip = inv[chipId];
+    if (!chip || chip.tag !== "biomecanica" || chip.implante?.subtipo !== "chip") return false;
+    const imp = chip.implante;
+    if (!imp || !imp.instalado || imp.quebrado) return false;
+    const tomadaId = imp.tomadaId;
+    if (!tomadaId) return false;
+    const tomada = inv[tomadaId];
+    if (!tomada || tomada.tag !== "biomecanica" || tomada.implante?.subtipo !== "tomada") return false;
+    if (!tomada.implante.instalado || tomada.implante.quebrado) return false;
+    const slots = slotsTomada(tomada.nivelTag);
+    const instalados = chipsInstaladosNaTomada(inv, tomadaId);
+    const idx = instalados.indexOf(chipId);
+    return idx !== -1 && idx < slots;
+}
+
 export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
     // Item com tag "droga" NUNCA contribui com seus modificadores só por
     // estar na mochila — esse é o mesmo campo "Modificadores automáticos"
@@ -157,6 +211,19 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
             // `ativo` ausente (fichas antigas, antes desse campo existir)
             // conta como ativo, pra não desligar tudo retroativamente.
             if (entidade.ativo === false) continue;
+            // Implante de Biomecânica (ver dados-manual.js, SUBTIPOS_IMPLANTE):
+            // só conta bônus passivo enquanto DE FATO instalado no corpo —
+            // um implante ainda não operado (comprado/criado, esperando
+            // cirurgia) ou quebrado (falha crítica de instalação/remoção)
+            // não deveria dar nenhum benefício mecânico. Faltava essa trava
+            // aqui: o item podia estar parado no inventário, nunca ter
+            // passado pela cirurgia (ou ter quebrado numa), e mesmo assim
+            // contribuir modificadores só por existir na ficha.
+            if (entidade.implante && (!entidade.implante.instalado || entidade.implante.quebrado)) continue;
+            // Chip (manual pg. 84): trava extra além de "instalado" —
+            // precisa estar de fato encaixado numa Tomada instalada e
+            // dentro do limite de slots dela (ver chipEstaAtivo acima).
+            if (entidade.implante?.subtipo === "chip" && !chipEstaAtivo(inventarioSemDrogas, id)) continue;
             const mods = entidade.modificadores || [];
             for (const m of mods) {
                 if (!m.alvo || !m.valor) continue;
@@ -176,6 +243,24 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
                     valor: Number(m.valor) || 0,
                     origem: `${fonte.tipo}: ${entidade.nome || "(sem nome)"}`
                 });
+            }
+            // Efeito automático de Chip nível 1/2 (manual pg. 84: "Fornece
+            // modificador +1/+2 em uma rolagem") — não depende do editor
+            // genérico de modificadores acima, é sempre igual ao nível do
+            // chip na rolagem escolhida em `implante.chipAlvo` (ver modal
+            // de item, ficha.js). Nível 3-5 concede uma Especialização
+            // (sem valor numérico fixo aqui — ver efeitoChip/CHIP_NIVEIS em
+            // dados-manual.js), por isso só o tipo "modificador" empurra
+            // algo pra `todos` diretamente.
+            if (entidade.implante?.subtipo === "chip" && entidade.implante.chipAlvo) {
+                const efeito = efeitoChip(entidade.nivelTag);
+                if (efeito && efeito.tipo === "modificador") {
+                    todos.push({
+                        alvo: entidade.implante.chipAlvo,
+                        valor: efeito.valor,
+                        origem: `Chip: ${entidade.nome || "(sem nome)"}`
+                    });
+                }
             }
         }
     }
@@ -206,6 +291,7 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
 // ---------------------------------------------------------------------
 export function modificadoresOcasionaisDoAlvo(ficha, alvo) {
     const resultado = [];
+    const inventario = (ficha && ficha.inventario) || {};
     for (const fonte of FONTES_MODIFICADOR) {
         const lista = (ficha && ficha[fonte.lista]) || {};
         for (const entidadeId of Object.keys(lista)) {
@@ -213,6 +299,15 @@ export function modificadoresOcasionaisDoAlvo(ficha, alvo) {
             // Especialização/vantagem desligada (Ativo/Inativo) não deve
             // nem oferecer o checkbox — mesma regra de coletarModificadores.
             if (!entidade || entidade.ativo === false) continue;
+            // Mesma trava de implante não instalado/quebrado de
+            // coletarModificadores acima: sem ela, o checkbox de Ocasião
+            // Especial aparecia oferecendo ligar um bônus que nunca
+            // contaria de verdade (coletarModificadores já barraria na
+            // hora de somar) — só confundia o jogador.
+            if (entidade.implante && (!entidade.implante.instalado || entidade.implante.quebrado)) continue;
+            // Chip: mesma trava extra de encaixe/vaga na Tomada (ver
+            // chipEstaAtivo acima e coletarModificadores).
+            if (entidade.implante?.subtipo === "chip" && !chipEstaAtivo(inventario, entidadeId)) continue;
             const mods = entidade.modificadores || [];
             mods.forEach((m, modIndex) => {
                 if (!m || !m.ocasional || m.alvo !== alvo) return;

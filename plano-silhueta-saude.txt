@@ -1,0 +1,141 @@
+=====================================================================
+PLANO — Silhueta visual na aba Saúde (com lateralidade sorteada)
+=====================================================================
+Objetivo: mostrar as feridas do personagem sobre uma silhueta de corpo
+humano, acendendo SÓ o membro específico atingido (não os dois braços/
+pernas ao mesmo tempo), com uma caixinha flutuante (seta + ferida +
+botão de tratar) ao clicar. A lateralidade (esquerdo/direito) é
+sorteada no momento do golpe, já que o jogador só mira em "Membro" ou
+"Extremidade" de forma genérica — ele nunca escolhe o lado.
+
+---------------------------------------------------------------------
+FASE 1 — Granularidade de local (base de tudo — sem isso as outras
+fases não têm o que desenhar)
+---------------------------------------------------------------------
+Hoje `ferida.local` só grava a chave genérica de LOCAIS_MIRA
+(dados-manual.js): "torso", "membro", "extremidade", "cabeca". Não dá
+pra saber qual braço/perna/mão/pé foi.
+
+1.1) dados-manual.js: criar os 8 novos sub-locais (grupos existentes,
+     só "abertos" em lado esquerdo/direito):
+       Grupo "membro"      -> braco_esquerdo, braco_direito,
+                               perna_esquerda, perna_direita
+       Grupo "extremidade" -> mao_esquerda, mao_direita,
+                               pe_esquerda, pe_direita
+     "torso" e "cabeca" continuam únicos (sem lado).
+
+1.2) dados-manual.js: função nova `sortearLocalDetalhado(localMiraKey)`
+     — se "membro", sorteia 1 dos 4 sub-locais do grupo (uniforme);
+     se "extremidade", sorteia 1 dos 4 do outro grupo; se "torso" ou
+     "cabeca", devolve a própria chave sem sortear.
+
+1.3) ficha.js (~linha 6101) e mestre.js (linhas 804/807 e 2946): trocar
+     o cálculo atual de `localFerida` por uma chamada a
+     `sortearLocalDetalhado(localMira.key)`. IMPORTANTE: sortear UMA
+     vez por golpe só, e reaproveitar o mesmo resultado nas duas
+     `criarFerida()` que podem acontecer no mesmo golpe (ferida de
+     Sangramento + ferida de Corte/Perfuração vinculada) — senão as
+     duas feridas do mesmo tiro podem acabar em lados diferentes.
+
+1.4) Redução de armadura (Proteção) NÃO muda — continua usando a
+     chave genérica de LOCAIS_MIRA (localArmadura: "membro" ou
+     "extremidade"), porque os itens de Proteção não têm lado. Só o
+     REGISTRO da ferida fica detalhado; a mecânica de dano/armadura
+     de golpe mirado é a mesma de hoje.
+
+1.5) Compatibilidade: feridas já existentes no banco (criadas antes
+     desse plano) continuam com o local genérico antigo ("membro"/
+     "extremidade"). Não migra nada automaticamente — a silhueta
+     (Fase 3) trata esse caso à parte (ver nota na Fase 3).
+
+---------------------------------------------------------------------
+FASE 2 — Silhueta SVG com zonas clicáveis
+---------------------------------------------------------------------
+Um SVG de corpo humano inline (sem imagem externa) dentro da aba
+Saúde, com 10 zonas com id próprio:
+  zona-cabeca, zona-torso,
+  zona-braco-esquerdo, zona-braco-direito,
+  zona-perna-esquerda, zona-perna-direita,
+  zona-mao-esquerda, zona-mao-direita,
+  zona-pe-esquerda, zona-pe-direita
+(Mão/pé como zonas pequenas na ponta do braço/perna correspondente.)
+
+---------------------------------------------------------------------
+FASE 3 — Agregação de feridas por zona
+---------------------------------------------------------------------
+Função nova em saude.js: `agruparFeridasPorLocal(feridas)` — agrupa
+por `ferida.local` (agora já detalhado, Fase 1), calcula por zona:
+  - quantidade de feridas abertas
+  - pior estado entre elas (prioridade: amputado > sangrando >
+    infeccionada > aberta > tratada)
+
+Nota de compatibilidade: uma ferida antiga com local genérico
+"membro"/"extremidade" (Fase 1.5) é exibida nos DOIS lados daquele
+grupo, mas com um estilo "indefinido" (ex.: contorno tracejado em vez
+de preenchido) — sinaliza visualmente "essa ferida é de antes do
+sorteio de lado, o sistema não sabe qual lado é". Some sozinha da
+lista quando a ferida for tratada/removida, igual qualquer outra.
+
+---------------------------------------------------------------------
+FASE 4 — Cores e ícones por estado
+---------------------------------------------------------------------
+  - Sem ferida: contorno neutro.
+  - Aberta: preenchimento vermelho.
+  - Sangrando: vermelho + ícone 🩸 (pulsando).
+  - Infeccionada: contorno verde + ícone 🦠.
+  - Amputado (ver Fase 6): ícone ✂️ substitui o preenchimento — o
+    membro fica visualmente "cortado" na silhueta.
+  - Tratada: amarelo claro, discreto (some quando o histórico não
+    precisa mais chamar atenção).
+  - 2+ feridas na mesma zona: badge numérico no canto do marcador.
+
+---------------------------------------------------------------------
+FASE 5 — Caixinha flutuante ao clicar
+---------------------------------------------------------------------
+Clicar numa zona COM ferida abre um popover posicionado ao lado da
+zona, com uma seta CSS apontando pro marcador (mesmo princípio de
+tooltip, só que fixo até fechar, não só hover). Conteúdo:
+  - Lista das feridas daquela zona (tipo, estado, infecção).
+  - Embaixo de cada uma, os mesmos botões de tratamento que já existem
+    hoje na lista de cards (reaproveita `acoesDeTratamentoParaFerida`
+    e `abrirModalTratarFerida` de ficha.js — não duplica lógica, só
+    reusa o handler já existente dentro da caixinha).
+Fecha ao clicar fora ou num "×". Clicar numa zona sem ferida não abre
+nada (ou mostra rapidamente "Nenhuma ferida aqui").
+A lista de cards abaixo da silhueta CONTINUA existindo sem mudanças —
+a silhueta é um atalho visual por cima, não substitui a lista.
+
+---------------------------------------------------------------------
+FASE 6 — Amputação (integração com o fluxo já existente)
+---------------------------------------------------------------------
+Golpe cortante mirado já sinaliza "regra de Amputação" pro Mestre
+resolver manualmente (ficha.js ~6132, `confirmar_amputacao` em
+mestre.js). Quando o Mestre confirmar a amputação por essa Ação
+Pendente, grava um novo campo `ferida.amputado = true` na ferida
+daquele local — é esse campo que a Fase 4 usa pra trocar o ícone pra
+✂️ na silhueta. Sem isso, a informação de amputação already existente no
+fluxo de aprovação simplesmente não aparecia refletida em lugar
+nenhum na ficha.
+
+---------------------------------------------------------------------
+FASE 7 — Encaixe no render existente
+---------------------------------------------------------------------
+`renderizarSaude()` (ficha.js) passa a desenhar a silhueta (Fases 2-6)
+logo acima da lista de cards, redesenhada a cada mudança de
+`feridasCache` — reaproveita o listener `ouvirFeridas` que já existe,
+sem Firebase novo.
+
+---------------------------------------------------------------------
+FORA DESTE PLANO (não entra agora)
+---------------------------------------------------------------------
+- Proteção/armadura por lado (colete ainda cobre "membro" genérico,
+  não um braço específico) — mudar isso é uma reforma grande do
+  sistema de Proteção à parte.
+- NPC continua sem sistema de feridas (mesma limitação de hoje).
+
+---------------------------------------------------------------------
+ORDEM DE IMPLEMENTAÇÃO SUGERIDA
+---------------------------------------------------------------------
+1 (granularidade + sorteio) -> 2+3+4 (silhueta estática colorida) ->
+5 (caixinha flutuante) -> 6 (amputação). Cada fase funciona sozinha e
+pode ser testada em combate real antes de ir pra próxima.

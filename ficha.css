@@ -752,12 +752,12 @@
     border-top: 1px dashed rgba(255, 255, 255, 0.08);
 }
 .darknet-form-contato input:first-child {
-    width: 90px;
-    flex-shrink: 0;
-}
-.darknet-form-contato input:nth-child(2) {
     flex: 1;
     min-width: 0;
+}
+.darknet-form-contato input:nth-child(2) {
+    width: 90px;
+    flex-shrink: 0;
 }
 .darknet-form-contato button {
     flex-shrink: 0;
@@ -2773,3 +2773,194 @@ select.select-guardar-dentro {
 .xp-historico li { margin-bottom: 4px; }
 .xp-historico .xp-historico-titulo { color: #fff; }
 .xp-historico .xp-historico-vazio { color: var(--text-dim); font-style: italic; }
+
+/* Silhueta visual na aba Saúde (plano-silhueta-saude.txt, Fase 2): SVG
+   inline de corpo humano com zonas clicáveis. Só a base visual/interação
+   aqui — cores por estado de ferida (Fase 4), agregação (Fase 3) e a
+   caixinha flutuante (Fase 5) entram por cima, sem mudar este bloco. */
+.saude-silhueta-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 16px;
+    position: relative;
+}
+.saude-silhueta-svg {
+    width: 100%;
+    max-width: 180px;
+    height: auto;
+}
+.zona-corpo {
+    fill: rgba(139, 92, 246, 0.12);
+    stroke: var(--neon-purple);
+    stroke-width: 1.5;
+    cursor: pointer;
+    transition: fill 0.15s ease, stroke 0.15s ease, filter 0.15s ease;
+}
+.zona-corpo:hover {
+    fill: rgba(139, 92, 246, 0.32);
+    stroke: var(--neon-lime);
+    filter: drop-shadow(0 0 4px rgba(163, 230, 53, 0.5));
+}
+
+/* Cores/ícones por estado (plano-silhueta-saude.txt, Fase 4) — aplicadas
+   por cima do estilo neutro/hover acima, conforme o "pior estado"
+   calculado em agruparFeridasPorLocal (saude.js). A ordem de
+   prioridade (amputado > sangrando > infeccionada > aberta > tratada)
+   já vem resolvida de lá; aqui é só o mapeamento visual. */
+.zona-corpo.zona-aberta {
+    fill: rgba(239, 68, 68, 0.55);
+    stroke: var(--neon-red);
+}
+.zona-corpo.zona-sangrando {
+    fill: rgba(239, 68, 68, 0.6);
+    stroke: var(--neon-red);
+}
+.zona-corpo.zona-infeccionada {
+    fill: rgba(34, 197, 94, 0.2);
+    stroke: #22c55e;
+    stroke-width: 2;
+}
+.zona-corpo.zona-amputada {
+    fill: rgba(10, 10, 12, 0.85);
+    stroke: #9ca3af;
+    stroke-dasharray: 3 2;
+}
+.zona-corpo.zona-tratada {
+    fill: rgba(250, 204, 21, 0.18);
+    stroke: var(--neon-gold);
+}
+/* Ferida antiga sem lado sorteado (Fase 1.5/3) — mostrada nas duas
+   zonas do grupo, contorno tracejado sinaliza "lado indefinido". */
+.zona-corpo.zona-indefinida {
+    stroke-dasharray: 4 3;
+}
+
+/* Sempre por último (mesma especificidade das classes de estado acima,
+   ganha por ordem no arquivo) — clicar numa zona precisa continuar
+   visivelmente destacado mesmo quando ela já tem cor de estado. */
+.zona-corpo.zona-selecionada {
+    fill: rgba(163, 230, 53, 0.35);
+    stroke: var(--neon-lime);
+    stroke-width: 2;
+    filter: drop-shadow(0 0 6px rgba(163, 230, 53, 0.6));
+}
+
+.zona-icone {
+    font-size: 15px;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
+.zona-icone.zona-icone-pulsando {
+    animation: zona-icone-pulso 1.1s ease-in-out infinite;
+}
+@keyframes zona-icone-pulso {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+.zona-badge-fundo {
+    fill: var(--neon-red);
+    pointer-events: none;
+}
+.zona-badge-texto {
+    font-size: 10px;
+    font-weight: 700;
+    fill: #050505;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
+
+.saude-silhueta-legenda {
+    text-align: center;
+    max-width: 220px;
+}
+
+/* Caixinha flutuante ao clicar numa zona com ferida (plano-silhueta-
+   saude.txt, Fase 5). Posição (left/top) e lado da seta são definidos
+   por JS via style inline + classe .seta-esquerda/.seta-direita —
+   aqui só a aparência fixa (fundo, borda, seta) e o layout interno. */
+.saude-silhueta-popover {
+    position: absolute;
+    z-index: 5;
+    width: 220px;
+    max-width: calc(100vw - 48px);
+    background: var(--bg-card, #16161a);
+    border: 1px solid var(--neon-purple);
+    border-radius: 8px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+    padding: 10px 12px;
+}
+.saude-silhueta-popover-fechar {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px;
+}
+.saude-silhueta-popover-fechar:hover { color: var(--neon-lime); }
+.saude-silhueta-popover-corpo {
+    font-size: 0.85rem;
+    max-height: 260px;
+    overflow-y: auto;
+}
+.saude-silhueta-popover-titulo {
+    color: #fff;
+    font-weight: 600;
+    margin: 0 0 6px;
+    padding-right: 16px;
+}
+.saude-silhueta-popover-vazio {
+    color: var(--text-dim);
+    font-style: italic;
+}
+.saude-silhueta-popover-ferida {
+    border-top: 1px solid rgba(139, 92, 246, 0.25);
+    padding: 6px 0;
+}
+.saude-silhueta-popover-ferida:first-of-type { border-top: none; padding-top: 0; }
+.saude-silhueta-popover-ferida-topo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+.saude-silhueta-popover-acoes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.saude-silhueta-popover-acoes .btn-lime,
+.saude-silhueta-popover-acoes .btn-ghost {
+    padding: 3px 8px;
+    font-size: 0.78rem;
+}
+
+/* Seta apontando pro marcador — triângulo CSS clássico (borda
+   transparente dos 3 lados + 1 lado colorido). O lado que recebe cor
+   muda conforme a caixinha abre à direita ou à esquerda do marcador
+   (JS decide via .seta-esquerda/.seta-direita, ver posicionarPopoverSilhueta). */
+.saude-silhueta-popover-seta {
+    position: absolute;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform: translateY(-50%);
+    border: 8px solid transparent;
+}
+.saude-silhueta-popover.seta-esquerda .saude-silhueta-popover-seta {
+    left: -8px;
+    border-right-color: var(--neon-purple);
+}
+.saude-silhueta-popover.seta-direita .saude-silhueta-popover-seta {
+    right: -8px;
+    border-left-color: var(--neon-purple);
+}

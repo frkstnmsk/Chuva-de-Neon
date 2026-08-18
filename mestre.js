@@ -22,7 +22,7 @@ import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } f
 import { avancarUmDiaTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado } from "./dados-manual.js";
 import { itemCabeNoContainer, itemPodeSerLevadoSolto, resolverEntradaLevandoConsigo } from "./inventario.js";
 import { criarFerida, resolverFimSangramentoNatural } from "./saude.js";
 
@@ -219,7 +219,7 @@ export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mes
 // Mestre que não têm noção de golpe mirado). Retorna o resumo completo
 // pro Mestre/automação montarem a mensagem do Log de Dados.
 // ---------------------------------------------------------------------
-export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0, calibreProjetil = null) {
+export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0, calibreProjetil = null, localFerida = null) {
     const brutoNum = Number(danoBruto) || 0;
     const ignorarArmadura = Math.max(0, Number(ignorarArmaduraPontos) || 0);
 
@@ -368,6 +368,12 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         // limiarAmputacaoPorDano em regras.js) — não empilha estado
         // nenhum (diferente de coma/desmaio), é por golpe: cada hit que
         // bater o limiar vira uma nova Ação Pendente pro Mestre validar.
+        // `localFerida` (plano-silhueta-saude.txt, Fase 6) — presente só
+        // quando o golpe veio de um Golpe Mirado de verdade (ver os dois
+        // pontos que chamam aplicarDano com esse 8º parâmetro); ausente
+        // pra dano genérico (queda, arremesso, explosão etc., que não
+        // têm um "local" pra apontar) — confirmarAcaoPendente só grava
+        // ferida.amputado quando esse campo veio preenchido.
         const limiteAmputacao = limiarAmputacaoPorDano(danoFinal, pvMaximoFicha);
         if (limiteAmputacao) {
             const rotuloLimite = limiteAmputacao === "membro" ? "membro (≥ 1/5 do PV total)" : "dedo ou orelha (≥ 1/10 do PV total)";
@@ -376,7 +382,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
                 fichaId: alvoId,
                 nomeJogador: nomeAlvo,
                 detalhe: `${nomeAlvo} levou ${danoFinal} de dano num golpe só — bateu o limiar de amputação de ${rotuloLimite}.`,
-                payload: { fichaId: alvoId, dano: danoFinal, limiteBatido: limiteAmputacao }
+                payload: { fichaId: alvoId, dano: danoFinal, limiteBatido: limiteAmputacao, local: localFerida || null }
             });
         }
         // danoBruto exibido já inclui o +50% de Frágil e/ou o +50% de
@@ -983,7 +989,7 @@ export async function excluirNpc(npcId) {
 // Reaproveita o mesmo nó `npcs/{id}` do gerador rápido — os dois
 // convivem na mesma lista, diferenciados pelo campo `modoDetalhado`.
 // ---------------------------------------------------------------------
-export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, categoria }) {
+export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, categoria, modelo }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
     const novaRef = push(ref(db, caminhoMesa("npcs")));
     await set(novaRef, {
@@ -992,6 +998,11 @@ export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, cate
         // Painel de NPCs (plano-busca-categorias.txt, Fase A). "" =
         // "Sem categoria" na hora de listar/filtrar.
         categoria: categoria || "",
+        // "Modelo" (plano-npc-modelo.txt): NPC marcado assim entra no
+        // seletor "Preencher a partir de um modelo" do formulário de
+        // criação — só serve pra pré-preencher um NPC NOVO (independente
+        // desde a criação, nunca fica vinculado ao modelo original).
+        modelo: !!modelo,
         pvs: secundarios.recursos.pv.valor,
         pvAtual: secundarios.recursos.pv.valor,
         periciasResumo: resumoPericiasNpc(npcDetalhado),
@@ -1020,11 +1031,12 @@ export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, cate
     return novaRef.key;
 }
 
-export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoesDano, pvAtual, categoria }) {
+export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoesDano, pvAtual, categoria, modelo }) {
     const secundarios = secundariosDoNpc(npcDetalhado);
     await update(ref(db, caminhoMesa(`npcs/${npcId}`)), {
         nome: nome || "NPC sem nome",
         categoria: categoria || "",
+        modelo: !!modelo,
         pvs: secundarios.recursos.pv.valor,
         pvAtual: pvAtual !== undefined && pvAtual !== null ? Number(pvAtual) : secundarios.recursos.pv.valor,
         periciasResumo: resumoPericiasNpc(npcDetalhado),
@@ -2831,7 +2843,13 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // resolverAtaque em ficha.js). Ausente (reação antiga, de antes
     // dessa mudança) cai em `null`, preservando o comportamento antigo
     // de não filtrar por local.
-    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null, r.ignorarArmaduraPontos ?? 0);
+    // Local detalhado (plano-silhueta-saude.txt, Fase 1 e Fase 6):
+    // sorteado ANTES de aplicarDano, mesmo motivo do ramo direto em
+    // ficha.js — repassado como 8º parâmetro pra amputação (se este
+    // golpe bater o limiar) apontar pro local certo, e reaproveitado
+    // embaixo sem sortear de novo.
+    const localFerida = (r.localMiraKey && r.localMiraKey !== "padrao") ? sortearLocalDetalhado(r.localMiraKey) : "torso";
+    const resultadoDano = await aplicarDano(r.alvoTipo, r.alvoRefId, danoParaAplicar, r.tipoDanoKey, r.localArmaduraAtual ?? null, r.ignorarArmaduraPontos ?? 0, null, localFerida);
 
     // Golpes Mirados (manual): Golpe Perfurante testa Sangramento, Golpe
     // Cortante aplica obrigatoriamente a regra de Amputação, e Golpe
@@ -2856,8 +2874,11 @@ export async function responderReacaoPendente(escolha, dadosExtra = null) {
     // caminho de reação (ver comentário acima), então só existe o
     // branch de sangramento corpo a corpo aqui (sem "projétil alojado",
     // que é exclusivo de tiro — ver o caminho direto em ficha.js).
+    // Local detalhado (plano-silhueta-saude.txt, Fase 1 e Fase 6):
+    // sortearLocalDetalhado já foi chamado ANTES de aplicarDano (ver
+    // comentário lá em cima) — reaproveitado aqui via a mesma variável
+    // `localFerida`, sem sortear de novo.
     const criaFeridaHabilitado = danoParaAplicar > 0 && r.alvoTipo === "ficha";
-    const localFerida = (r.localMiraKey && r.localMiraKey !== "padrao") ? r.localMiraKey : "torso";
     // Fase C: true assim que o sangramento (comum OU profundo, mais
     // abaixo) já tiver garantido uma ferida de Corte/Perfuração neste
     // mesmo golpe — impede o bloco de "chance de ferida por dano" (mais
@@ -3414,16 +3435,29 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
             const item = snapItem.val();
             const novaRefItem = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
             // Trava central de "item não fica solto" (ver
-            // itemPodeSerLevadoSolto em inventario.js): equipada e
-            // dentroDe são estado físico específico do DONO ANTERIOR
-            // (mão dele, container dele). Herdar esses campos ao
-            // transferir deixaria o item "equipado" sem o novo dono ter
-            // feito nada, ou com dentroDe apontando pra um container
-            // que só existe no inventário de origem (item preso a algo
-            // fantasma, mas passando na checagem porque dentroDe é
-            // truthy). O item sempre chega "solto" pro novo dono, que
-            // precisa equipá-lo ou guardá-lo explicitamente depois.
-            await set(novaRefItem, { ...item, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false });
+            // itemPodeSerLevadoSolto/resolverEntradaLevandoConsigo em
+            // inventario.js): equipada e dentroDe são estado físico
+            // específico do DONO ANTERIOR (mão dele, container dele).
+            // Herdar esses campos ao transferir deixaria o item
+            // "equipado" sem o novo dono ter feito nada, ou com dentroDe
+            // apontando pra um container que só existe no inventário de
+            // origem (item preso a algo fantasma, mas passando na
+            // checagem porque dentroDe é truthy). Em vez de deixar
+            // "solto" (equipada:false sem dentroDe, um estado que a
+            // regra de ouro do inventário não permite existir), o item
+            // já chega pro novo dono num lugar físico válido — na mão,
+            // se ele tiver uma livre — igual resolverEntradaLevandoConsigo
+            // faz pro fluxo normal de mover_item acima. Sem mão livre,
+            // cancela o pedido em vez de gravar um estado inválido.
+            const itemPosTransferenciaDar = { ...item, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false };
+            const snapInventarioDestinoDar = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
+            const fichaDestinoParaChecagemDar = { inventario: snapInventarioDestinoDar.exists() ? snapInventarioDestinoDar.val() : {} };
+            const resultadoEntradaDar = resolverEntradaLevandoConsigo(fichaDestinoParaChecagemDar, itemPosTransferenciaDar, null);
+            if (!resultadoEntradaDar.ok) {
+                await rejeitarAcaoPendente(acao.id);
+                throw new Error(`Pedido cancelado: "${item.nome || "item"}" não pôde ser entregue — quem recebe ${resultadoEntradaDar.motivo}`);
+            }
+            await set(novaRefItem, { ...itemPosTransferenciaDar, equipada: resultadoEntradaDar.equipar });
             await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         }
 
@@ -3442,11 +3476,22 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
         const itemCenario = snapItemCenario.val();
         const novaRefItemCenario = push(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
-        // Mesma trava de "item não fica solto" do dar_item acima: zera
-        // dentroDe/compartimentoId/equipada — o item do cenário não tem
-        // mão nem container do personagem que está pegando, então
-        // sempre chega solto, precisando ser equipado/guardado depois.
-        await set(novaRefItemCenario, { ...itemCenario, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false });
+        // Mesma trava de "item não fica solto" do dar_item acima: em vez
+        // de zerar equipada/dentroDe e deixar o item pairando sem lugar
+        // físico nenhum, coloca ele na mão de quem pegou (se houver mão
+        // livre) — o item do cenário nunca tem dentroDe/mão do
+        // personagem que está pegando, então sempre passa por
+        // resolverEntradaLevandoConsigo igual um item novo entrando em
+        // "levando" pela primeira vez.
+        const itemPosPegarCenario = { ...itemCenario, categoria: "levando", dentroDe: null, compartimentoId: null, equipada: false };
+        const snapInventarioDestinoCenario = await get(ref(db, caminhoMesa(`fichas/${payload.fichaDestinoId}/inventario`)));
+        const fichaDestinoParaChecagemCenario = { inventario: snapInventarioDestinoCenario.exists() ? snapInventarioDestinoCenario.val() : {} };
+        const resultadoEntradaCenario = resolverEntradaLevandoConsigo(fichaDestinoParaChecagemCenario, itemPosPegarCenario, null);
+        if (!resultadoEntradaCenario.ok) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${itemCenario.nome || payload.itemNome || "item"}" não pôde ser pego — ${resultadoEntradaCenario.motivo}`);
+        }
+        await set(novaRefItemCenario, { ...itemPosPegarCenario, equipada: resultadoEntradaCenario.equipar });
         await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
 
     } else if (tipo === "melhorar_veiculo_terceiro" || tipo === "reparar_veiculo_terceiro") {
@@ -3847,18 +3892,43 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
 
     } else if (tipo === "confirmar_amputacao") {
         // Confirmação do Mestre pra Amputação por Limiar de Dano (item
-        // 5 do plano de saúde/complicações) — não mexe em NADA da
-        // ficha (não existe sistema de "membros" hoje); só registra no
-        // Log de Dados geral que a amputação foi validada pela mesa,
-        // texto livre — o efeito mecânico exato (qual membro, que
-        // penalidade) é decisão narrativa, resolvida fora do sistema.
+        // 5 do plano de saúde/complicações) — sempre registra no Log de
+        // Dados que a amputação foi validada pela mesa (texto livre,
+        // qual membro/penalidade exata continua sendo decisão narrativa
+        // fora do sistema).
+        // Fase 6 (plano-silhueta-saude.txt): quando o golpe que bateu o
+        // limiar veio de um Golpe Mirado de verdade, payload.local traz
+        // o mesmo local sorteado (Fase 1) pra ferida daquele golpe — a
+        // ferida MAIS RECENTE registrada nesse local (fichas/{id}/feridas)
+        // é, por construção, a que este mesmo golpe acabou de criar
+        // (Corte/Perfuração ou Sangramento+Corte vinculados sempre
+        // gravam a ferida "física" por último — ver registrarFeridasDeSangramento
+        // em mestre.js), então marcá-la com `amputado:true` é o que faz
+        // a silhueta (Fase 4) trocar o ícone pra ✂️. Sem local no
+        // payload (dano genérico — queda, arremesso, explosão etc., que
+        // não têm golpe mirado) só o log é gravado, como já era antes
+        // desta fase.
         {
             const rotuloLimite = payload.limiteBatido === "membro" ? "membro" : "dedo ou orelha";
+            let notaFerida = "";
+            if (payload.local) {
+                const snapFeridas = await get(ref(db, caminhoMesa(`fichas/${fichaId}/feridas`)));
+                if (snapFeridas.exists()) {
+                    const feridasDoLocal = Object.entries(snapFeridas.val())
+                        .filter(([, f]) => f && f.local === payload.local)
+                        .sort(([, a], [, b]) => (b.criadaEm || 0) - (a.criadaEm || 0));
+                    if (feridasDoLocal.length) {
+                        const [feridaIdMaisRecente] = feridasDoLocal[0];
+                        await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaIdMaisRecente}`)), { amputado: true });
+                        notaFerida = " Ferida marcada como amputada na silhueta.";
+                    }
+                }
+            }
             await registrarRolagem({
                 quem: "Mestre",
                 modificador: 0,
                 resultado: "Amputação validada",
-                detalhe: `Amputação (${rotuloLimite}) validada pelo Mestre — ${Number(payload.dano) || 0} de dano num golpe só.`
+                detalhe: `Amputação (${rotuloLimite}) validada pelo Mestre — ${Number(payload.dano) || 0} de dano num golpe só.${notaFerida}`
             });
         }
 

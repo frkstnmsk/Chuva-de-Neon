@@ -22,6 +22,7 @@ import {
     danoPorMargemFalha
 } from "./regras.js";
 import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js";
+import { SUB_LOCAIS_FERIDA, ZONAS_SILHUETA } from "./dados-manual.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
 // (mesmo helper que já existe, sem exportar, dentro de mestre.js —
@@ -460,4 +461,77 @@ export async function todasFeridasFechadas(fichaId) {
     const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/feridas`)));
     if (!snap.exists()) return true;
     return Object.values(snap.val()).every(feridaEstaFechada);
+}
+
+// ---------------------------------------------------------------------
+// Silhueta de Saúde — agregação por zona (plano-silhueta-saude.txt,
+// Fase 3). A Fase 1 já grava o local DETALHADO em ferida.local (braço/
+// perna/mão/pé + lado, ou torso/cabeça sem lado); esta função só junta
+// as feridas de cada uma das 10 zonas da silhueta pra a Fase 4 (cores/
+// ícones) e a Fase 5 (caixinha flutuante) desenharem em cima, sem cada
+// uma ter que reimplementar o agrupamento.
+// ---------------------------------------------------------------------
+
+// Prioridade do "pior estado" de uma zona (a mais grave decide a cor/
+// ícone do marcador na silhueta — ver plano, Fase 4). Independe da
+// ordem de criação das feridas: sempre a mais grave entre TODAS as
+// feridas daquela zona, tratada ou não.
+const PRIORIDADE_ESTADO_VISUAL = ["amputado", "sangrando", "infeccionada", "aberta", "tratada"];
+
+// Estado visual de UMA ferida, pra fins de cor/ícone (não confundir com
+// ferida.estado, que é o estado mecânico usado por tratarFerida/
+// feridaAceitaSutura em regras.js). "Sangrando" aqui é especificamente
+// a ferida tipo "sangramento" ainda "aberta" (sangramento estancado ou
+// suturado já não sangra mais, mesmo que a ferida em si ainda exista).
+// `ferida.amputado` é o campo que a Fase 6 (ainda não implementada)
+// vai gravar quando o Mestre confirmar uma amputação — já é checado
+// aqui pra a silhueta refletir na hora que essa fase entrar, sem
+// precisar mexer nesta função de novo.
+export function estadoVisualFerida(ferida) {
+    if (!ferida) return "tratada";
+    if (ferida.amputado) return "amputado";
+    if (ferida.tipo === "sangramento" && ferida.estado === "aberta") return "sangrando";
+    if (ferida.infeccaoAtiva) return "infeccionada";
+    if (ferida.estado === "tratada") return "tratada";
+    return "aberta"; // aberta / estancada / sem_sangramento — ainda não fechada
+}
+
+// Agrupa a lista de feridas (feridasCache) nas 10 zonas da silhueta.
+// Devolve SEMPRE as 10 chaves de ZONAS_SILHUETA (mesmo zonas vazias),
+// pra quem desenha não precisar checar `zona in resultado` toda hora.
+//
+// Compatibilidade (Fase 1.5/plano): uma ferida com local genérico
+// antigo ("membro"/"extremidade", de antes deste plano existir) não dá
+// pra saber o lado — em vez de escolher um lado arbitrário, ela entra
+// nas 4 zonas do grupo inteiro (braço/perna ou mão/pé, os dois lados),
+// e cada zona que a recebeu fica marcada `indefinido: true` (a Fase 4
+// desenha essas zonas com contorno tracejado em vez de preenchido, pra
+// sinalizar "essa ferida é de antes do sorteio de lado").
+export function agruparFeridasPorLocal(feridas) {
+    const zonas = {};
+    ZONAS_SILHUETA.forEach(zonaKey => { zonas[zonaKey] = { feridas: [], indefinido: false }; });
+
+    (feridas || []).forEach(ferida => {
+        if (!ferida || !ferida.local) return;
+        const grupoGenerico = SUB_LOCAIS_FERIDA[ferida.local];
+        if (grupoGenerico) {
+            grupoGenerico.forEach(zonaKey => {
+                if (!zonas[zonaKey]) return;
+                zonas[zonaKey].feridas.push(ferida);
+                zonas[zonaKey].indefinido = true;
+            });
+        } else if (zonas[ferida.local]) {
+            zonas[ferida.local].feridas.push(ferida);
+        }
+    });
+
+    ZONAS_SILHUETA.forEach(zonaKey => {
+        const zona = zonas[zonaKey];
+        zona.quantidadeAbertas = zona.feridas.filter(f => f.estado !== "tratada").length;
+        zona.piorEstado = zona.feridas.length
+            ? (PRIORIDADE_ESTADO_VISUAL.find(estado => zona.feridas.some(f => estadoVisualFerida(f) === estado)) || "tratada")
+            : null; // null = zona sem nenhuma ferida (contorno neutro, Fase 4)
+    });
+
+    return zonas;
 }

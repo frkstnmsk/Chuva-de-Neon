@@ -470,6 +470,52 @@
                     <button id="btn-tratar-outro-jogador" class="btn-ghost" type="button">🩺 Tratar outro jogador</button>
                     <div id="mestre-coma-painel" style="display:none;"></div>
                     <div id="mestre-desmaio-painel" style="display:none;"></div>
+
+                    <!-- Silhueta visual (plano-silhueta-saude.txt, Fase 2): SVG
+                         inline de corpo humano com 10 zonas clicáveis. Vista de
+                         frente — "esquerdo/direito" é sempre do PERSONAGEM, não
+                         de quem olha a tela, então o braço/perna direito do
+                         personagem aparece do lado esquerdo do desenho (e
+                         vice-versa). Fases 3-6 (agregação de feridas por zona,
+                         cores, caixinha flutuante, amputação) entram por cima
+                         desta base, sem mudar os ids/data-zona abaixo. -->
+                    <div id="saude-silhueta-wrap" class="saude-silhueta-wrap">
+                        <svg id="saude-silhueta-svg" class="saude-silhueta-svg" viewBox="0 0 200 400" role="img" aria-label="Silhueta do corpo do personagem — clique numa parte para ver as feridas daquele local">
+                            <ellipse id="zona-cabeca" class="zona-corpo" data-zona="cabeca" cx="100" cy="32" rx="26" ry="30"></ellipse>
+                            <path id="zona-torso" class="zona-corpo" data-zona="torso" d="M70,68 L130,68 L138,190 Q100,206 62,190 Z"></path>
+                            <rect id="zona-braco-direito" class="zona-corpo" data-zona="braco_direito" x="34" y="72" width="26" height="120" rx="12"></rect>
+                            <rect id="zona-braco-esquerdo" class="zona-corpo" data-zona="braco_esquerdo" x="140" y="72" width="26" height="120" rx="12"></rect>
+                            <ellipse id="zona-mao-direita" class="zona-corpo" data-zona="mao_direita" cx="47" cy="204" rx="14" ry="16"></ellipse>
+                            <ellipse id="zona-mao-esquerda" class="zona-corpo" data-zona="mao_esquerda" cx="153" cy="204" rx="14" ry="16"></ellipse>
+                            <rect id="zona-perna-direita" class="zona-corpo" data-zona="perna_direita" x="66" y="192" width="30" height="150" rx="14"></rect>
+                            <rect id="zona-perna-esquerda" class="zona-corpo" data-zona="perna_esquerda" x="104" y="192" width="30" height="150" rx="14"></rect>
+                            <ellipse id="zona-pe-direita" class="zona-corpo" data-zona="pe_direita" cx="81" cy="354" rx="18" ry="12"></ellipse>
+                            <ellipse id="zona-pe-esquerda" class="zona-corpo" data-zona="pe_esquerda" cx="119" cy="354" rx="18" ry="12"></ellipse>
+                            <!-- Overlays (ícone de estado + badge de contagem, Fase
+                                 4) desenhados por cima das zonas — ver
+                                 renderizarSilhuetaSaude em ficha.js. Grupo próprio
+                                 pra ficar sempre acima das formas e ser redesenhado
+                                 do zero a cada mudança em feridasCache sem mexer
+                                 nas zonas clicáveis. -->
+                            <g id="saude-silhueta-overlays" aria-hidden="true"></g>
+                        </svg>
+                        <div id="saude-silhueta-legenda" class="hint saude-silhueta-legenda">Clique numa parte do corpo para ver as feridas daquele local.</div>
+
+                        <!-- Caixinha flutuante (plano-silhueta-saude.txt, Fase 5):
+                             popover posicionado por JS (left/top calculados a
+                             partir de CENTROS_ZONA_SILHUETA) com uma seta CSS
+                             (.saude-silhueta-popover-seta) apontando pro
+                             marcador clicado. Reaproveita acoesDeTratamentoParaFerida
+                             e abrirModalTratarFerida — não duplica lógica de
+                             tratamento, só mostra os mesmos botões da lista de
+                             cards abaixo dentro desta caixinha. -->
+                        <div id="saude-silhueta-popover" class="saude-silhueta-popover" style="display:none;">
+                            <div class="saude-silhueta-popover-seta"></div>
+                            <button type="button" id="saude-silhueta-popover-fechar" class="saude-silhueta-popover-fechar" aria-label="Fechar">×</button>
+                            <div id="saude-silhueta-popover-corpo" class="saude-silhueta-popover-corpo"></div>
+                        </div>
+                    </div>
+
                     <div id="saude-lista"></div>
 
                     <!-- Implantes/Próteses (ver plano-implantes-biomecanica.txt,
@@ -946,6 +992,32 @@
                 <div class="modal-field">
                     <label for="modal-implante-funcoes-especiais">Funções especiais (texto livre — zoom, compartimento, suporte de arma etc.; sem automação, resolvido pela mesa)</label>
                     <textarea id="modal-implante-funcoes-especiais" placeholder="Ex.: zoom digital 2x, compartimento interno de 1kg, suporte externo p/ arma nível 2..."></textarea>
+                </div>
+
+                <!-- Tomada e Chip (manual pg. 84) são os dois únicos
+                     subtipos com efeito 100% automático (os outros cinco
+                     ficam a critério da mesa — manual pg. 83). Bloco de
+                     Tomada é só um hint informativo (slots calculados a
+                     partir do Nível); bloco de Chip tem campos de verdade
+                     (Tomada de destino + alvo do bônus/especialização). -->
+                <p class="hint" id="modal-implante-tomada-info" style="display:none;"></p>
+
+                <div id="modal-implante-chip-bloco" style="display:none;">
+                    <div class="modal-field">
+                        <label for="modal-implante-chip-tomada">Tomada de destino (onde este chip será encaixado)</label>
+                        <select id="modal-implante-chip-tomada">
+                            <option value="">Nenhuma (fora do corpo — sem efeito)</option>
+                        </select>
+                    </div>
+                    <p class="hint" id="modal-implante-chip-efeito-hint"></p>
+                    <div class="modal-field" id="modal-implante-chip-bloco-modificador" style="display:none;">
+                        <label for="modal-implante-chip-alvo">Rolagem/perícia que recebe o modificador do chip</label>
+                        <select id="modal-implante-chip-alvo"></select>
+                    </div>
+                    <div class="modal-field" id="modal-implante-chip-bloco-especializacao" style="display:none;">
+                        <label for="modal-implante-chip-especializacao-pericia">Perícia que recebe a especialização do chip</label>
+                        <select id="modal-implante-chip-especializacao-pericia"></select>
+                    </div>
                 </div>
             </div>
 

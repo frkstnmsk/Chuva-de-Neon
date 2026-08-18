@@ -100,12 +100,34 @@ export function avancarUmDiaTreinamento(fichaAtual) {
     return concluidos;
 }
 
+function gerarIdLocalTreino() {
+    return "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
 function aplicarAumentoCaracteristica(fichaAtual, tipo, t) {
     if (tipo === "periciaFisica" || tipo === "periciaMental") {
         const entrada = Object.entries(fichaAtual.pericias).find(([, p]) => p.nome === t.nome);
         if (entrada) {
             const [, pericia] = entrada;
             pericia.nivel = Math.min(5, t.novoNivel); // respeita limite geral 0-5
+        } else {
+            // BUG (corrigido): perícia NOVA (treino começou do nível 0,
+            // ver iniciarTreinoCaracteristica) nunca existiu em
+            // fichaAtual.pericias — só existe entrada pra perícias que
+            // o personagem já possuía. Sem este else, o treino concluía
+            // (mensagem "Treinamento concluído" aparecia normalmente),
+            // mas a perícia simplesmente não era adicionada à ficha.
+            // Mesmo formato/id usado ao adicionar perícia manualmente
+            // (ver criacao.js e o "+" da tela de criação em ficha.js).
+            const id = gerarIdLocalTreino();
+            fichaAtual.pericias[id] = {
+                nome: t.nome,
+                nivel: Math.min(5, t.novoNivel),
+                descricao: "",
+                modificadores: [],
+                especializacoes: [],
+                legado: false
+            };
         }
     } else {
         const atual = Number(fichaAtual.dados[t.nome]) || 0;
