@@ -14,7 +14,7 @@ import {
     calcularEstadoEnergia, dificuldadeSangramento, dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
     calcularDificuldadeDefesaJogador, DIFICULDADE_INFECCAO_MINIMA,
     calcularPvMaximo, avancarRecuperacaoPV, chanceFeridaPorDano,
-    aplicarReducaoTratamentoHospital, deveConfirmarDesmaio, limiarAmputacaoPorDano,
+    aplicarReducaoTratamentoHospital, aplicarFatoresRecuperacaoItens, horasTotaisCalendario, deveConfirmarDesmaio, limiarAmputacaoPorDano,
     golpeDilacera, deveTestarSangramentoProfundo, multiplicadorReducaoPorClasse, aplicarPisoDanoContundenteColete,
     aplicarDanoVeiculo, zerarDeterioracoesDoAtributoVeiculo, vencedorPerseguicao
 } from "./regras.js";
@@ -3031,6 +3031,59 @@ async function processarRecuperacoesPV(fichasAtivas, quantidadeDias, diaIndiceAt
 }
 
 // ---------------------------------------------------------------------
+// Fase 8 do plano de efeitos médicos (Torniquete Tático) — limitação
+// registrada como "sem automação", só um LEMBRETE pro Mestre (nunca
+// dano automático — dano permanente em membro é grave demais pra
+// automatizar sem confirmação humana). Reaproveita o MESMO mecanismo
+// dos popups de treinamento acima (fila num nó da mesa, ouvida em
+// tempo real pelo Mestre) — chamada por passarODia/passarVariosDias
+// abaixo, então a checagem só acontece nos saltos de Passar o
+// Dia/Timeskip (que avançam em blocos de 24h — não existe um "avançar
+// só X horas" nesta base). Granularidade grosseira, mas ainda cobre o
+// caso real: o torniquete não passa despercebido além do próximo corte
+// de dia.
+// Diferente de popupTreinamento (que reconstrói a fila inteira a cada
+// chamada, porque representa "todo treino ativo AGORA"), aqui cada
+// aviso é INCREMENTAL — usa `update()` em vez de `set()` — porque um
+// torniquete já avisado (`torniquete.avisado`) não entra de novo, então
+// sobrescrever o nó inteiro apagaria avisos anteriores ainda não
+// descartados pelo Mestre.
+// ---------------------------------------------------------------------
+async function sinalizarAvisosTorniquete(fichasAtivas, calendario) {
+    const avisos = [];
+    for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
+        const torniquete = ficha.dados && ficha.dados.torniquete;
+        if (!torniquete || torniquete.avisado) continue;
+        const ativoDesde = Number(torniquete.ativoDesde);
+        if (!Number.isFinite(ativoDesde)) continue;
+        const horasAgora = horasTotaisCalendario(calendario.diaIndice, calendario.hora);
+        if (horasAgora === null || horasAgora - ativoDesde < 1) continue;
+        avisos.push({
+            fichaId,
+            nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId,
+            itemNome: torniquete.itemNome || "Torniquete"
+        });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados/torniquete`)), { avisado: true });
+    }
+    if (avisos.length) {
+        await update(ref(db, caminhoMesa("avisoTorniquete")), Object.fromEntries(avisos.map((a, i) => [`t${i}_${Date.now()}`, { ...a, timestamp: Date.now() }])));
+    }
+    return avisos;
+}
+
+export function ouvirAvisoTorniquete(callback) {
+    return onValue(ref(db, caminhoMesa("avisoTorniquete")), (snap) => {
+        if (!snap.exists()) { callback([]); return; }
+        const valores = snap.val();
+        callback(Object.entries(valores).map(([id, v]) => ({ id, ...v })));
+    });
+}
+
+export async function descartarAvisoTorniquete(avisoId) {
+    await remove(ref(db, caminhoMesa(`avisoTorniquete/${avisoId}`)));
+}
+
+// ---------------------------------------------------------------------
 // Passar o Dia — avança o calendário, dispara aviso de Domingo, e
 // dispara o popup de treinamento pra cada ficha com treino ativo.
 // ---------------------------------------------------------------------
@@ -3063,9 +3116,11 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
         await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
     }
 
+    const avisosTorniquete = await sinalizarAvisosTorniquete(fichasAtivas, calendario);
+
     const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, 1, calendario.diaIndice);
 
-    return { calendario, virouDomingo, popups, recuperacoesPV };
+    return { calendario, virouDomingo, popups, avisosTorniquete, recuperacoesPV };
 }
 
 // ---------------------------------------------------------------------
@@ -3105,6 +3160,8 @@ export async function passarVariosDias(calendarioAtual, fichasAtivas, quantidade
         await set(ref(db, caminhoMesa("popupTreinamento")), Object.fromEntries(popups.map((p, i) => [`p${i}_${Date.now()}`, { ...p, timestamp: Date.now() }])));
     }
 
+    const avisosTorniquete = await sinalizarAvisosTorniquete(fichasAtivas, calendario);
+
     // Recuperação de PVs (manual) — pra cada ficha com uma recuperação
     // já autorizada pelo Mestre e em andamento (dados/recuperacaoPV, ver
     // criarAcaoPendente "iniciar_recuperacao_pv" / confirmarAcaoPendente
@@ -3115,7 +3172,7 @@ export async function passarVariosDias(calendarioAtual, fichasAtivas, quantidade
     // ver o que aconteceu com cada ficha durante esse período.
     const recuperacoesPV = await processarRecuperacoesPV(fichasAtivas, quantidade, calendario.diaIndice);
 
-    return { calendario, domingos, popups, recuperacoesPV };
+    return { calendario, domingos, popups, avisosTorniquete, recuperacoesPV };
 }
 
 export function ouvirPopupTreinamento(callback) {
@@ -3841,17 +3898,21 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         // flags são reaplicadas AQUI, em cima do que estiver valendo
         // NESTE momento (podem ter mudado desde o pedido), pra não
         // confiar num valor congelado no instante em que o jogador
-        // clicou. Ordem: dobra por coma primeiro, desconto de hospital
-        // depois (por cima do valor já dobrado) — as duas flags são
-        // consumidas (zeradas) depois de usadas, não empilham entre
-        // recuperações.
+        // clicou. Ordem: dobra por coma primeiro, fatores de item da
+        // Fase 7 do plano de efeitos médicos depois (multiplicados
+        // entre si — ver aplicarFatoresRecuperacaoItens em regras.js),
+        // desconto de hospital por último (por cima do valor já
+        // reduzido pelos itens) — as três fontes são consumidas
+        // (zeradas) depois de usadas, não empilham entre recuperações.
         const snapFichaDados = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)));
         const dadosFicha = snapFichaDados.exists() ? snapFichaDados.val() : {};
         const tratamentoHospitalAtivo = !!dadosFicha.tratamentoHospital;
         const saiuDoComaAtivo = !!dadosFicha.saiuDoComaPendente;
+        const fatoresRecuperacaoItens = dadosFicha.fatoresRecuperacaoItens || null;
         const diasBase = Number(payload.diasNecessarios) || 0;
         const diasComComa = saiuDoComaAtivo ? diasBase * 2 : diasBase;
-        const diasFinal = aplicarReducaoTratamentoHospital(diasComComa, tratamentoHospitalAtivo);
+        const diasComFatoresItens = aplicarFatoresRecuperacaoItens(diasComComa, fatoresRecuperacaoItens);
+        const diasFinal = aplicarReducaoTratamentoHospital(diasComFatoresItens, tratamentoHospitalAtivo);
         await set(ref(db, caminhoMesa(`fichas/${fichaId}/dados/recuperacaoPV`)), {
             ativa: true,
             pvPerdidosInicial: Number(payload.pvPerdidos) || 0,
@@ -3859,12 +3920,14 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
             diasDecorridos: 0,
             infectadoNoPedido: !!payload.infectado,
             tratamentoHospitalNoPedido: tratamentoHospitalAtivo,
+            fatoresRecuperacaoItensNoPedido: fatoresRecuperacaoItens && Object.keys(fatoresRecuperacaoItens).length ? fatoresRecuperacaoItens : null,
             veioDoComaEm: saiuDoComaAtivo ? Date.now() : null,
             iniciadoEm: Date.now()
         });
         const limpezaFlags = {};
         if (tratamentoHospitalAtivo) limpezaFlags.tratamentoHospital = false;
         if (saiuDoComaAtivo) limpezaFlags.saiuDoComaPendente = false;
+        if (fatoresRecuperacaoItens && Object.keys(fatoresRecuperacaoItens).length) limpezaFlags.fatoresRecuperacaoItens = null;
         if (Object.keys(limpezaFlags).length) {
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), limpezaFlags);
         }

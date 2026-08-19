@@ -37,6 +37,7 @@
             <button class="btn-lime mestre-acao" data-acao="xp" type="button">Dar XP</button>
             <button class="btn-blue mestre-acao" data-acao="dado" type="button">Rolar Dado</button>
             <button class="btn-red mestre-acao" data-acao="dano" type="button">Causar Dano</button>
+            <button class="btn-red mestre-acao" data-acao="condicao" type="button">Causar Condição</button>
             <button class="btn-ghost mestre-acao" data-acao="npcs" type="button">NPCs</button>
             <button class="btn-ghost mestre-acao" data-acao="dashboard" type="button">Fichas ativas</button>
             <button class="btn-ghost mestre-acao" data-acao="biblioteca" type="button">Biblioteca de Itens</button>
@@ -1133,6 +1134,20 @@
             <div class="grid-atributos" id="modal-veiculo-atributos"></div>
         </div>
 
+        <!-- Efeitos de Equipamento Médico (tag "equipamento_medico" —
+             ver plano-efeitos-equipamentos-medicos.txt, Fase 3). Cada
+             linha escolhe um tipo do CATALOGO_EFEITOS_MEDICOS (dados-
+             manual.js) e preenche os parâmetros daquele tipo — mesmo
+             padrão dinâmico de "Modificadores automáticos" abaixo, só
+             que os campos de cada linha mudam conforme o tipo
+             escolhido (ver renderizarCamposEfeitoMedico, ficha.js). -->
+        <div id="modal-campo-efeitos-medicos" style="display:none;">
+            <div class="section-header">Efeitos do equipamento médico</div>
+            <p class="hint">Escolha 1+ efeitos do catálogo abaixo pra descrever o que este item faz quando usado num tratamento, num Teste de Infecção, ou usado direto (restaurar PV, estabilizar condição crítica...). Item sem nenhum efeito cadastrado continua funcionando "pelado" (só nome/preço/peso/descrição) — cobre insumos como Gaze ou Bisturi, que não têm efeito mecânico próprio.</p>
+            <div id="modal-lista-efeitos-medicos"></div>
+            <button id="modal-add-efeito-medico" class="btn-blue" type="button">+ Adicionar efeito</button>
+        </div>
+
         <!-- Descrição livre + modificadores estruturados: usados por
              quase todas as listas (perícias, itens, vantagens...), mas
              não fazem parte do modelo de dados de Veículo (ver
@@ -1231,6 +1246,20 @@
     </div>
 </div>
 
+<!-- ===================== MODAL: AVISO DE TORNIQUETE (Mestre) ===================== -->
+<!-- Fase 8 do plano de efeitos de equipamentos médicos: só um lembrete,
+     sem aplicar dano sozinho — por isso um único botão de "ok, descartar",
+     sem escolha sim/não como o popup de treinamento acima. -->
+<div class="modal-overlay" id="modal-aviso-torniquete">
+    <div class="modal-content">
+        <h4>⚠ Torniquete ativo há mais de 1h de jogo</h4>
+        <p id="aviso-torniquete-texto" class="hint"></p>
+        <div class="modal-btns">
+            <button id="aviso-torniquete-ok" class="btn-lime" type="button">Ok, entendi</button>
+        </div>
+    </div>
+</div>
+
 <!-- ===================== MODAL: DAR ITEM (transferência entre jogadores) ===================== -->
 <div class="modal-overlay" id="modal-dar-item">
     <div class="modal-content">
@@ -1304,6 +1333,35 @@
     <div class="modificacao-arma-row">
         <input type="text" class="modarma-texto" placeholder="ex: Aumento de dano">
         <button class="modarma-remover btn-red" type="button" title="Remover">×</button>
+    </div>
+</template>
+
+<!-- Template de uma linha de efeito de equipamento médico (clonado via
+     JS — ver plano-efeitos-equipamentos-medicos.txt, Fase 3). Os campos
+     dentro de .efmed-campos são desenhados dinamicamente conforme o
+     tipo escolhido no select (ver renderizarCamposEfeitoMedico,
+     ficha.js) — cada tipo do catálogo pede parâmetros diferentes. -->
+<template id="template-efeito-medico">
+    <div class="efeito-medico-row">
+        <div class="efeito-medico-row-topo">
+            <select class="efmed-tipo"></select>
+            <button class="efmed-remover btn-red" type="button" title="Remover">×</button>
+        </div>
+        <p class="hint efmed-descricao"></p>
+        <div class="efmed-campos"></div>
+    </div>
+</template>
+
+<!-- Template de uma linha do sub-editor "modificadores" dentro do
+     efeito "Modificador temporário" (campo lista_modificadores) — igual
+     a .modificador-row, só sem o checkbox "Ocasião especial" (não faz
+     sentido pra um efeito que já é temporário/condicionado ao uso do
+     item). -->
+<template id="template-efmed-modificador">
+    <div class="efmed-mod-row">
+        <select class="efmed-mod-alvo"></select>
+        <input type="number" class="efmed-mod-valor" placeholder="+/-" value="0">
+        <button class="efmed-mod-remover btn-red" type="button" title="Remover">×</button>
     </div>
 </template>
 

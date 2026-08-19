@@ -3276,3 +3276,162 @@ export function resolverTipoEntregaQuimico(pontosVeiculoTransporte) {
     return NIVEIS_ENTREGA_QUIMICO.find(n => pontos >= n.pontosMin && pontos <= n.pontosMax)
         || NIVEIS_ENTREGA_QUIMICO[NIVEIS_ENTREGA_QUIMICO.length - 1];
 }
+
+// =====================================================================
+// EFEITOS DE EQUIPAMENTO MÉDICO (ver plano-efeitos-equipamentos-
+// medicos.txt, Fase 1) — catálogo genérico de "o que um item da tag
+// equipamento_medico pode fazer quando usado/escolhido num tratamento",
+// pra não precisar programar cada item do manual (Atadura, Kit
+// Cirúrgico, Soro Reconstituinte...) na unha. Ao cadastrar um item
+// dessa tag, a pessoa escolhe 1+ entradas deste catálogo e preenche os
+// `campos` de cada uma — mesmo espírito de `item.quimico.efeitos`
+// (produtos químicos) e `item.modificadores` (bônus genérico), só que
+// sem a parte de "receita"/materiais que só existe pra química.
+//
+// Cada tipo carrega:
+//   key         — chave interna, gravada em item.efeitosMedicos[].tipo
+//   label       — nome mostrado no seletor de cadastro
+//   descricao   — explicação curta (tooltip/hint no formulário)
+//   aplicavelEm — onde esse efeito é consultado: "tratamento" (modal de
+//                 Tratar Ferida), "infeccao" (modal de Testar Infecção),
+//                 "uso_direto" (botão "Usar" no card do item) ou
+//                 "recuperacao" (cálculo de tempo de recuperação de PV)
+//   campos      — schema dos parâmetros que o formulário de cadastro
+//                 precisa desenhar pra essa entrada; cada campo tem
+//                 {chave, tipo, label}. `tipo` aqui é só pro FORM (não
+//                 confundir com o `tipo` do efeito em si):
+//                   "multiselect_tratamento" — lista de checkboxes das
+//                     chaves de TRATAMENTOS_FERIDA_MEDICO abaixo
+//                   "multiselect_tipo_ferida" — idem, TIPOS_FERIDA_MEDICO
+//                   "numero" — input numérico livre
+// =====================================================================
+
+// Cópia local das chaves de TRATAMENTOS_FERIDA (regras.js) — só pra
+// alimentar o formulário de cadastro (multi-select) sem criar import
+// circular (regras.js já importa DESTE arquivo, não pode ser o
+// contrário). Se um tratamento novo for adicionado/renomeado em
+// TRATAMENTOS_FERIDA, atualizar aqui também.
+export const TRATAMENTOS_FERIDA_MEDICO = [
+    { key: "estancar_sangramento", label: "Estancar Sangramento (Estabilização)" },
+    { key: "remover_projetil", label: "Remover Projétil" },
+    { key: "suturar_ferimento", label: "Suturar Ferimento (Fechar)" },
+    { key: "tratar_fratura", label: "Tratar Fratura" },
+    { key: "tratar_queimadura", label: "Tratar Queimadura" },
+    { key: "cirurgia_de_campo", label: "Cirurgia de Campo (Emergência)" }
+];
+
+// Cópia local das chaves de TIPOS_FERIDA (regras.js) — mesmo motivo
+// acima (evitar import circular).
+export const TIPOS_FERIDA_MEDICO = [
+    { key: "sangramento", label: "Sangramento" },
+    { key: "corte", label: "Corte" },
+    { key: "projetil", label: "Projétil alojado" },
+    { key: "fratura", label: "Fratura" },
+    { key: "queimadura", label: "Queimadura" }
+];
+
+export const CATALOGO_EFEITOS_MEDICOS = [
+    {
+        key: "bonus_teste_tratamento",
+        label: "Bônus/penalidade num teste de tratamento",
+        descricao: "Soma (ou subtrai, se negativo) um valor fixo no teste de tratamento escolhido. Ex.: Atadura +1 em Estancar Sangramento, Kit de Costura -2 em Suturar Ferimento.",
+        aplicavelEm: "tratamento",
+        campos: [
+            { chave: "tratamentos", tipo: "multiselect_tratamento", label: "Em quais tratamentos" },
+            { chave: "valor", tipo: "numero", label: "Valor do bônus (negativo para penalidade)" }
+        ]
+    },
+    {
+        key: "isenta_penalidade_item",
+        label: "Isenta a penalidade de \"sem item adequado\"",
+        descricao: "Conta como item adequado (penalidade 0) nos tratamentos escolhidos, sem precisar marcar isso à mão. Ex.: Kit de Primeiros Socorros, Kit Cirúrgico.",
+        aplicavelEm: "tratamento",
+        campos: [
+            { chave: "tratamentos", tipo: "multiselect_tratamento", label: "Em quais tratamentos" }
+        ]
+    },
+    {
+        key: "reduz_dificuldade_tratamento",
+        label: "Reduz a dificuldade do teste de tratamento",
+        descricao: "Desconta um valor fixo da dificuldade escolhida pra rolar, além de já contar como item adequado. Ex.: Kit Cirúrgico Avançado -2, Clínica Portátil -4.",
+        aplicavelEm: "tratamento",
+        campos: [
+            { chave: "tratamentos", tipo: "multiselect_tratamento", label: "Em quais tratamentos" },
+            { chave: "valor", tipo: "numero", label: "Redução de dificuldade" }
+        ]
+    },
+    {
+        key: "sucesso_automatico_tratamento",
+        label: "Sucesso automático (sem rolar)",
+        descricao: "Pula a rolagem inteira — o tratamento é aplicado com sucesso garantido. Ex.: Sintetizador de Plaquetas, Bio-fita, Cicatrizador Dérmico.",
+        aplicavelEm: "tratamento",
+        campos: [
+            { chave: "tratamentos", tipo: "multiselect_tratamento", label: "Em quais tratamentos" }
+        ]
+    },
+    {
+        key: "reduz_dificuldade_infeccao",
+        label: "Reduz a dificuldade do Teste de Infecção",
+        descricao: "Desconta um valor fixo da dificuldade do teste de Infecção da ferida tratada. Ex.: Soro Fisiológico -2.",
+        aplicavelEm: "infeccao",
+        campos: [
+            { chave: "valor", tipo: "numero", label: "Redução de dificuldade" }
+        ]
+    },
+    {
+        key: "isenta_infeccao",
+        label: "Isenta o Teste de Infecção",
+        descricao: "A ferida tratada não corre risco de infeccionar — pula o teste inteiro. Ex.: Cicatrizador Dérmico.",
+        aplicavelEm: "infeccao",
+        campos: []
+    },
+    {
+        key: "fator_tempo_recuperacao",
+        label: "Acelera/atrasa o tempo de recuperação",
+        descricao: "Multiplica o tempo de recuperação de PV por um fator (menor que 1 acelera, maior que 1 atrasa). Ex.: Pomada Cicatrizante 0.8 (reduz 1/5), Grampeador Cirúrgico 1.2 (+20%).",
+        aplicavelEm: "recuperacao",
+        campos: [
+            { chave: "tiposFerida", tipo: "multiselect_tipo_ferida", label: "Em quais tipos de ferida" },
+            { chave: "fator", tipo: "numero", label: "Fator multiplicador (ex.: 0.8, 1.2)" }
+        ]
+    },
+    {
+        key: "restaura_pv",
+        label: "Restaura PV imediatamente",
+        descricao: "Cura uma quantidade fixa de PV assim que o item é usado. Ex.: Soro Reconstituinte +30.",
+        aplicavelEm: "uso_direto",
+        campos: [
+            { chave: "valor", tipo: "numero", label: "PV restaurado" }
+        ]
+    },
+    {
+        key: "estabiliza_condicao_critica",
+        label: "Estabiliza condição crítica",
+        descricao: "Reverte coma/desacordo imediatamente ao usar o item. Ex.: Soro Reconstituinte.",
+        aplicavelEm: "uso_direto",
+        campos: []
+    },
+    {
+        key: "efeito_temporario_ignora_penalidade_saude",
+        label: "Ignora penalidade de Machucado/Muito Machucado por um tempo",
+        descricao: "Por N horas de jogo, o personagem age como se não estivesse Machucado/Muito Machucado. Ex.: Morfina, 1h.",
+        aplicavelEm: "uso_direto",
+        campos: [
+            { chave: "horas", tipo: "numero", label: "Duração (horas de jogo)" }
+        ]
+    },
+    {
+        key: "efeito_temporario_modificador",
+        label: "Modificador temporário (bônus/penalidade genérico)",
+        descricao: "Aplica um ou mais modificadores (mesmo formato de \"Modificadores automáticos\" de qualquer item) por N horas de jogo ao usar o item.",
+        aplicavelEm: "uso_direto",
+        campos: [
+            { chave: "modificadores", tipo: "lista_modificadores", label: "Modificadores (alvo + valor)" },
+            { chave: "horas", tipo: "numero", label: "Duração (horas de jogo)" }
+        ]
+    }
+];
+
+export function efeitoMedicoPorKey(key) {
+    return CATALOGO_EFEITOS_MEDICOS.find(e => e.key === key) || null;
+}

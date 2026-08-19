@@ -17,7 +17,7 @@ import {
     calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO,
     dificuldadeDesmaio, DIFICULDADE_BASE_DESMAIO,
     DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
-    calcularTempoRecuperacaoPV, aplicarReducaoTratamentoHospital, calcularAbstinenciaVicio,
+    calcularTempoRecuperacaoPV, aplicarReducaoTratamentoHospital, aplicarFatoresRecuperacaoItens, calcularAbstinenciaVicio,
     extrairDuracaoHorasDaDescricao, horasTotaisCalendario,
     calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel,
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, chanceFeridaPorDano,
@@ -73,7 +73,8 @@ import {
     SUBTIPOS_IMPLANTE, rotuloSubtipoImplante, subtipoContaComoImplante,
     PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA,
     TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip,
-    ZONAS_SILHUETA
+    ZONAS_SILHUETA,
+    CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -120,6 +121,7 @@ import {
     ouvirNpcs, excluirNpc, passarODia, passarVariosDias,
     criarNpcDetalhado, atualizarNpcDetalhado,
     ouvirPopupTreinamento, confirmarAvancoTreinamento, descartarPopupTreinamento,
+    ouvirAvisoTorniquete, descartarAvisoTorniquete,
     pagarCustoSemanal,
     ouvirCombateAtivo, adicionarParticipanteCombate, removerParticipanteCombate, encerrarCombate,
     ouvirAcoesPendentes, criarAcaoPendente, rejeitarAcaoPendente, confirmarAcaoPendente,
@@ -131,6 +133,7 @@ import {
     definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado,
     definirAlcanceLimitado, soltarAlcanceLimitado,
     definirDesacordado, soltarDesacordado, definirOssosQuebrados, curarOssosQuebrados,
+    aplicarSangramento, aplicarInfeccao, curarInfeccao,
     reverterComaGodmode, acordarDesmaioGodmode,
     ouvirCenarios, criarCenario, renomearCenario, excluirCenario,
     adicionarParticipanteCenario, removerParticipanteCenario,
@@ -151,7 +154,7 @@ import {
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
 } from "./mestre.js";
 import {
-    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, removerFerida, aplicarTickSangramento,
+    criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, isentarInfeccaoFerida, removerFerida, aplicarTickSangramento,
     agruparFeridasPorLocal, estadoVisualFerida
 } from "./saude.js";
 import {
@@ -697,12 +700,17 @@ const el = {
     modalDescricao: document.getElementById("modal-descricao"),
     modalListaModificadores: document.getElementById("modal-lista-modificadores"),
     modalAddModificador: document.getElementById("modal-add-modificador"),
+    modalCampoEfeitosMedicos: document.getElementById("modal-campo-efeitos-medicos"),
+    modalListaEfeitosMedicos: document.getElementById("modal-lista-efeitos-medicos"),
+    modalAddEfeitoMedico: document.getElementById("modal-add-efeito-medico"),
     modalCancelar: document.getElementById("modal-cancelar"),
     modalExcluir: document.getElementById("modal-excluir"),
     modalSalvar: document.getElementById("modal-salvar"),
     templateModificador: document.getElementById("template-modificador"),
     templateCompartimento: document.getElementById("template-compartimento"),
     templateModificacaoArma: document.getElementById("template-modificacao-arma"),
+    templateEfeitoMedico: document.getElementById("template-efeito-medico"),
+    templateEfmedModificador: document.getElementById("template-efmed-modificador"),
     // calendário
     calData: document.getElementById("cal-data"),
     calDiaSemana: document.getElementById("cal-dia-semana"),
@@ -759,6 +767,9 @@ const el = {
     popupTreinoTexto: document.getElementById("popup-treino-texto"),
     popupTreinoNao: document.getElementById("popup-treino-nao"),
     popupTreinoSim: document.getElementById("popup-treino-sim"),
+    modalAvisoTorniquete: document.getElementById("modal-aviso-torniquete"),
+    avisoTorniqueteTexto: document.getElementById("aviso-torniquete-texto"),
+    avisoTorniqueteOk: document.getElementById("aviso-torniquete-ok"),
     modalSelecionarAlvo: document.getElementById("modal-selecionar-alvo"),
     alvoTitulo: document.getElementById("alvo-titulo"),
     modalReacaoDefesa: document.getElementById("modal-reacao-defesa"),
@@ -911,6 +922,7 @@ async function init() {
     tentarOuAvisar("log de dados", configurarLogDados);
     tentarOuAvisar("aviso de custo de vida", configurarAvisoCustoVida);
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
+    tentarOuAvisar("aviso de torniquete", configurarAvisoTorniquete);
     tentarOuAvisar("godmode", configurarGodmode);
     tentarOuAvisar("fator de preço de materiais (veículos)", configurarFatorPrecoMateriaisVeiculo);
     tentarOuAvisar("fator de preço da Dark Net", configurarFatorPrecoDarknet);
@@ -963,6 +975,7 @@ async function init() {
     tentarOuAvisar("busca de perícia", configurarBuscaPericia);
     tentarOuAvisar("modificações de arma", configurarModificacoesArma);
     tentarOuAvisar("modificadores genéricos", configurarModificadoresGenerico);
+    tentarOuAvisar("efeitos de equipamento médico", configurarEfeitosMedicosGenerico);
     tentarOuAvisar("compartimentos de recipiente", configurarCompartimentosGenerico);
     tentarOuAvisar("campo substância (vício)", configurarCampoSubstanciaVicio);
     tentarOuAvisar("carrossel de status do topo", configurarStatusTopoCarrossel);
@@ -2227,7 +2240,20 @@ function renderizarAtributos(modificadoresPlanos) {
     // sub-toggle "ignorar penalidade de saúde" também marcado (ver
     // configurarGodmode); Godmode sozinho não mexe mais nisso.
     const temTolerancia = temPericiaTreinada(fichaAtual.pericias, "Tolerância");
-    const ignorarPenalidadeSaude = godmodeAtivo && ignorarPenalidadeSaudeAtivo;
+    // Ignora a penalidade de Machucado/Muito Machucado (Fase 6.2 do
+    // plano de efeitos de equipamentos médicos —
+    // plano-efeitos-equipamentos-medicos.txt): o Godmode sozinho (via
+    // sub-toggle "ignorar penalidade de saúde") OU um item com o efeito
+    // `efeito_temporario_ignora_penalidade_saude` ainda dentro do prazo
+    // gravado em `d.ignorarPenalidadeSaudeAte` (mesmo relógio contínuo
+    // em horas usado pelos efeitos temporários de droga/item — ver
+    // horasTotaisCalendario/calcularModificadoresDrogasAtivas em
+    // regras.js). Cada fonte é independente da outra.
+    const horasAgoraSaude = (calendarioAtual && calendarioAtual.diaIndice !== undefined && calendarioAtual.diaIndice !== null)
+        ? horasTotaisCalendario(calendarioAtual.diaIndice, calendarioAtual.hora)
+        : null;
+    const itemIgnoraPenalidadeSaude = !!(d.ignorarPenalidadeSaudeAte && horasAgoraSaude !== null && horasAgoraSaude < d.ignorarPenalidadeSaudeAte);
+    const ignorarPenalidadeSaude = (godmodeAtivo && ignorarPenalidadeSaudeAtivo) || itemIgnoraPenalidadeSaude;
     const estadoSaude = calcularEstadoSaude(d.pvAtual, pvMaximoTotal, temTolerancia, ignorarPenalidadeSaude);
     derivados.secundarios.velocidade = aplicarEstadoSaudeVelocidade(derivados.secundarios.velocidade, estadoSaude);
     renderizarEstadoSaude(estadoSaude);
@@ -2479,8 +2505,12 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
         const notaInfeccao = rec.infectadoNoPedido ? " (+50% pela infecção ativa no momento do pedido)" : "";
         const notaHospital = rec.tratamentoHospitalNoPedido ? " (-1/10 pelo tratamento em hospital aprovado)" : "";
         const notaComa = rec.veioDoComaEm ? " (dobro pela saída de coma recente)" : "";
+        const fatoresNoPedido = rec.fatoresRecuperacaoItensNoPedido ? Object.values(rec.fatoresRecuperacaoItensNoPedido) : [];
+        const notaFatoresItens = fatoresNoPedido.length
+            ? ` (${fatoresNoPedido.map(f => `${f.origem || "item"} ×${f.fator}`).join(", ")})`
+            : "";
         el.recuperacaoPvPainel.style.display = "";
-        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
+        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
         if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
@@ -2532,26 +2562,39 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     // Item 6 do plano (Coma): saída de coma dobra o tempo da PRÓXIMA
     // recuperação de PV (flag em dados.saiuDoComaPendente, setada só
     // manualmente pelo Mestre em Godmode — ver reverterComaGodmode em
-    // mestre.js). Aplicado ANTES do desconto de hospital abaixo.
+    // mestre.js). Aplicado ANTES dos fatores de item/desconto de
+    // hospital abaixo.
     const saiuDoComa = !!d.saiuDoComaPendente;
     const diasComComa = saiuDoComa ? diasBase * 2 : diasBase;
+    // Fase 7 do plano de efeitos de equipamentos médicos: fatores de
+    // tempo de recuperação gravados por item usado num tratamento de
+    // ferida bem-sucedido (dados.fatoresRecuperacaoItens, ver
+    // aplicarFatoresRecuperacaoItens em regras.js e o handler do botão
+    // "Rolar tratamento" em abrirModalTratarFerida) — aplicado depois
+    // do dobro por coma, antes do desconto de hospital abaixo.
+    const temFatoresRecuperacaoItens = !!(d.fatoresRecuperacaoItens && Object.keys(d.fatoresRecuperacaoItens).length);
+    const diasComFatoresItens = aplicarFatoresRecuperacaoItens(diasComComa, d.fatoresRecuperacaoItens);
     // Item 3 do plano de saúde/complicações: tratamento em hospital
     // bem-sucedido (flag em dados.tratamentoHospital, ver saude.js)
     // reduz em 1/10 o tempo de recuperação da FICHA INTEIRA — aplicado
     // por cima do valor já calculado acima, não dentro da fórmula base.
     const tratadoEmHospital = !!d.tratamentoHospital;
-    const diasNecessarios = aplicarReducaoTratamentoHospital(diasComComa, tratadoEmHospital);
-    // diasBase (sem desconto de hospital nem dobro por coma) também é
-    // guardado no contexto — é o que vai no payload da Ação Pendente,
-    // pra confirmarAcaoPendente em mestre.js poder reaplicar as duas
-    // flags em cima do que estiver VALENDO na hora em que o Mestre
-    // aprovar (pode ter mudado entre o pedido e a aprovação), em vez de
-    // confiar só no valor já calculado aqui no momento do pedido.
+    const diasNecessarios = aplicarReducaoTratamentoHospital(diasComFatoresItens, tratadoEmHospital);
+    // diasBase (sem desconto de hospital nem dobro por coma nem fatores
+    // de item) também é guardado no contexto — é o que vai no payload
+    // da Ação Pendente, pra confirmarAcaoPendente em mestre.js poder
+    // reaplicar as três fontes em cima do que estiver VALENDO na hora
+    // em que o Mestre aprovar (podem ter mudado entre o pedido e a
+    // aprovação), em vez de confiar só no valor já calculado aqui no
+    // momento do pedido.
     pvRecuperacaoContexto = { pvPerdidos, pvRecuperavel, pvSemRecuperar, pvMaximoTotal, diasNecessarios, diasBase, infectado, tratadoEmHospital, saiuDoComa };
     el.recuperacaoPvPainel.style.display = "";
     const notaInfeccao = infectado ? " — infecção ativa: +50% no tempo de recuperação" : "";
     const notaHospital = tratadoEmHospital ? " — tratamento em hospital: -1/10 no tempo de recuperação" : "";
     const notaComa = saiuDoComa ? " — saiu do coma recentemente: dobro no tempo de recuperação" : "";
+    const notaFatoresItens = temFatoresRecuperacaoItens
+        ? ` — ${Object.values(d.fatoresRecuperacaoItens).map(f => `${f.origem || "item"} ×${f.fator}`).join(", ")}`
+        : "";
 
     if (pvRecuperavel <= 0) {
         // Padrão de Vida atual não cobre nada sem tratamento médico
@@ -2566,7 +2609,7 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     const notaSemRecuperar = pvSemRecuperar > 0
         ? ` ${pvSemRecuperar} PV vão ficar sem recuperar por esse caminho.`
         : "";
-    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Seu Padrão de Vida (${labelPadrao}) cobre até ${limite} sem tratamento médico especializado — vai recuperar ${pvRecuperavel} em ${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa}.${notaSemRecuperar}`;
+    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Seu Padrão de Vida (${labelPadrao}) cobre até ${limite} sem tratamento médico especializado — vai recuperar ${pvRecuperavel} em ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa}.${notaSemRecuperar}`;
     if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "";
 }
 
@@ -2585,6 +2628,9 @@ function configurarRecuperacaoPV() {
         const notaInfeccao = infectado ? " (já inclui +50% por infecção ativa)" : "";
         const notaHospital = tratadoEmHospital ? " (inclui -1/10 por tratamento em hospital, se ainda valer na hora da aprovação)" : "";
         const notaComa = saiuDoComa ? " (inclui dobro por saída de coma, se ainda valer na hora da aprovação)" : "";
+        const notaFatoresItens = (fichaAtual?.dados?.fatoresRecuperacaoItens && Object.keys(fichaAtual.dados.fatoresRecuperacaoItens).length)
+            ? " (inclui os fatores de itens médicos usados nos tratamentos, se ainda valerem na hora da aprovação)"
+            : "";
         const notaSemRecuperar = pvSemRecuperar > 0
             ? ` (${pvSemRecuperar} PV fora do pedido — acima do que o Padrão de Vida cobre sem tratamento médico especializado)`
             : "";
@@ -2593,7 +2639,7 @@ function configurarRecuperacaoPV() {
                 tipo: "iniciar_recuperacao_pv",
                 fichaId: fichaAtualId,
                 nomeJogador,
-                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvRecuperavel} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}${notaHospital}${notaComa}.${notaSemRecuperar}`,
+                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvRecuperavel} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa}.${notaSemRecuperar}`,
                 payload: { pvPerdidos: pvRecuperavel, diasNecessarios: diasBase, infectado }
             });
             toast("Pedido de recuperação de PVs enviado ao Mestre.");
@@ -7385,6 +7431,16 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         ? ` · ⚠ precisa estar num cenário pra armar`
         : "";
 
+    // Efeitos médicos de "uso direto" (Fase 6 do plano de efeitos de
+    // equipamentos médicos): item elegível pro botão "Usar (efeito
+    // médico)" quando tag "equipamento_medico" e tiver pelo menos um
+    // efeito dos 4 tipos que se aplicam clicando direto no card, sem
+    // precisar estar tratando uma ferida específica (restaura_pv /
+    // estabiliza_condicao_critica / efeito_temporario_ignora_penalidade_
+    // saude / efeito_temporario_modificador — ver usarEquipamentoMedico).
+    const temEfeitoMedicoDiretoItem = it.tag === "equipamento_medico" && Array.isArray(it.efeitosMedicos)
+        && it.efeitosMedicos.some(ef => ef && ["restaura_pv", "estabiliza_condicao_critica", "efeito_temporario_ignora_penalidade_saude", "efeito_temporario_modificador"].includes(ef.tipo));
+
     if (nivel > 0) li.classList.add("entity-item-aninhado");
 
     li.innerHTML = `
@@ -7399,6 +7455,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             ${mostrarBtnEquipar ? `<button type="button" class="btn-toggle-equipada ${equipadaItem ? "ligado" : "desligado"}" ${podeEquiparBtn ? "" : "disabled"} title="${tituloBtnEquipar}">${textoBtnEquipar}</button>` : ""}
             <button type="button" class="btn-usar-item btn-blue" ${podeUsar ? "" : "disabled"} title="${podeUsar ? (kitGeral ? "Escolher qual perícia rolar (Explosivos, Mecânica Automotiva, Armeiro, Ofícios Utilitários ou Eletrônica)" : (periciasUsoItem.length > 1 ? `Escolher qual perícia rolar (${periciasUsoItem.join(", ")})` : `Rolar d20 + ${periciasUsoItem[0]}`)) : (ehEquipavelItem && !equipadaItem ? "Equipe o item pra poder usá-lo" : "Sem perícia vinculada")}">Usar</button>
             ${it.tag === "droga" ? `<button type="button" class="btn-consumir-droga btn-lime" title="Consome 1 unidade: aplica o efeito (modificadores do item) pelo tempo em horas escrito na descrição (ex: 'por 4h') — sem isso, dura até o fim do dia em jogo — e zera a abstinência do vício correspondente, se houver">Consumir</button>` : ""}
+            ${temEfeitoMedicoDiretoItem ? `<button type="button" class="btn-usar-equipamento-medico btn-lime" title="Usa o item: aplica os efeitos cadastrados (restaura PV, estabiliza coma/desmaio, ignora penalidade de saúde por um tempo, ou modificador temporário) e desconta 1 uso, se tiver número limitado">Usar (efeito médico)</button>` : ""}
             ${ehFogo ? `<button type="button" class="btn-recarregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="${semCarregador ? "Encher o tambor/câmara com munição solta compatível do inventário" : "Trocar o carregador anexado por um com mais munição"}">Recarregar</button>` : ""}
             ${(ehFogo && !semCarregador) ? `<button type="button" class="btn-retirar-carregador-item btn-ghost" ${(itemPodeUsar(it) && armaEstaCarregadaItem) ? "" : "disabled"} title="Retirar o carregador anexado e devolvê-lo ao inventário">Retirar carregador</button>` : ""}
             ${(ehFogo && temCamaraExtraItem) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(itemPodeUsar(it) && !camaraCarregadaItem) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
@@ -7426,6 +7483,13 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         btnConsumirDroga.addEventListener("click", (e) => {
             e.stopPropagation();
             consumirDroga(id);
+        });
+    }
+    const btnUsarEquipamentoMedico = li.querySelector(".btn-usar-equipamento-medico");
+    if (btnUsarEquipamentoMedico) {
+        btnUsarEquipamentoMedico.addEventListener("click", (e) => {
+            e.stopPropagation();
+            usarEquipamentoMedico(id);
         });
     }
     const btnToggleEquipada = li.querySelector(".btn-toggle-equipada");
@@ -10545,6 +10609,126 @@ async function consumirDroga(itemId) {
     }
 }
 
+// ---------------------------------------------------------------------
+// USAR EQUIPAMENTO MÉDICO (item de inventário com tag "equipamento_
+// medico", efeitos de "uso direto" — Fase 6 do plano de efeitos de
+// equipamentos médicos, plano-efeitos-equipamentos-medicos.txt).
+// Espelha consumirDroga acima (mesmo padrão de "quantidade = usos
+// restantes", ver decrementarItemMedico mais abaixo), só que despachando
+// os efeitos de USO DIRETO cadastrados no item em vez do efeito único
+// de droga:
+//   restaura_pv                              → curarAlvo (mestre.js),
+//                                                já existente
+//   estabiliza_condicao_critica               → reverterComaGodmode /
+//                                                acordarDesmaioGodmode
+//                                                (mestre.js) — SEMPRE
+//                                                documentadas como
+//                                                "exclusivo Godmode" nos
+//                                                comentários de origem,
+//                                                mas aqui o gatilho é o
+//                                                uso do item, não o
+//                                                Mestre; só dispara se a
+//                                                condição realmente
+//                                                estiver ativa
+//   efeito_temporario_ignora_penalidade_saude → grava prazo em
+//                                                dados.ignorarPenalidadeSaudeAte
+//                                                (lido em
+//                                                renderizarAtributos,
+//                                                junto do sub-toggle de
+//                                                Godmode equivalente)
+//   efeito_temporario_modificador             → grava em efeitosItens
+//                                                (campo irmão de
+//                                                efeitosDrogas, mesmo
+//                                                motor de expiração —
+//                                                ver
+//                                                calcularModificadoresDrogasAtivas
+//                                                em regras.js)
+// Os efeitos de tratamento de ferida (bonus/isenção/redução/sucesso
+// automático) e de infecção NÃO passam por aqui — são despachados nos
+// modais de Tratar Ferida / Testar Infecção (Fases 4 e 5, ver
+// abrirModalTratarFerida/abrirModalTestarInfeccaoFerida mais abaixo).
+// `estabiliza_condicao_critica` e a penalidade de saúde só existem pra
+// ficha de jogador (não NPC) — em modo NPC esses dois efeitos ficam sem
+// gatilho (não crasha, só não fazem nada), o resto funciona igual.
+async function usarEquipamentoMedico(itemId) {
+    if (!idAtivo()) return;
+    const item = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    if (!item) return;
+    const efeitosDiretos = (Array.isArray(item.efeitosMedicos) ? item.efeitosMedicos : [])
+        .filter(ef => ef && ["restaura_pv", "estabiliza_condicao_critica", "efeito_temporario_ignora_penalidade_saude", "efeito_temporario_modificador"].includes(ef.tipo));
+    if (!efeitosDiretos.length) return;
+
+    const atualizacoes = {};
+    const avisos = [];
+    const alvoTipo = modoNpc ? "npc" : "ficha";
+    const alvoId = idAtivo();
+    const temCalendario = !!(calendarioAtual && calendarioAtual.diaIndice !== undefined && calendarioAtual.diaIndice !== null);
+    const horasAgora = temCalendario ? horasTotaisCalendario(calendarioAtual.diaIndice, calendarioAtual.hora) : null;
+
+    for (const ef of efeitosDiretos) {
+        if (ef.tipo === "restaura_pv") {
+            const valor = Number(ef.valor) || 0;
+            if (valor > 0) {
+                try {
+                    const resultado = await curarAlvo(alvoTipo, alvoId, valor);
+                    avisos.push(`+${resultado.curaAplicada} PV`);
+                } catch (e) {
+                    avisos.push("não foi possível restaurar PV");
+                }
+            }
+        } else if (ef.tipo === "estabiliza_condicao_critica") {
+            if (!modoNpc && fichaAtual.dados?.coma?.ativo) {
+                await reverterComaGodmode(alvoId);
+                fichaAtual.dados.coma = null;
+                avisos.push("saiu do coma");
+            }
+            if (!modoNpc && fichaAtual.dados?.desmaiado) {
+                await acordarDesmaioGodmode(alvoId);
+                fichaAtual.dados.desmaiado = false;
+                avisos.push("acordou do desmaio");
+            }
+        } else if (ef.tipo === "efeito_temporario_ignora_penalidade_saude") {
+            const horas = Number(ef.horas) || 0;
+            if (!modoNpc && horas > 0 && horasAgora !== null) {
+                const horasExpira = horasAgora + horas;
+                fichaAtual.dados.ignorarPenalidadeSaudeAte = horasExpira;
+                atualizacoes[`${caminhoBase()}/dados/ignorarPenalidadeSaudeAte`] = horasExpira;
+                avisos.push(`ignora penalidade de saúde por ${horas}h`);
+            }
+        } else if (ef.tipo === "efeito_temporario_modificador") {
+            const modificadoresDoEfeito = (ef.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
+            const horas = Number(ef.horas) || 0;
+            if (modificadoresDoEfeito.length && temCalendario) {
+                const horasExpira = horas > 0 ? horasAgora + horas : ((calendarioAtual.diaIndice + 1) * 24);
+                if (!fichaAtual.efeitosItens) fichaAtual.efeitosItens = {};
+                // Chave inclui o id do item (não só o nome normalizado,
+                // como em efeitosDrogas) pra permitir usar o mesmo item
+                // duas vezes em itens DIFERENTES com o mesmo nome sem um
+                // sobrescrever o outro — efeitosDrogas não precisa disso
+                // porque, na prática, só existe 1 substância de cada por
+                // vez fazendo efeito.
+                const chave = `${normalizarTextoBusca(item.nome)}_${itemId}`;
+                fichaAtual.efeitosItens[chave] = {
+                    nome: item.nome,
+                    diaIndiceConsumido: calendarioAtual.diaIndice,
+                    horasExpira,
+                    modificadores: modificadoresDoEfeito
+                };
+                atualizacoes[`${caminhoBase()}/efeitosItens/${chave}`] = fichaAtual.efeitosItens[chave];
+                avisos.push(`modificador ativo${horas ? ` por ${horas}h` : ""}`);
+            }
+        }
+    }
+
+    try {
+        if (Object.keys(atualizacoes).length) await update(ref(db), atualizacoes);
+        await decrementarItemMedico(itemId);
+        toast(`${item.nome} usado${avisos.length ? " — " + avisos.join(", ") : ""}.`);
+    } catch (e) {
+        toast("Não foi possível usar o item. Tente de novo.", "erro");
+    }
+}
+
 
 
 // ---------------------------------------------------------------------
@@ -13418,6 +13602,7 @@ function esconderTodosCamposEspeciais() {
     el.modalConfigExplosivo.style.display = "none";
     el.modalConfigImplante.style.display = "none";
     el.modalConfigReducaoDano.style.display = "none";
+    el.modalCampoEfeitosMedicos.style.display = "none";
     el.modalCampoSubstanciaVicio.style.display = "none";
     el.modalCampoTipoVeiculo.style.display = "none";
     el.modalConfigVeiculo.style.display = "none";
@@ -13813,7 +13998,7 @@ function prepararModalItem(existente, ehBanco) {
         } else {
             el.modalCategoriaBanco.value = existente.categoriaBanco || "";
         }
-        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas, existente.quimico, existente.limitarRolagemPorNivel, existente.implante);
+        atualizarCamposPorTag(existente.tag, existente.nivelTag, existente.arma, existente.periciaUso, existente.classeProtecao, existente.calibre, existente.reducoesDano, existente.carregador, existente.projetil, existente.localProtegido, { tipo: existente.materialTipo, qualidade: existente.materialQualidade, quantidade: existente.materialQuantidade }, !!existente.ehSaldo, existente.saldoValor, existente.quantidade, { subtipoPorte: existente.subtipoPorte, compartimentos: existente.compartimentos }, existente.maosNecessarias, existente.saldoNotas, existente.saldoMoedas, existente.quimico, existente.limitarRolagemPorNivel, existente.implante, existente.efeitosMedicos);
         el.modalEquipavel.checked = !!existente.equipavel;
         // Reavalia com o checkbox "equipável" já no valor certo (a
         // chamada acima roda antes dessa linha, então via com o valor
@@ -13888,7 +14073,7 @@ function configurarAutocompleteItemBanco(ativo) {
                 popularSelectTamanho(el.modalTamanho, it.tamanho);
                 el.modalDescricao.value = it.descricao || "";
                 montarListaModificadores(it.modificadores || []);
-                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas, it.quimico, it.limitarRolagemPorNivel, it.implante);
+                atualizarCamposPorTag(it.tag, it.nivelTag, it.arma, it.periciaUso, it.classeProtecao, it.calibre, it.reducoesDano, it.carregador, it.projetil, it.localProtegido, { tipo: it.materialTipo, qualidade: it.materialQualidade, quantidade: it.materialQuantidade }, !!it.ehSaldo, it.saldoValor, it.quantidade, { subtipoPorte: it.subtipoPorte, compartimentos: it.compartimentos }, it.maosNecessarias, it.saldoNotas, it.saldoMoedas, it.quimico, it.limitarRolagemPorNivel, it.implante, it.efeitosMedicos);
                 el.modalEquipavel.checked = !!it.equipavel;
                 atualizarCampoJaEquipar();
                 el.modalItemBancoOpcoes.style.display = "none";
@@ -14112,7 +14297,7 @@ function lerReducaoDanoDoModal() {
     return resultado;
 }
 
-function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual, quimicoConfigAtual, limitarRolagemAtual, implanteConfigAtual) {
+function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, classeProtecaoAtual, calibreAtual, reducoesDanoAtuais, carregadorConfigAtual, projetilConfigAtual, localProtegidoAtual, materialConfigAtual, ehSaldoAtual, saldoValorAtual, quantidadeAtual, recipienteConfigAtual, maosNecessariasAtual, saldoNotasAtual, saldoMoedasAtual, quimicoConfigAtual, limitarRolagemAtual, implanteConfigAtual, efeitosMedicosAtual) {
     // Equipável — checkbox independente da tag (qualquer item pode ser
     // marcado como equipável, não só armas). Some pra tag "Arma" e
     // "Explosivo": as duas já são sempre equipáveis por natureza (ver
@@ -14528,6 +14713,14 @@ function atualizarCamposPorTag(tagKey, nivelTag, armaConfig, periciaUsoAtual, cl
     // selecionada acima, então são avaliadas depois dela estar montada.
     atualizarVisibilidadeArmaFogo(armaConfig);
 
+    // Efeitos de Equipamento Médico (tag "equipamento_medico" — Fase 3
+    // do plano-efeitos-equipamentos-medicos.txt). Bloco só aparece pra
+    // essa tag; monta a lista de linhas a partir do que já está salvo
+    // no item (ou vazio, pra item novo/outra tag).
+    const ehEquipamentoMedico = tagKey === "equipamento_medico";
+    el.modalCampoEfeitosMedicos.style.display = ehEquipamentoMedico ? "block" : "none";
+    if (ehEquipamentoMedico) montarListaEfeitosMedicos(efeitosMedicosAtual || []);
+
     // "Já equipado" (atalho de criação) — some/aparece junto com tudo
     // acima porque depende do mesmo estado (tag, checkbox "equipável",
     // subtipo de porte do recipiente). Ver atualizarCampoJaEquipar.
@@ -14905,6 +15098,187 @@ function configurarModificacoesArma() {
         document.body.appendChild(datalist);
     }
     el.modalArmaAddModificacao.addEventListener("click", () => adicionarLinhaModificacaoArma(""));
+}
+
+// ---------------------------------------------------------------------
+// Efeitos de Equipamento Médico (Fase 3 — ver plano-efeitos-
+// equipamentos-medicos.txt). Cada linha guarda `{ tipo, ...parâmetros }`
+// — `tipo` é uma key de CATALOGO_EFEITOS_MEDICOS (dados-manual.js) e os
+// parâmetros seguem o schema `campos` daquela entrada do catálogo. Igual
+// a "Modificadores automáticos", só que aqui os CAMPOS de cada linha
+// mudam dinamicamente conforme o tipo escolhido no select.
+// ---------------------------------------------------------------------
+
+// Desenha os campos de uma linha de efeito médico dentro de `container`
+// (o .efmed-campos daquela linha), a partir do `campos` do catálogo
+// (efeitoDef.campos) e dos valores já salvos (valoresAtuais — objeto
+// plano, ex: {tratamentos: [...], valor: 2}). Chamada tanto ao montar
+// uma linha existente (valores do item salvo) quanto ao trocar o tipo
+// no select (valores em branco, efeito novo).
+function renderizarCamposEfeitoMedico(container, efeitoDef, valoresAtuais) {
+    container.innerHTML = "";
+    if (!efeitoDef) return;
+    const valores = valoresAtuais || {};
+    efeitoDef.campos.forEach(campo => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "efmed-campo";
+        wrapper.dataset.chave = campo.chave;
+        const label = document.createElement("label");
+        label.innerText = campo.label;
+        wrapper.appendChild(label);
+
+        if (campo.tipo === "multiselect_tratamento" || campo.tipo === "multiselect_tipo_ferida") {
+            // Checklist de checkboxes — chaves de TRATAMENTOS_FERIDA_MEDICO
+            // ou TIPOS_FERIDA_MEDICO (dados-manual.js), conforme o tipo do
+            // campo pedido pelo catálogo.
+            const opcoes = campo.tipo === "multiselect_tratamento" ? TRATAMENTOS_FERIDA_MEDICO : TIPOS_FERIDA_MEDICO;
+            const marcadas = Array.isArray(valores[campo.chave]) ? valores[campo.chave] : [];
+            const checklist = document.createElement("div");
+            checklist.className = "efmed-checklist";
+            opcoes.forEach(op => {
+                const lbl = document.createElement("label");
+                const input = document.createElement("input");
+                input.type = "checkbox";
+                input.className = "efmed-check";
+                input.value = op.key;
+                input.checked = marcadas.includes(op.key);
+                lbl.appendChild(input);
+                lbl.appendChild(document.createTextNode(` ${op.label}`));
+                checklist.appendChild(lbl);
+            });
+            wrapper.appendChild(checklist);
+        } else if (campo.tipo === "numero") {
+            const input = document.createElement("input");
+            input.type = "number";
+            input.step = "any";
+            input.className = "efmed-numero";
+            input.value = valores[campo.chave] ?? 0;
+            wrapper.appendChild(input);
+        } else if (campo.tipo === "lista_modificadores") {
+            // Sub-editor de modificadores (mesmo formato {alvo, valor} de
+            // item.modificadores) — usado pelo efeito "Modificador
+            // temporário". Lista própria, independente da lista de
+            // "Modificadores automáticos" do item.
+            const lista = document.createElement("div");
+            lista.className = "efmed-lista-modificadores";
+            const mods = Array.isArray(valores[campo.chave]) ? valores[campo.chave] : [];
+            mods.forEach(m => adicionarLinhaEfmedModificador(lista, m.alvo, m.valor));
+            const btnAdd = document.createElement("button");
+            btnAdd.type = "button";
+            btnAdd.className = "btn-blue";
+            btnAdd.innerText = "+ Adicionar modificador";
+            btnAdd.addEventListener("click", () => adicionarLinhaEfmedModificador(lista, "", 0));
+            wrapper.appendChild(lista);
+            wrapper.appendChild(btnAdd);
+        }
+        container.appendChild(wrapper);
+    });
+}
+
+// Uma linha do sub-editor "modificadores" (campo lista_modificadores) —
+// igual a adicionarLinhaModificador, mas sem o checkbox "Ocasião
+// especial" (não faz sentido pra um efeito já temporário/condicionado
+// ao uso do item) e presa dentro do container da própria linha de
+// efeito, não em el.modalListaModificadores.
+function adicionarLinhaEfmedModificador(container, alvoSelecionado, valorAtual) {
+    const fragmento = el.templateEfmedModificador.content.cloneNode(true);
+    const row = fragmento.querySelector(".efmed-mod-row");
+    const select = row.querySelector(".efmed-mod-alvo");
+    const input = row.querySelector(".efmed-mod-valor");
+    const btnRemover = row.querySelector(".efmed-mod-remover");
+    const pericias = Object.values((fichaAtual && fichaAtual.pericias) || {});
+    listaAlvosModificador(pericias).forEach(a => {
+        const opt = document.createElement("option");
+        opt.value = a.value;
+        opt.innerText = a.label;
+        select.appendChild(opt);
+    });
+    if (alvoSelecionado) select.value = alvoSelecionado;
+    input.value = valorAtual ?? 0;
+    btnRemover.addEventListener("click", () => row.remove());
+    container.appendChild(row);
+}
+
+// Uma linha completa de efeito médico: select do tipo + campos
+// dinâmicos + botão remover. `efeitoAtual` é o objeto já salvo (ou null
+// pra linha nova, que nasce no primeiro tipo do catálogo).
+function adicionarLinhaEfeitoMedico(efeitoAtual) {
+    const fragmento = el.templateEfeitoMedico.content.cloneNode(true);
+    const row = fragmento.querySelector(".efeito-medico-row");
+    const select = row.querySelector(".efmed-tipo");
+    const descricao = row.querySelector(".efmed-descricao");
+    const camposContainer = row.querySelector(".efmed-campos");
+    const btnRemover = row.querySelector(".efmed-remover");
+
+    CATALOGO_EFEITOS_MEDICOS.forEach(ef => {
+        const opt = document.createElement("option");
+        opt.value = ef.key;
+        opt.innerText = ef.label;
+        select.appendChild(opt);
+    });
+
+    const tipoSalvo = efeitoAtual && efeitoAtual.tipo && efeitoMedicoPorKey(efeitoAtual.tipo) ? efeitoAtual.tipo : null;
+    select.value = tipoSalvo || CATALOGO_EFEITOS_MEDICOS[0].key;
+
+    const atualizarDescricaoECampos = (valoresAtuais) => {
+        const def = efeitoMedicoPorKey(select.value);
+        descricao.textContent = def ? def.descricao : "";
+        renderizarCamposEfeitoMedico(camposContainer, def, valoresAtuais || {});
+    };
+    // Primeira montagem: se a linha já veio de um efeito salvo e o tipo
+    // não mudou, mantém os parâmetros salvos; senão nasce em branco
+    // (troca de tipo no select, ou linha nova).
+    atualizarDescricaoECampos(tipoSalvo ? efeitoAtual : {});
+
+    // Trocar o tipo sempre reseta os parâmetros — misturar campos de um
+    // tipo com o de outro (ex: "fator" de fator_tempo_recuperacao
+    // sobrando depois de trocar pra restaura_pv) não faz sentido.
+    select.addEventListener("change", () => atualizarDescricaoECampos({}));
+    btnRemover.addEventListener("click", () => row.remove());
+
+    el.modalListaEfeitosMedicos.appendChild(row);
+}
+
+function montarListaEfeitosMedicos(lista) {
+    el.modalListaEfeitosMedicos.innerHTML = "";
+    (lista || []).forEach(efeito => adicionarLinhaEfeitoMedico(efeito));
+}
+
+// Lê todas as linhas do bloco de efeitos médicos e monta o array final
+// pra gravar em item.efeitosMedicos — cada entrada `{ tipo, ...campos }`
+// conforme o schema de CATALOGO_EFEITOS_MEDICOS daquele tipo.
+function lerEfeitosMedicosDoModal() {
+    const linhas = el.modalListaEfeitosMedicos.querySelectorAll(".efeito-medico-row");
+    const lista = [];
+    linhas.forEach(row => {
+        const tipo = row.querySelector(".efmed-tipo").value;
+        const def = efeitoMedicoPorKey(tipo);
+        if (!def) return;
+        const efeito = { tipo };
+        def.campos.forEach(campo => {
+            const wrapper = row.querySelector(`.efmed-campo[data-chave="${CSS.escape(campo.chave)}"]`);
+            if (!wrapper) return;
+            if (campo.tipo === "multiselect_tratamento" || campo.tipo === "multiselect_tipo_ferida") {
+                efeito[campo.chave] = Array.from(wrapper.querySelectorAll(".efmed-check:checked")).map(cb => cb.value);
+            } else if (campo.tipo === "numero") {
+                efeito[campo.chave] = Number(wrapper.querySelector(".efmed-numero").value) || 0;
+            } else if (campo.tipo === "lista_modificadores") {
+                const mods = [];
+                wrapper.querySelectorAll(".efmed-mod-row").forEach(modRow => {
+                    const alvo = modRow.querySelector(".efmed-mod-alvo").value;
+                    const valor = Number(modRow.querySelector(".efmed-mod-valor").value) || 0;
+                    if (alvo && valor !== 0) mods.push({ alvo, valor });
+                });
+                efeito[campo.chave] = mods;
+            }
+        });
+        lista.push(efeito);
+    });
+    return lista;
+}
+
+function configurarEfeitosMedicosGenerico() {
+    el.modalAddEfeitoMedico.addEventListener("click", () => adicionarLinhaEfeitoMedico(null));
 }
 
 function lerModificacoesArmaDoModal() {
@@ -15700,6 +16074,11 @@ async function salvarItemDoModal(id) {
     // existente (senão editar peso/descrição, por exemplo, reativaria
     // sem querer um item que o jogador tinha desligado).
     const modificadoresItem = lerModificadoresDoModal();
+    // Efeitos de Equipamento Médico (Fase 3-4 do plano-efeitos-
+    // equipamentos-medicos.txt) — só populado quando a tag é
+    // "equipamento_medico"; qualquer outra tag grava array vazio (item
+    // sem efeito mecânico próprio continua salvando normalmente).
+    const efeitosMedicosItem = tag === "equipamento_medico" ? lerEfeitosMedicosDoModal() : [];
     // Item NOVO com modificador estruturado nasce DESLIGADO (precisa do
     // botão "Ativar" — ver criarLiItem) — exceto droga, que não usa esse
     // botão (o efeito dela só entra ao ser consumida, ver consumirDroga;
@@ -15708,6 +16087,7 @@ async function salvarItemDoModal(id) {
         nome,
         descricao: el.modalDescricao.value.trim(),
         modificadores: modificadoresItem,
+        efeitosMedicos: efeitosMedicosItem,
         ativo: existenteItem.ativo ?? (modificadoresItem.length && tag !== "droga" ? false : true),
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
@@ -15917,6 +16297,11 @@ async function salvarItemBancoDoModal(id) {
         nome,
         descricao: el.modalDescricao.value.trim(),
         modificadores: lerModificadoresDoModal(),
+        // Efeitos de Equipamento Médico (Fase 3 do plano-efeitos-
+        // equipamentos-medicos.txt) — molde do Banco Global; item
+        // copiado dele pra uma ficha já nasce com os efeitos prontos
+        // (ver autopreencherItemDoBanco/configurarAutocompleteItemBanco).
+        efeitosMedicos: tag === "equipamento_medico" ? lerEfeitosMedicosDoModal() : [],
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         limitarRolagemPorNivel: tagPermiteLimiteRolagemPorNivel(tag) ? !!el.modalLimitarRolagem.checked : false,
@@ -17355,6 +17740,116 @@ async function aplicarDanoUsoImplanteGodmode(itemId, nomeImplante, dano) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Efeitos de equipamento médico aplicados ao tratamento de ferida
+// (Fases 4 e 7 do plano de efeitos de equipamentos médicos —
+// plano-efeitos-equipamentos-medicos.txt). Olha pros 4 tipos que miram
+// um teste de tratamento específico (bonus_teste_tratamento /
+// isenta_penalidade_item / reduz_dificuldade_tratamento /
+// sucesso_automatico_tratamento) E, se `tipoFerida` for passado, pelo
+// `fator_tempo_recuperacao` aplicável ao TIPO daquela ferida (Fase 7 —
+// esse aqui não tem `tratamentos[]`, tem `tiposFerida[]`, por isso é
+// checado à parte dos outros 4) — os tipos de infecção e de uso direto
+// são despachados em outros pontos do código (Fase 5 / abrirModalTestar
+// InfeccaoFerida e Fase 6 / usarEquipamentoMedico).
+// ---------------------------------------------------------------------
+
+// Resume os efeitos médicos de UM item que se aplicam à ação de
+// tratamento `acao` — soma dos bônus, soma das reduções de
+// dificuldade, se algum efeito isenta a penalidade de item (isenção
+// explícita OU redução de dificuldade, que segundo o catálogo já conta
+// como item adequado), se algum efeito dá sucesso automático, e (se
+// `tipoFerida` foi passado) o efeito de fator de tempo de recuperação
+// aplicável a esse tipo, se houver.
+function efeitosMedicosParaTratamento(item, acao, tipoFerida) {
+    const efeitosMedicos = Array.isArray(item.efeitosMedicos) ? item.efeitosMedicos : [];
+    const lista = efeitosMedicos.filter(ef => ef && Array.isArray(ef.tratamentos) && ef.tratamentos.includes(acao));
+    const bonus = lista
+        .filter(ef => ef.tipo === "bonus_teste_tratamento")
+        .reduce((acc, ef) => acc + (Number(ef.valor) || 0), 0);
+    const reducaoDificuldade = lista
+        .filter(ef => ef.tipo === "reduz_dificuldade_tratamento")
+        .reduce((acc, ef) => acc + (Number(ef.valor) || 0), 0);
+    const isentaPenalidade = lista.some(ef => ef.tipo === "isenta_penalidade_item" || ef.tipo === "reduz_dificuldade_tratamento");
+    const sucessoAutomatico = lista.some(ef => ef.tipo === "sucesso_automatico_tratamento");
+    const fatorRecuperacao = tipoFerida
+        ? (efeitosMedicos.find(ef => ef && ef.tipo === "fator_tempo_recuperacao" && Array.isArray(ef.tiposFerida) && ef.tiposFerida.includes(tipoFerida)) || null)
+        : null;
+    // "Elegível" pro seletor do modal: tem algum dos 4 efeitos de
+    // tratamento OU só o fator de recuperação (ex.: Pomada Cicatrizante,
+    // que no manual não tem NENHUM bônus/isenção próprio — só acelera a
+    // cicatrização de quem já está sendo tratado com ela).
+    const elegivel = lista.length > 0 || !!fatorRecuperacao;
+    return { lista, bonus, reducaoDificuldade, isentaPenalidade, sucessoAutomatico, fatorRecuperacao, elegivel };
+}
+
+// Itens de equipamento médico do inventário de quem está tratando
+// (sempre fichaAtual/idAtivo — quem tem a ficha aberta nesta tela,
+// mesmo tratando outro jogador, ver comentário abaixo) que têm algum
+// efeito aplicável à ação de tratamento corrente (ou ao fator de
+// recuperação do tipo da ferida, se `tipoFerida` for passado).
+function itensMedicosParaTratamento(acao, tipoFerida) {
+    const inventario = fichaAtual.inventario || {};
+    return Object.entries(inventario)
+        .filter(([, item]) => item && item.tag === "equipamento_medico")
+        .map(([id, item]) => ({ id, item, efeitos: efeitosMedicosParaTratamento(item, acao, tipoFerida) }))
+        .filter(({ efeitos }) => efeitos.elegivel);
+}
+
+// Decrementa 1 unidade de "usos restantes" (o próprio campo
+// `quantidade` já usado por drogas/consumíveis — ver consumirDroga
+// acima) do item de equipamento médico usado num tratamento/teste
+// (Fase 4.4 / 6.3 do plano). Item com `quantidade: null` é permanente/
+// reutilizável (ex.: Tala de Imobilização, Pinça Cirúrgica) e não
+// decrementa nada.
+async function decrementarItemMedico(itemId) {
+    if (!itemId) return;
+    const item = fichaAtual.inventario && fichaAtual.inventario[itemId];
+    if (!item) return;
+    const quantidadeAtual = Number(item.quantidade);
+    if (!Number.isFinite(quantidadeAtual)) return;
+    const atualizacoes = {};
+    if (quantidadeAtual > 1) {
+        item.quantidade = quantidadeAtual - 1;
+        atualizacoes[`${caminhoBase()}/inventario/${itemId}/quantidade`] = item.quantidade;
+    } else {
+        delete fichaAtual.inventario[itemId];
+        atualizacoes[`${caminhoBase()}/inventario/${itemId}`] = null;
+    }
+    try {
+        await update(ref(db), atualizacoes);
+    } catch (e) {
+        toast("O item foi usado, mas não deu pra descontar a quantidade no inventário. Ajuste à mão.", "erro");
+    }
+}
+
+// Resume os efeitos médicos de UM item que se aplicam ao Teste de
+// Infecção (Fase 5 do plano de efeitos médicos) — reduz_dificuldade_
+// infeccao (soma dos valores) e/ou isenta_infeccao (isenta o teste
+// inteiro). Diferente de efeitosMedicosParaTratamento, esses dois
+// tipos não têm `tratamentos[]` — miram o Teste de Infecção como um
+// todo, não uma ação de tratamento específica.
+function efeitosMedicosParaInfeccao(item) {
+    const lista = (Array.isArray(item.efeitosMedicos) ? item.efeitosMedicos : [])
+        .filter(ef => ef && (ef.tipo === "reduz_dificuldade_infeccao" || ef.tipo === "isenta_infeccao"));
+    const reducaoDificuldade = lista
+        .filter(ef => ef.tipo === "reduz_dificuldade_infeccao")
+        .reduce((acc, ef) => acc + (Number(ef.valor) || 0), 0);
+    const isentaInfeccao = lista.some(ef => ef.tipo === "isenta_infeccao");
+    return { lista, reducaoDificuldade, isentaInfeccao };
+}
+
+// Itens de equipamento médico do inventário da ficha aberta na tela
+// (essa modal não tem seletor de paciente — ver comentário de
+// abrirModalTestarInfeccaoFerida) com algum efeito de infecção.
+function itensMedicosParaInfeccao() {
+    const inventario = fichaAtual.inventario || {};
+    return Object.entries(inventario)
+        .filter(([, item]) => item && item.tag === "equipamento_medico")
+        .map(([id, item]) => ({ id, item, efeitos: efeitosMedicosParaInfeccao(item) }))
+        .filter(({ efeitos }) => efeitos.lista.length > 0);
+}
+
 // Modal de tratamento — Etapa 3: só o próprio personagem se tratando,
 // então tratadorPericias/tratadorNome sempre vêm de fichaAtual (sem
 // seletor de paciente, que é a Etapa 4). Segue o mesmo padrão visual e
@@ -17365,7 +17860,9 @@ async function aplicarDanoUsoImplanteGodmode(itemId, nomeImplante, dano) {
 // Sem isso, assume que é a própria ficha aberta (Etapa 3 — tratar a si
 // mesmo). Quem ROLA o teste (perícias em tratadorPericias) é sempre
 // fichaAtual — a pessoa com a ficha aberta nesta tela — nunca o
-// paciente, mesmo tratando outro jogador.
+// paciente, mesmo tratando outro jogador. O item de equipamento médico
+// usado (Fase 4 do plano de efeitos médicos) segue a mesma regra: vem
+// SEMPRE do inventário de fichaAtual, nunca do paciente.
 function abrirModalTratarFerida(feridaId, acao, alvo) {
     const config = TRATAMENTOS_FERIDA[acao];
     if (!config) return;
@@ -17400,6 +17897,13 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
         ? `Suas perícias que servem pra isso: ${periciasComNivel.join(", ")}.`
         : `Você não tem nenhuma das perícias aceitas (${config.pericias.join(" / ")}) — a rolagem conta como nível 0 nelas.`;
 
+    // Itens de equipamento médico do SEU inventário (fichaAtual — quem
+    // está tratando) com algum efeito aplicável a essa ação — Fase 4 do
+    // plano de efeitos médicos — OU um fator de tempo de recuperação
+    // aplicável ao TIPO desta ferida — Fase 7. Só monta o seletor se
+    // houver algum.
+    const itensMedicos = itensMedicosParaTratamento(acao, ferida.tipo);
+
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">${escapeHtml(config.label)}${tratandoOutro ? ` — ${escapeHtml(nomeAlvo)}` : ""} — ${tituloTipoFerida(ferida.tipo)}${ferida.local ? ` (${tituloLocalFerida(ferida.local)})` : ""}</span>
@@ -17407,6 +17911,18 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
         </div>
         <p class="hint">Itens sugeridos pelo manual: ${escapeHtml(config.itensSugeridos)}.</p>
         <p class="hint">${escapeHtml(infoPericias)}</p>
+        ${itensMedicos.length ? `
+        <label style="display:block;margin-top:10px;">Usar item do inventário
+            <select id="ferida-item-medico" style="width:100%;">
+                <option value="">— nenhum, preencher à mão —</option>
+                ${itensMedicos.map(({ id, item }) => {
+                    const usos = Number.isFinite(Number(item.quantidade)) ? ` (${item.quantidade}x)` : "";
+                    return `<option value="${id}">${escapeHtml(item.nome)}${usos}</option>`;
+                }).join("")}
+            </select>
+            <span class="hint" style="display:block;">Escolher um item preenche os campos abaixo sozinho (item adequado, dificuldade, bônus) — tudo continua editável à mão depois. Ao confirmar (se o tratamento tiver sucesso), desconta 1 uso do item (se ele tiver número limitado de usos) e aplica o fator de tempo de recuperação dele, se tiver.</span>
+        </label>
+        ` : ""}
         <label style="display:block;margin-top:10px;">Item usado
             <select id="ferida-situacao-item" style="width:100%;">
                 <option value="adequado">Item adequado (sem penalidade)</option>
@@ -17429,26 +17945,124 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
     `;
     const fechar = () => modal.remove();
     modal.querySelector(".combate-fechar").addEventListener("click", fechar);
-    modal.querySelector("#btn-rolar-tratamento-ferida").addEventListener("click", async () => {
-        const situacaoItem = modal.querySelector("#ferida-situacao-item").value;
-        const dificuldadeEscolhida = Number(modal.querySelector("#ferida-dificuldade").value) || config.dificuldadeMin;
-        const modificadorExtra = Number(modal.querySelector("#ferida-modificador-extra").value) || 0;
+
+    // Select de item médico (só existe se itensMedicos.length): ao
+    // escolher, preenche sozinho item usado / dificuldade / bônus
+    // específico (4.2 do plano) e troca o texto do botão principal
+    // quando o item dá sucesso automático (4.3 — nesse caso o clique no
+    // botão não rola nada, só aplica o sucesso direto).
+    const selectItemMedico = modal.querySelector("#ferida-item-medico");
+    const btnRolar = modal.querySelector("#btn-rolar-tratamento-ferida");
+    const campoSituacaoItem = modal.querySelector("#ferida-situacao-item");
+    const campoDificuldade = modal.querySelector("#ferida-dificuldade");
+    const campoModificadorExtra = modal.querySelector("#ferida-modificador-extra");
+
+    function itemMedicoSelecionado() {
+        if (!selectItemMedico || !selectItemMedico.value) return null;
+        return itensMedicos.find(({ id }) => id === selectItemMedico.value) || null;
+    }
+
+    function aplicarItemMedicoNosCampos() {
+        const escolhido = itemMedicoSelecionado();
+        if (!escolhido) {
+            btnRolar.textContent = "Rolar tratamento";
+            return;
+        }
+        const { item, efeitos } = escolhido;
+        if (efeitos.isentaPenalidade) campoSituacaoItem.value = "adequado";
+        if (efeitos.reducaoDificuldade) {
+            const base = Number(campoDificuldade.value) || config.dificuldadeMin;
+            campoDificuldade.value = Math.min(config.dificuldadeMax, Math.max(config.dificuldadeMin, base - efeitos.reducaoDificuldade));
+        }
+        if (efeitos.bonus) campoModificadorExtra.value = Number(campoModificadorExtra.value || 0) + efeitos.bonus;
+        btnRolar.textContent = efeitos.sucessoAutomatico
+            ? `Usar ${item.nome} (sucesso automático, sem rolar)`
+            : "Rolar tratamento";
+    }
+    if (selectItemMedico) {
+        selectItemMedico.addEventListener("change", aplicarItemMedicoNosCampos);
+    }
+
+    btnRolar.addEventListener("click", async () => {
+        const escolhido = itemMedicoSelecionado();
+        const situacaoItem = campoSituacaoItem.value;
+        const dificuldadeEscolhida = Number(campoDificuldade.value) || config.dificuldadeMin;
+        const modificadorExtra = Number(campoModificadorExtra.value) || 0;
         const emHospital = modal.querySelector("#ferida-em-hospital").checked;
         const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
         try {
             const resultado = await tratarFerida(fichaAlvoId, feridaId, {
                 acao, tratadorPericias: fichaAtual.pericias, tratadorNome: nomeTratador,
-                situacaoItem, dificuldadeEscolhida, modificadorExtra, emHospital
+                situacaoItem, dificuldadeEscolhida, modificadorExtra, emHospital,
+                sucessoAutomaticoItem: !!(escolhido && escolhido.efeitos.sucessoAutomatico),
+                nomeItemUsado: escolhido ? escolhido.item.nome : ""
             });
-            await registrarRolagem({
-                quem: tratandoOutro ? `${nomeTratador} (tratando ${nomeAlvo})` : nomeTratador,
-                modificador: resultado.nivelPericia + resultado.penalidadeItem + resultado.modificadorExtra,
-                resultado: resultado.resultado, detalhe: resultado.detalhe
-            });
+            // Sucesso automático por item não passa por rolagem — não
+            // tem resultado numérico pra registrar como rolagem no log
+            // de dados, só o toast/histórico (mesmo padrão do Godmode).
+            if (!resultado.sucessoAutomaticoItem) {
+                await registrarRolagem({
+                    quem: tratandoOutro ? `${nomeTratador} (tratando ${nomeAlvo})` : nomeTratador,
+                    modificador: resultado.nivelPericia + resultado.penalidadeItem + resultado.modificadorExtra,
+                    resultado: resultado.resultado, detalhe: resultado.detalhe
+                });
+            }
+            if (escolhido) await decrementarItemMedico(escolhido.id);
+            // Fase 7 do plano de efeitos médicos: tratamento bem-sucedido
+            // com um item que tem fator de tempo de recuperação aplicável
+            // ao tipo desta ferida — grava no PACIENTE (fichaAlvoId, não
+            // em quem tratou), pra contar na próxima recuperação de PV
+            // dele (ver aplicarFatoresRecuperacaoItens em regras.js).
+            // Chave inclui id do item + timestamp pra não sobrescrever um
+            // uso anterior do mesmo item (ex.: duas feridas tratadas com
+            // a mesma Pomada Cicatrizante).
+            let notaFatorRecuperacao = "";
+            if (resultado.sucesso && escolhido && escolhido.efeitos.fatorRecuperacao) {
+                const fatorEf = escolhido.efeitos.fatorRecuperacao;
+                const chaveFator = `${escolhido.id}_${Date.now()}`;
+                try {
+                    await update(ref(db), {
+                        [caminhoMesa(`fichas/${fichaAlvoId}/dados/fatoresRecuperacaoItens/${chaveFator}`)]: {
+                            origem: escolhido.item.nome,
+                            fator: Number(fatorEf.fator) || 1,
+                            criadoEm: Date.now()
+                        }
+                    });
+                    notaFatorRecuperacao = ` (${escolhido.item.nome} vai alterar o tempo da próxima recuperação de PV — fator ${fatorEf.fator})`;
+                } catch (e) {
+                    console.error(e);
+                }
+            }
             const notaHospital = resultado.tratamentoHospitalRegistrado
                 ? " (tratamento em hospital registrado — vai descontar 1/10 da próxima recuperação de PV dessa ficha)"
                 : "";
-            toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital, resultado.sucesso ? undefined : "erro");
+            // Fase 8 do plano de efeitos médicos (Torniquete Tático,
+            // limitação registrada como "sem automação" — só um
+            // LEMBRETE pro Mestre, nunca dano automático): detecta pelo
+            // NOME do item (normalizado, sem acento/maiúscula — não tem
+            // efeito de catálogo dedicado pra isso) contendo "torniquete"
+            // usado com sucesso em Estancar Sangramento. Grava no
+            // PACIENTE (fichaAlvoId) o instante (em horas contínuas de
+            // calendário) em que foi aplicado — ver avisoTorniqueteDevido
+            // em mestre.js, checado a cada Passar o Dia/Timeskip.
+            let notaTorniquete = "";
+            if (resultado.sucesso && acao === "estancar_sangramento" && escolhido
+                && normalizarTextoBusca(escolhido.item.nome).includes("torniquete")
+                && calendarioAtual && calendarioAtual.diaIndice !== undefined && calendarioAtual.diaIndice !== null) {
+                const horasAgoraTorniquete = horasTotaisCalendario(calendarioAtual.diaIndice, calendarioAtual.hora);
+                try {
+                    await update(ref(db), {
+                        [caminhoMesa(`fichas/${fichaAlvoId}/dados/torniquete`)]: {
+                            ativoDesde: horasAgoraTorniquete, feridaId, avisado: false,
+                            itemNome: escolhido.item.nome
+                        }
+                    });
+                    notaTorniquete = ` (torniquete aplicado — o Mestre recebe um lembrete se passar 1h de jogo sem removê-lo)`;
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+            toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital + notaFatorRecuperacao + notaTorniquete, resultado.sucesso ? undefined : "erro");
             fechar();
         } catch (e) {
             toast(e.message || "Falha ao tratar a ferida.", "erro");
@@ -17510,6 +18124,11 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
     // precisar esperar o round-trip do Firebase.
     const basePermanenteInfeccao = somaAtual - somaOcasionaisJaLigados;
 
+    // Itens de equipamento médico com efeito de infecção (Fase 5 do
+    // plano de efeitos médicos) — reduz dificuldade e/ou isenta o teste
+    // inteiro (ex.: Soro Fisiológico, Cicatrizador Dérmico).
+    const itensMedicosInfeccao = itensMedicosParaInfeccao();
+
     let modal = document.getElementById("modal-testar-infeccao-ferida");
     if (!modal) {
         modal = document.createElement("div");
@@ -17536,6 +18155,18 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
             <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
         </div>
         <p class="hint">Manual: dificuldade 18 fixa pra tratamento malfeito/ambiente sujo (não isolar o ferimento, mãos/equipamento não esterilizados); ${DIFICULDADE_INFECCAO_MINIMA} a ${DIFICULDADE_INFECCAO_MAXIMA} pra ferimento profundo/grave, mesmo com tratamento adequado — esse teste se repete uma vez por cena até receber tratamento médico. Itens como Soro Fisiológico reduzem a dificuldade em -2.</p>
+        ${itensMedicosInfeccao.length ? `
+        <label style="display:block;margin-top:10px;">Usar item do inventário
+            <select id="ferida-infeccao-item-medico" style="width:100%;">
+                <option value="">— nenhum, preencher à mão —</option>
+                ${itensMedicosInfeccao.map(({ id, item }) => {
+                    const usos = Number.isFinite(Number(item.quantidade)) ? ` (${item.quantidade}x)` : "";
+                    return `<option value="${id}">${escapeHtml(item.nome)}${usos}</option>`;
+                }).join("")}
+            </select>
+            <span class="hint" style="display:block;">Escolher um item soma a redução de dificuldade dele ao modificador abaixo, ou isenta o teste inteiro se o item isentar infecção. Ao confirmar, desconta 1 uso do item (se ele tiver número limitado de usos).</span>
+        </label>
+        ` : ""}
         <label style="display:block;margin-top:10px;">Dificuldade base (${DIFICULDADE_INFECCAO_MINIMA}-${DIFICULDADE_INFECCAO_MAXIMA})
             <input type="number" id="ferida-infeccao-dificuldade" value="${DIFICULDADE_INFECCAO_MINIMA}" min="1" style="width:100%;">
         </label>
@@ -17566,13 +18197,54 @@ function abrirModalTestarInfeccaoFerida(feridaId) {
         });
     });
 
-    modal.querySelector("#btn-rolar-teste-infeccao-ferida").addEventListener("click", async () => {
-        const dificuldadeBase = Number(modal.querySelector("#ferida-infeccao-dificuldade").value) || DIFICULDADE_INFECCAO_MINIMA;
-        const modificadorItens = Number(modal.querySelector("#ferida-infeccao-modificador").value) || 0;
+    // Select de item médico (só existe se itensMedicosInfeccao.length):
+    // ao escolher, soma a redução ao campo de modificador já preenchido
+    // e troca o texto do botão quando o item isenta o teste inteiro
+    // (Fase 5.1 — nesse caso o clique não rola nada, só marca resistido
+    // direto).
+    const selectItemInfeccao = modal.querySelector("#ferida-infeccao-item-medico");
+    const btnRolarInfeccao = modal.querySelector("#btn-rolar-teste-infeccao-ferida");
+    const campoDificuldadeInfeccao = modal.querySelector("#ferida-infeccao-dificuldade");
+
+    function itemInfeccaoSelecionado() {
+        if (!selectItemInfeccao || !selectItemInfeccao.value) return null;
+        return itensMedicosInfeccao.find(({ id }) => id === selectItemInfeccao.value) || null;
+    }
+
+    if (selectItemInfeccao) {
+        selectItemInfeccao.addEventListener("change", () => {
+            const escolhido = itemInfeccaoSelecionado();
+            if (!escolhido) {
+                btnRolarInfeccao.textContent = "Rolar teste de Constituição";
+                return;
+            }
+            const { item, efeitos } = escolhido;
+            if (efeitos.reducaoDificuldade) {
+                campoModificador.value = Number(campoModificador.value || 0) + efeitos.reducaoDificuldade;
+            }
+            btnRolarInfeccao.textContent = efeitos.isentaInfeccao
+                ? `Usar ${item.nome} (isenta o teste, sem rolar)`
+                : "Rolar teste de Constituição";
+        });
+    }
+
+    btnRolarInfeccao.addEventListener("click", async () => {
+        const escolhido = itemInfeccaoSelecionado();
+        const dificuldadeBase = Number(campoDificuldadeInfeccao.value) || DIFICULDADE_INFECCAO_MINIMA;
+        const modificadorItens = Number(campoModificador.value) || 0;
         const origem = modal.querySelector("#ferida-infeccao-origem").value.trim() || "Complicação de ferimento";
         try {
-            const resultado = await testarInfeccaoFerida(fichaAtualId, feridaId, dificuldadeBase, modificadorItens, origem);
-            await registrarRolagem({ quem: nomeFicha, modificador: resultado.modConstituicao, resultado: resultado.resultado, detalhe: resultado.detalhe });
+            const resultado = (escolhido && escolhido.efeitos.isentaInfeccao)
+                ? await isentarInfeccaoFerida(fichaAtualId, feridaId, origem, escolhido.item.nome)
+                : await testarInfeccaoFerida(fichaAtualId, feridaId, dificuldadeBase, modificadorItens, origem);
+            // Isenção não passa por rolagem — não tem resultado numérico
+            // pra registrar como rolagem no log de dados, só o toast/
+            // histórico (mesmo padrão do sucesso automático de item em
+            // Tratar Ferida).
+            if (resultado.bruto !== null) {
+                await registrarRolagem({ quem: nomeFicha, modificador: resultado.modConstituicao, resultado: resultado.resultado, detalhe: resultado.detalhe });
+            }
+            if (escolhido) await decrementarItemMedico(escolhido.id);
             toast(resultado.detalhe, resultado.sucesso ? undefined : "erro");
             fechar();
         } catch (e) {
@@ -18801,6 +19473,43 @@ function configurarPopupTreinamento() {
 }
 
 // =====================================================================
+// AVISO DE TORNIQUETE (Mestre) — Fase 8 do plano de efeitos de
+// equipamentos médicos. Mesmo mecanismo de fila do popup de
+// treinamento acima (sinalizarAvisosTorniquete em mestre.js, chamada
+// dentro de passarODia/passarVariosDias), só que com um único botão de
+// "ok, descartar" — este aviso NUNCA aplica dano sozinho, é só um
+// lembrete pro Mestre decidir manualmente o que fazer na cena.
+// =====================================================================
+
+function configurarAvisoTorniquete() {
+    if (!isMestre || !el.modalAvisoTorniquete) return;
+    let filaAvisos = [];
+
+    ouvirAvisoTorniquete((avisos) => {
+        filaAvisos = avisos;
+        if (avisos.length && !el.modalAvisoTorniquete.classList.contains("active")) {
+            mostrarProximoAvisoTorniquete();
+        }
+    });
+
+    function mostrarProximoAvisoTorniquete() {
+        if (!filaAvisos.length) { el.modalAvisoTorniquete.classList.remove("active"); return; }
+        const aviso = filaAvisos[0];
+        el.avisoTorniqueteTexto.innerText = `${aviso.nomeFicha} está com "${aviso.itemNome}" aplicado há mais de 1h de jogo — risco de dano permanente ao membro (manual). Decida manualmente o que fazer na cena; nada é aplicado sozinho.`;
+        el.modalAvisoTorniquete.dataset.avisoId = aviso.id;
+        el.modalAvisoTorniquete.classList.add("active");
+    }
+
+    el.avisoTorniqueteOk.addEventListener("click", async () => {
+        const avisoId = el.modalAvisoTorniquete.dataset.avisoId;
+        await descartarAvisoTorniquete(avisoId);
+        filaAvisos = filaAvisos.filter(a => a.id !== avisoId);
+        el.modalAvisoTorniquete.classList.remove("active");
+        setTimeout(mostrarProximoAvisoTorniquete, 300);
+    });
+}
+
+// =====================================================================
 // PAINEL DO MESTRE
 // =====================================================================
 
@@ -18937,6 +19646,7 @@ const ROTULOS_ACAO_MESTRE = {
     xp: "Dar XP",
     dado: "Rolar Dado",
     dano: "Causar Dano",
+    condicao: "Causar Condição",
     "efeito-quimico": "Aplicar Efeito Químico",
     npcs: "NPCs",
     dashboard: "Fichas ativas",
@@ -19079,6 +19789,9 @@ function abrirAcaoMestre(acao, prefill = null) {
             selectTipo.dispatchEvent(new Event("change"));
             input.value = prefill.valor;
         }
+
+    } else if (acao === "condicao") {
+        montarPainelCondicaoMestre(corpo);
 
     } else if (acao === "efeito-quimico") {
         // Aplicar Efeito Químico (ver plano-quimicos-cenario.txt, Parte 5):
@@ -19295,6 +20008,264 @@ function criarSelectFichas(incluirNpcs, prefillValue = null) {
         });
     }
     return select;
+}
+
+// Igual a criarSelectFichas, mas SÓ de um lado (só fichas de jogador OU
+// só NPCs) — usado pelo painel "Causar Condição" (ver
+// montarPainelCondicaoMestre logo abaixo), que pede duas caixas
+// separadas em vez de uma única lista misturada: uma pra escolher um
+// jogador, outra pra escolher um NPC. O valor sempre sai no formato
+// "ficha::{id}" / "npc::{id}", igual ao select combinado, pra poder
+// reaproveitar o mesmo split(\"::\") no resto do código.
+function criarSelectPersonagemPorTipo(tipo, placeholder) {
+    const select = document.createElement("select");
+    select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
+    if (tipo === "ficha") {
+        Object.keys(todasAsFichasCache).forEach(id => {
+            const opt = document.createElement("option");
+            opt.value = `ficha::${id}`;
+            opt.innerText = nomeDeFicha(id);
+            select.appendChild(opt);
+        });
+    } else {
+        ouvirNpcs((npcs) => {
+            const valorAtual = select.value;
+            [...select.querySelectorAll("option")].slice(1).forEach(o => o.remove());
+            npcs.forEach(npc => {
+                const opt = document.createElement("option");
+                opt.value = `npc::${npc.id}`;
+                opt.innerText = npc.nome;
+                select.appendChild(opt);
+            });
+            select.value = valorAtual;
+        });
+    }
+    return select;
+}
+
+// Devolve o participanteId de combate correspondente a (tipo, refId),
+// criando a entrada em combateAtivo/participantes na hora se ainda não
+// existir (ver adicionarParticipanteCombate, mestre.js) — todas as
+// condições (Derrubado, Sangramento, Imobilizado etc.) vivem PRESAS a
+// um participante de combate (ver comentários de definirDerrubado e
+// companhia em mestre.js), então "Causar Condição" precisa disso pra
+// poder aplicar a condição em alguém que ainda não estava na luta, sem
+// obrigar o Mestre a abrir o Gerenciador de Combate antes. Não atrapalha
+// um combate já rolando: se a iniciativa já estiver em andamento, o
+// recém-chegado entra com sua própria rolagem de iniciativa (mesmo
+// comportamento de sempre).
+async function obterOuCriarParticipanteMestre(tipo, refId, nome) {
+    const existente = participanteIdPorAlvo(tipo, refId);
+    if (existente) return { id: existente, criadoAgora: false };
+    const resultado = await adicionarParticipanteCombate({ tipo, refId, nome });
+    return { id: resultado.id, criadoAgora: true };
+}
+
+// Catálogo das condições que o Mestre pode causar manualmente — cada
+// uma reaproveita a mesma função já usada no resto do sistema (ataques,
+// manobras de CQC/Jiu Jitsu etc.), só que disparada direto pelo Mestre
+// sem precisar de um teste/ataque em andamento. `remover` é omitido nas
+// que não têm uma forma manual de tirar por aqui (Sangramento se trata
+// pela aba Saúde — Estancar Sangramento/Suturar — não por um botão
+// solto no Gerenciador).
+const CONDICOES_MESTRE = [
+    { key: "derrubado", label: "Derrubado" },
+    { key: "sangramento", label: "Sangramento" },
+    { key: "imobilizado", label: "Imobilizado" },
+    { key: "desacordado", label: "Desacordado" },
+    { key: "agarrado", label: "Agarrado" },
+    { key: "fratura", label: "Ossos Quebrados (Fratura)" },
+    { key: "infeccao", label: "Infecção" }
+];
+
+function montarPainelCondicaoMestre(corpo) {
+    const aviso = document.createElement("p");
+    aviso.className = "hint";
+    aviso.innerText = "Escolha o personagem (jogador OU NPC) e a condição. Se ele ainda não estiver no Gerenciador de Combate, é adicionado automaticamente pra poder receber a condição.";
+    corpo.appendChild(aviso);
+
+    const linhaAlvo = document.createElement("div");
+    linhaAlvo.className = "modal-field";
+    const labelJogador = document.createElement("label");
+    labelJogador.innerText = "Jogador";
+    const selectJogador = criarSelectPersonagemPorTipo("ficha", "-- nenhum jogador --");
+    labelJogador.appendChild(selectJogador);
+    const labelNpc = document.createElement("label");
+    labelNpc.innerText = "NPC";
+    const selectNpc = criarSelectPersonagemPorTipo("npc", "-- nenhum NPC --");
+    labelNpc.appendChild(selectNpc);
+    linhaAlvo.append(labelJogador, labelNpc);
+    corpo.appendChild(linhaAlvo);
+
+    // Só um alvo por vez — escolher num select limpa o outro.
+    selectJogador.addEventListener("change", () => { if (selectJogador.value) selectNpc.value = ""; });
+    selectNpc.addEventListener("change", () => { if (selectNpc.value) selectJogador.value = ""; });
+
+    const selectCondicao = document.createElement("select");
+    const optPlaceholderCondicao = document.createElement("option");
+    optPlaceholderCondicao.value = ""; optPlaceholderCondicao.innerText = "Condição...";
+    optPlaceholderCondicao.disabled = true; optPlaceholderCondicao.selected = true;
+    selectCondicao.appendChild(optPlaceholderCondicao);
+    CONDICOES_MESTRE.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.key; opt.innerText = c.label;
+        selectCondicao.appendChild(opt);
+    });
+    corpo.appendChild(selectCondicao);
+
+    // Campos extras por condição — todos ficam escondidos até a condição
+    // correspondente ser escolhida (ver selectCondicao "change" abaixo).
+    const camposSangramento = document.createElement("div");
+    camposSangramento.className = "modal-field";
+    camposSangramento.style.display = "none";
+    const inputDanoSangramento = document.createElement("input");
+    inputDanoSangramento.type = "number"; inputDanoSangramento.placeholder = "Dano por turno"; inputDanoSangramento.value = 2;
+    const inputTurnosSangramento = document.createElement("input");
+    inputTurnosSangramento.type = "number"; inputTurnosSangramento.placeholder = "Nº de turnos"; inputTurnosSangramento.value = 3;
+    const selectLocalSangramento = document.createElement("select");
+    LOCAIS_MIRA.forEach(l => {
+        const opt = document.createElement("option");
+        opt.value = l.key === "padrao" ? "torso" : l.key;
+        opt.innerText = l.label;
+        selectLocalSangramento.appendChild(opt);
+    });
+    camposSangramento.append(inputDanoSangramento, inputTurnosSangramento, selectLocalSangramento);
+
+    const camposImobilizado = document.createElement("div");
+    camposImobilizado.className = "modal-field";
+    camposImobilizado.style.display = "none";
+    const inputDificuldadeEscape = document.createElement("input");
+    inputDificuldadeEscape.type = "number"; inputDificuldadeEscape.placeholder = "Dificuldade pra escapar (teste de Destreza)"; inputDificuldadeEscape.value = 15;
+    camposImobilizado.appendChild(inputDificuldadeEscape);
+
+    const camposFratura = document.createElement("div");
+    camposFratura.className = "modal-field";
+    camposFratura.style.display = "none";
+    const inputPontosPenalidade = document.createElement("input");
+    inputPontosPenalidade.type = "number"; inputPontosPenalidade.placeholder = "Pontos de penalidade em ações físicas"; inputPontosPenalidade.value = 1;
+    const labelMembroInferior = document.createElement("label");
+    labelMembroInferior.className = "godmode-toggle godmode-suboption";
+    const chkMembroInferior = document.createElement("input");
+    chkMembroInferior.type = "checkbox";
+    labelMembroInferior.append(chkMembroInferior, document.createTextNode(" É perna (impede correr; as duas quebradas = só se arrasta)"));
+    camposFratura.append(inputPontosPenalidade, labelMembroInferior);
+
+    const camposInfeccao = document.createElement("div");
+    camposInfeccao.className = "modal-field";
+    camposInfeccao.style.display = "none";
+    const inputOrigemInfeccao = document.createElement("input");
+    inputOrigemInfeccao.type = "text"; inputOrigemInfeccao.placeholder = "Origem (ex.: ferimento sujo, mordida)";
+    const labelInfeccaoGarantida = document.createElement("label");
+    labelInfeccaoGarantida.className = "godmode-toggle godmode-suboption";
+    const chkInfeccaoGarantida = document.createElement("input");
+    chkInfeccaoGarantida.type = "checkbox";
+    labelInfeccaoGarantida.append(chkInfeccaoGarantida, document.createTextNode(" Garantida (sem teste de Constituição)"));
+    camposInfeccao.append(inputOrigemInfeccao, labelInfeccaoGarantida);
+
+    corpo.append(camposSangramento, camposImobilizado, camposFratura, camposInfeccao);
+
+    const CAMPOS_POR_CONDICAO = {
+        sangramento: camposSangramento,
+        imobilizado: camposImobilizado,
+        fratura: camposFratura,
+        infeccao: camposInfeccao
+    };
+    selectCondicao.addEventListener("change", () => {
+        Object.values(CAMPOS_POR_CONDICAO).forEach(div => { div.style.display = "none"; });
+        const div = CAMPOS_POR_CONDICAO[selectCondicao.value];
+        if (div) div.style.display = "flex";
+    });
+
+    // Só as condições com uma forma clara de "desfazer" manualmente
+    // ganham o botão Remover (ver comentário do CONDICOES_MESTRE acima).
+    const CONDICOES_COM_REMOCAO = new Set(["derrubado", "imobilizado", "desacordado", "agarrado", "fratura", "infeccao"]);
+
+    function alvoEscolhido() {
+        const valor = selectJogador.value || selectNpc.value;
+        if (!valor) return null;
+        const [tipo, refId] = valor.split("::");
+        const selectAtivo = tipo === "ficha" ? selectJogador : selectNpc;
+        const nome = selectAtivo.selectedOptions[0].textContent;
+        return { tipo, refId, nome };
+    }
+
+    async function aplicar() {
+        const alvo = alvoEscolhido();
+        if (!alvo) { toast("Escolha um jogador ou um NPC.", "erro"); return; }
+        const condicao = selectCondicao.value;
+        if (!condicao) { toast("Escolha uma condição.", "erro"); return; }
+
+        const { id: pid, criadoAgora } = await obterOuCriarParticipanteMestre(alvo.tipo, alvo.refId, alvo.nome);
+        const labelCondicao = CONDICOES_MESTRE.find(c => c.key === condicao)?.label || condicao;
+
+        if (condicao === "derrubado") {
+            await definirDerrubado(pid, null, "Mestre");
+
+        } else if (condicao === "sangramento") {
+            const dano = Number(inputDanoSangramento.value) || 0;
+            const turnos = Number(inputTurnosSangramento.value) || 0;
+            if (dano <= 0 || turnos <= 0) { toast("Informe o dano por turno e o número de turnos.", "erro"); return; }
+            const resultado = await aplicarSangramento(pid, dano, turnos, "Causado manualmente pelo Mestre");
+            if (alvo.tipo === "ficha") {
+                await registrarFeridasDeSangramento(true, pid, alvo.refId, selectLocalSangramento.value, "Causado manualmente pelo Mestre", { sangramento: resultado });
+            }
+
+        } else if (condicao === "imobilizado") {
+            const dif = Number(inputDificuldadeEscape.value) || 15;
+            await definirImobilizado(pid, null, "Mestre", dif);
+
+        } else if (condicao === "desacordado") {
+            await definirDesacordado(pid, null, "Mestre");
+
+        } else if (condicao === "agarrado") {
+            await definirAgarrado(pid, null, "Mestre");
+
+        } else if (condicao === "fratura") {
+            const pontos = Number(inputPontosPenalidade.value) || 1;
+            await definirOssosQuebrados(pid, { pontosPenalidade: pontos, membroInferior: chkMembroInferior.checked, porNome: "Mestre" });
+
+        } else if (condicao === "infeccao") {
+            await aplicarInfeccao(pid, inputOrigemInfeccao.value.trim() || "Causado manualmente pelo Mestre", chkInfeccaoGarantida.checked);
+        }
+
+        const detalhe = `Mestre causou a condição "${labelCondicao}" em ${alvo.nome}.` + (criadoAgora ? " (adicionado ao Gerenciador de Combate agora)" : "");
+        await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: 0, detalhe });
+        toast(detalhe);
+    }
+
+    async function remover() {
+        const alvo = alvoEscolhido();
+        if (!alvo) { toast("Escolha um jogador ou um NPC.", "erro"); return; }
+        const condicao = selectCondicao.value;
+        if (!condicao) { toast("Escolha uma condição.", "erro"); return; }
+        if (!CONDICOES_COM_REMOCAO.has(condicao)) { toast("Essa condição não tem remoção direta por aqui.", "erro"); return; }
+
+        const pid = participanteIdPorAlvo(alvo.tipo, alvo.refId);
+        if (!pid) { toast(`${alvo.nome} não está no Gerenciador de Combate — nada pra remover.`, "erro"); return; }
+        const labelCondicao = CONDICOES_MESTRE.find(c => c.key === condicao)?.label || condicao;
+
+        if (condicao === "derrubado") await levantarDerrubado(pid);
+        else if (condicao === "imobilizado") await soltarImobilizado(pid);
+        else if (condicao === "desacordado") await soltarDesacordado(pid);
+        else if (condicao === "agarrado") await soltarAgarrado(pid);
+        else if (condicao === "fratura") await curarOssosQuebrados(pid);
+        else if (condicao === "infeccao") await curarInfeccao(pid);
+
+        const detalhe = `Mestre removeu a condição "${labelCondicao}" de ${alvo.nome}.`;
+        await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: 0, detalhe });
+        toast(detalhe);
+    }
+
+    const botoes = document.createElement("div");
+    botoes.className = "xp-multiplo-acoes-topo";
+    const btnAplicar = document.createElement("button");
+    btnAplicar.className = "btn-red"; btnAplicar.type = "button"; btnAplicar.innerText = "Causar condição";
+    btnAplicar.addEventListener("click", aplicar);
+    const btnRemover = document.createElement("button");
+    btnRemover.className = "btn-ghost"; btnRemover.type = "button"; btnRemover.innerText = "Remover condição";
+    btnRemover.addEventListener("click", remover);
+    botoes.append(btnAplicar, btnRemover);
+    corpo.appendChild(botoes);
 }
 
 function montarPainelNpcs(corpo) {

@@ -53,6 +53,25 @@ async function obterFerida(fichaId, feridaId) {
     return snap.exists() ? { id: feridaId, ...snap.val() } : null;
 }
 
+// ---------------------------------------------------------------------
+// Fase 8 do plano de efeitos médicos (Torniquete Tático) — limpa a
+// flag `dados.torniquete` (gravada por abrirModalTratarFerida em
+// ficha.js quando um item de nome "Torniquete..." é usado com sucesso
+// em Estancar Sangramento) sempre que ESSA MESMA ferida receber
+// qualquer outro tratamento bem-sucedido depois — sinal de que o
+// torniquete foi substituído por um cuidado de verdade (ou já não é
+// mais a solução em uso). Silencioso, não trava o tratamento se falhar.
+async function limparTorniqueteSeCorresponde(fichaId, feridaId) {
+    try {
+        const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados/torniquete`)));
+        if (snap.exists() && snap.val() && snap.val().feridaId === feridaId) {
+            await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { torniquete: null });
+        }
+    } catch (e) {
+        // não crítico o suficiente pra travar o tratamento
+    }
+}
+
 // Constituição efetiva (atributo + modificadores estruturados) de uma
 // ficha, direto pelo fichaId — versão sem depender de participante de
 // combate (diferente de obterConstituicaoParticipante em mestre.js, que
@@ -241,6 +260,25 @@ export async function testarInfeccaoFerida(fichaId, feridaId, dificuldade, modif
     return { dificuldade: dif, bruto, modConstituicao: constituicaoAlvo, resultado, sucesso, detalhe };
 }
 
+// Isenta o Teste de Infecção de uma ferida (Fase 5.1 do plano de
+// efeitos de equipamentos médicos — plano-efeitos-equipamentos-
+// medicos.txt): disparado quando o item escolhido tem o efeito
+// `isenta_infeccao` (ex.: Cicatrizador Dérmico). Pula a rolagem
+// inteira — a ferida é tratada como tendo resistido, mesmo resultado
+// final de um teste bem-sucedido (testarInfeccaoFerida acima), só que
+// sem chance nenhuma de infeccionar. Não precisa mexer em
+// infeccaoAtiva/infeccaoGarantida (já ficam false por padrão desde a
+// criação da ferida — ver criarFerida — e um teste resistido nunca as
+// alterava mesmo passando pelo caminho normal); só registra no
+// histórico, pro Mestre ver que aquele teste da cena já foi coberto.
+export async function isentarInfeccaoFerida(fichaId, feridaId, origem, nomeItemUsado) {
+    const ferida = await obterFerida(fichaId, feridaId);
+    if (!ferida) throw new Error("Ferida não encontrada.");
+    const detalhe = `Teste de Infecção isentado — item usado${nomeItemUsado ? ` (${nomeItemUsado})` : ""}. RESISTIU, não infeccionou.${origem ? ` (${origem})` : ""}`;
+    await registrarHistorico(fichaId, feridaId, { acao: "Testar Infecção", resultado: detalhe });
+    return { dificuldade: null, bruto: null, modConstituicao: null, resultado: null, sucesso: true, detalhe };
+}
+
 // ---------------------------------------------------------------------
 // Histórico (registro simples por ferida, mostrado na aba Saúde)
 // ---------------------------------------------------------------------
@@ -271,10 +309,18 @@ async function registrarHistorico(fichaId, feridaId, { acao, quem, resultado }) 
 // abrirModalTratarFerida em ficha.js — aqui a função só confia no que
 // recebeu) — quando true, pula rolagem, perícia e item por completo e
 // aplica o sucesso da ação direto, sem chance de complicação.
+// `sucessoAutomaticoItem`: mesmo atalho de sucesso automático do
+// Godmode acima, só que disparado pelo uso de um equipamento médico com
+// efeito `sucesso_automatico_tratamento` pra essa ação (Fase 4.3 do
+// plano-efeitos-equipamentos-medicos.txt) — qualquer jogador com o item
+// certo no inventário pode acionar, não só o Mestre. `nomeItemUsado`
+// (opcional) só entra na mensagem de log, pra deixar claro qual item
+// deu o sucesso automático.
 // ---------------------------------------------------------------------
 export async function tratarFerida(fichaId, feridaId, {
     acao, tratadorPericias, tratadorNome, situacaoItem = "nenhum",
-    dificuldadeEscolhida, modificadorExtra = 0, godmode = false, emHospital = false
+    dificuldadeEscolhida, modificadorExtra = 0, godmode = false, emHospital = false,
+    sucessoAutomaticoItem = false, nomeItemUsado = ""
 }) {
     const config = TRATAMENTOS_FERIDA[acao];
     if (!config) throw new Error(`Ação de tratamento desconhecida: ${acao}`);
@@ -288,12 +334,14 @@ export async function tratarFerida(fichaId, feridaId, {
         throw new Error("Esse ferimento ainda não pode ser suturado (projétil precisa ser removido antes).");
     }
 
-    // Godmode: sucesso automático, sem teste nem item — encerra a
-    // função aqui, antes de rolar dado, calcular perícia ou penalidade
-    // de item (nada disso importa nesse caminho).
-    if (godmode) {
+    // Godmode OU sucesso automático de item: sucesso automático, sem
+    // teste nem item pra escolher — encerra a função aqui, antes de
+    // rolar dado, calcular perícia ou penalidade de item (nada disso
+    // importa nesse caminho). Só muda a origem da mensagem de log.
+    if (godmode || sucessoAutomaticoItem) {
         // Cirurgia de Campo não tem efeito fixo de sucesso (efeitoSucesso
-        // é null) — mesmo em Godmode, não mexe no estado da ferida.
+        // é null) — mesmo em sucesso automático, não mexe no estado da
+        // ferida.
         const ehCirurgiaDeCampo = acao === "cirurgia_de_campo";
         const ehRemoverProjetil = acao === "remover_projetil";
         // Remover Projétil (sucesso): o projétil sai, mas o ferimento que
@@ -305,11 +353,14 @@ export async function tratarFerida(fichaId, feridaId, {
         const atualizacoesGodmode = ehCirurgiaDeCampo ? {}
             : ehRemoverProjetil ? { estado: "aberta", tipo: "corte" }
             : { estado: config.efeitoSucesso };
+        const origemAutomatica = sucessoAutomaticoItem
+            ? `sucesso automático — item usado${nomeItemUsado ? ` (${nomeItemUsado})` : ""}`
+            : "pelo Mestre (Godmode), sem teste nem item";
         const detalheGodmode = ehCirurgiaDeCampo
-            ? `${config.label}: sucesso automático pelo Mestre (Godmode) — aplique manualmente o que fizer sentido na cena (reverter coma, estabilizar, etc.).`
+            ? `${config.label}: sucesso automático ${sucessoAutomaticoItem ? `— item usado${nomeItemUsado ? ` (${nomeItemUsado})` : ""}` : "pelo Mestre (Godmode)"} — aplique manualmente o que fizer sentido na cena (reverter coma, estabilizar, etc.).`
             : ehRemoverProjetil
-                ? `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item. O projétil saiu — a ferida vira Corte/Perfuração (aberta), ainda precisa ser suturada.`
-                : `${config.label}: tratado automaticamente pelo Mestre (Godmode), sem teste nem item.`;
+                ? `${config.label}: tratado automaticamente ${origemAutomatica}. O projétil saiu — a ferida vira Corte/Perfuração (aberta), ainda precisa ser suturada.`
+                : `${config.label}: tratado automaticamente ${origemAutomatica}.`;
         if (Object.keys(atualizacoesGodmode).length) {
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesGodmode);
         }
@@ -325,10 +376,16 @@ export async function tratarFerida(fichaId, feridaId, {
         if (ferida.tipo === "sangramento" && (acao === "estancar_sangramento" || acao === "suturar_ferimento")) {
             await cancelarStatusSangramentoPorFerida(fichaId, feridaId);
         }
+        // Fase 8 (Torniquete Tático): qualquer tratamento bem-sucedido
+        // nesta MESMA ferida (inclusive por este caminho de sucesso
+        // automático/Godmode) encerra o lembrete de torniquete pendente,
+        // se houver — ver limparTorniqueteSeCorresponde acima.
+        await limparTorniqueteSeCorresponde(fichaId, feridaId);
         return {
             acao, dificuldade: null, bruto: null, nivelPericia: null, penalidadeItem: null, modificadorExtra: null,
             resultado: null, sucesso: true, complicacao: false, danoExtra: null, detalhe: detalheGodmode,
-            novoEstado: atualizacoesGodmode.estado || ferida.estado, godmode: true,
+            novoEstado: atualizacoesGodmode.estado || ferida.estado, godmode: !!godmode,
+            sucessoAutomaticoItem: !!sucessoAutomaticoItem,
             tratamentoHospitalRegistrado: emHospital
         };
     }
@@ -442,6 +499,11 @@ export async function tratarFerida(fichaId, feridaId, {
     if (sucesso && ferida.tipo === "sangramento" && (acao === "estancar_sangramento" || acao === "suturar_ferimento")) {
         await cancelarStatusSangramentoPorFerida(fichaId, feridaId);
     }
+    // Fase 8 (Torniquete Tático): idem ao caminho Godmode/sucesso
+    // automático acima — só limpa em tratamento bem-sucedido.
+    if (sucesso) {
+        await limparTorniqueteSeCorresponde(fichaId, feridaId);
+    }
 
     return {
         acao, dificuldade, bruto, nivelPericia, penalidadeItem, modificadorExtra,
@@ -483,10 +545,9 @@ const PRIORIDADE_ESTADO_VISUAL = ["amputado", "sangrando", "infeccionada", "aber
 // feridaAceitaSutura em regras.js). "Sangrando" aqui é especificamente
 // a ferida tipo "sangramento" ainda "aberta" (sangramento estancado ou
 // suturado já não sangra mais, mesmo que a ferida em si ainda exista).
-// `ferida.amputado` é o campo que a Fase 6 (ainda não implementada)
-// vai gravar quando o Mestre confirmar uma amputação — já é checado
-// aqui pra a silhueta refletir na hora que essa fase entrar, sem
-// precisar mexer nesta função de novo.
+// `ferida.amputado` é o campo gravado pela Fase 6 do plano (Mestre
+// confirma amputação via Ação Pendente "confirmar_amputacao", ver
+// mestre.js) — checado aqui pra a silhueta refletir o ícone ✂️.
 export function estadoVisualFerida(ferida) {
     if (!ferida) return "tratada";
     if (ferida.amputado) return "amputado";

@@ -435,22 +435,27 @@ export function horasTotaisCalendario(diaIndiceAtual, horaTexto) {
 }
 
 // ---------------------------------------------------------------------
-// Efeito ativo de droga consumida. Gravado em `ficha.efeitosDrogas` por
-// consumirDroga (ficha.js) ao clicar "Consumir" num item com tag
-// "droga" — a duração usada é a que estiver escrita na descrição do
-// próprio item (ver extrairDuracaoHorasDaDescricao acima); sem nenhum
-// padrão "Xh" no texto, cai no comportamento antigo de "até acabar o
-// dia em jogo em que foi consumida". O efeito guarda `horasExpira`
-// (timestamp contínuo em horas — ver horasTotaisCalendario) calculado
-// na hora do consumo; a partir daí só compara com a hora atual, sem
-// precisar de nenhuma limpeza/expiração ativa no banco.
+// Efeito ativo de droga consumida OU de equipamento médico usado
+// (`efeito_temporario_modificador`, Fase 6.2 do plano de efeitos de
+// equipamentos médicos — plano-efeitos-equipamentos-medicos.txt).
+// Gravado em `ficha.efeitosDrogas` por consumirDroga (ficha.js) ao
+// clicar "Consumir" num item com tag "droga", ou em `ficha.efeitosItens`
+// por usarEquipamentoMedico (ficha.js) ao clicar "Usar" num item com
+// tag "equipamento_medico" — mesmo formato, mesmo motor de expiração
+// (as duas listas são somadas juntas aqui). A duração usada é a que
+// estiver escrita na descrição do próprio item de droga (ver
+// extrairDuracaoHorasDaDescricao acima), ou o campo `horas` do efeito
+// médico escolhido no cadastro; sem nenhuma duração reconhecida, cai no
+// comportamento antigo de "até acabar o dia em jogo em que foi
+// consumido/usado". O efeito guarda `horasExpira` (timestamp contínuo
+// em horas — ver horasTotaisCalendario) calculado na hora do consumo;
+// a partir daí só compara com a hora atual, sem precisar de nenhuma
+// limpeza/expiração ativa no banco.
 // ---------------------------------------------------------------------
-export function calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtualTexto) {
-    const efeitos = ficha.efeitosDrogas || {};
-    const horasAtuais = horasTotaisCalendario(diaIndiceAtual, horaAtualTexto);
+function modificadoresDeMapaTemporario(mapa, diaIndiceAtual, horasAtuais) {
     const todos = [];
-    for (const chave of Object.keys(efeitos)) {
-        const efeito = efeitos[chave];
+    for (const chave of Object.keys(mapa || {})) {
+        const efeito = mapa[chave];
         if (!efeito) continue;
         // Fichas/efeitos gravados antes da duração em horas existir só
         // tinham `diaIndiceConsumido` — continuam valendo "até acabar o
@@ -459,13 +464,21 @@ export function calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtu
             ? horasAtuais < efeito.horasExpira
             : efeito.diaIndiceConsumido === diaIndiceAtual;
         if (!aindaAtivo) continue;
-        const origem = `Sob efeito: ${efeito.nome || "(droga)"}`;
+        const origem = `Sob efeito: ${efeito.nome || "(item)"}`;
         for (const m of (efeito.modificadores || [])) {
             if (!m.alvo || !m.valor) continue;
             todos.push({ alvo: m.alvo, valor: Number(m.valor) || 0, origem });
         }
     }
     return todos;
+}
+
+export function calcularModificadoresDrogasAtivas(ficha, diaIndiceAtual, horaAtualTexto) {
+    const horasAtuais = horasTotaisCalendario(diaIndiceAtual, horaAtualTexto);
+    return [
+        ...modificadoresDeMapaTemporario(ficha.efeitosDrogas, diaIndiceAtual, horasAtuais),
+        ...modificadoresDeMapaTemporario(ficha.efeitosItens, diaIndiceAtual, horasAtuais)
+    ];
 }
 
 export function somaModificadoresPara(alvo, modificadoresPlanos) {
@@ -2036,6 +2049,43 @@ export function aplicarReducaoTratamentoHospital(diasNecessarios, tratadoEmHospi
     const dias = Number(diasNecessarios) || 0;
     if (!tratadoEmHospital || dias <= 0) return dias;
     return Math.max(0, Math.floor(dias - dias / 10));
+}
+
+// ---------------------------------------------------------------------
+// Fatores de tempo de recuperação de item médico (Fase 7 do plano de
+// efeitos de equipamentos médicos — plano-efeitos-equipamentos-
+// medicos.txt, efeito `fator_tempo_recuperacao`: Pomada Cicatrizante,
+// Grampeador Cirúrgico, Bio-fita, Regenerador Ósseo). Gravado em
+// `fichaAtual.dados.fatoresRecuperacaoItens` (objeto chaveado por
+// pushKey — mesmo padrão de efeitosDrogas/efeitosItens — cada entrada
+// `{ origem, fator, criadoEm }`) quando um tratamento de ferida bem-
+// sucedido (Fase 4, tratarFerida em saude.js) usa um item com esse
+// efeito aplicável ao TIPO daquela ferida (`tiposFerida[]`). Encadeado
+// com `aplicarReducaoTratamentoHospital` acima no momento de
+// calcular/recalcular `recuperacaoPV` (ver renderizarRecuperacaoPV em
+// ficha.js e o tipo "iniciar_recuperacao_pv" em mestre.js) — os
+// fatores são MULTIPLICADOS entre si (fatorTotal = f1 × f2 × ...)
+// antes de multiplicar pelos dias, então vários efeitos simultâneos se
+// compõem em vez de só o último valer.
+//
+// Limitação conhecida (7.3 do plano): calcularTempoRecuperacaoPV
+// calcula em cima do PV TOTAL perdido pela ficha, não por ferida
+// individual — não existe (ainda) um timer de recuperação por ferida.
+// Um fator pensado pro manual pra UMA fratura específica (ex.:
+// Regenerador Ósseo) acaba valendo como modificador GERAL da próxima
+// recuperação de PV da ficha inteira, não algo isolado só daquela
+// fratura. Fica registrado aqui como pendência, não resolvido nesta
+// fase.
+// ---------------------------------------------------------------------
+export function aplicarFatoresRecuperacaoItens(diasNecessarios, fatoresRecuperacaoItens) {
+    const dias = Number(diasNecessarios) || 0;
+    if (dias <= 0) return dias;
+    const lista = fatoresRecuperacaoItens && typeof fatoresRecuperacaoItens === "object"
+        ? Object.values(fatoresRecuperacaoItens)
+        : [];
+    if (!lista.length) return dias;
+    const fatorTotal = lista.reduce((acc, f) => acc * ((f && Number(f.fator)) || 1), 1);
+    return Math.max(0, Math.floor(dias * fatorTotal));
 }
 
 // ---------------------------------------------------------------------

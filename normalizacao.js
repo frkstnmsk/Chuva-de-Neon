@@ -76,6 +76,25 @@ export function normalizarFicha(raw) {
             // mecânico; "acordar" é sempre manual (ver acordarDesmaioGodmode
             // em mestre.js).
             desmaiado: dados.desmaiado ?? false,
+            // Fase 6.2 do plano de efeitos de equipamentos médicos —
+            // plano-efeitos-equipamentos-medicos.txt: prazo (timestamp
+            // contínuo em horas, ver horasTotaisCalendario em regras.js)
+            // até quando a penalidade de Machucado/Muito Machucado fica
+            // ignorada por causa de um item usado (ex: Morfina, 1h) —
+            // gravado por usarEquipamentoMedico (ficha.js), lido em
+            // renderizarAtributos junto do sub-toggle de Godmode
+            // equivalente (ignorarPenalidadeSaudeAtivo).
+            ignorarPenalidadeSaudeAte: dados.ignorarPenalidadeSaudeAte ?? null,
+            // Fase 7 do plano de efeitos de equipamentos médicos —
+            // plano-efeitos-equipamentos-medicos.txt: fatores de tempo
+            // de recuperação de PV gravados por item usado num
+            // tratamento de ferida bem-sucedido (ver
+            // aplicarFatoresRecuperacaoItens em regras.js) — objeto
+            // chaveado por pushKey, cada entrada { origem, fator,
+            // criadoEm }, consumido/zerado quando o Mestre aprova o
+            // pedido de recuperação de PV (ver "iniciar_recuperacao_pv"
+            // em mestre.js).
+            fatoresRecuperacaoItens: dados.fatoresRecuperacaoItens || {},
             pvMaximoOverride: dados.pvMaximoOverride ?? null,
             energiaMaximoOverride: dados.energiaMaximoOverride ?? null
         },
@@ -97,6 +116,15 @@ export function normalizarFicha(raw) {
         // parte — é a Desvantagem "Vício", com um campo `substancia` e
         // `diaIndiceUltimoUso` (ver modal-campo-substancia-vicio).
         efeitosDrogas: raw.efeitosDrogas || {},
+        // Efeitos temporários de equipamento médico usado (Fase 6.2 do
+        // plano de efeitos de equipamentos médicos —
+        // plano-efeitos-equipamentos-medicos.txt): mesmo formato de
+        // efeitosDrogas acima ({ <chave>: { nome, diaIndiceConsumido,
+        // horasExpira, modificadores } }), irmão dele — gravado por
+        // usarEquipamentoMedico (ficha.js) quando o item tem o efeito
+        // `efeito_temporario_modificador` (ver calcularModificadoresDrogasAtivas
+        // em regras.js, que soma os dois juntos).
+        efeitosItens: raw.efeitosItens || {},
         // Receitas que este personagem CONHECE (diferente do Banco Global de (diferente do Banco Global de
         // Receitas em si, que é compartilhado entre todas as mesas — ver
         // receitas-globais.js). Cada entrada aqui só guarda a referência
@@ -642,6 +670,16 @@ export function normalizarInventario(lista) {
                     tipoEntregaLabel: it.quimico?.tipoEntregaLabel || "Área"
                   }
                 : (it.quimico || null),
+            // Efeitos de Equipamento Médico (tag "equipamento_medico" —
+            // ver plano-efeitos-equipamentos-medicos.txt, Fase 2). Mesmo
+            // padrão de `modificadores` acima (array simples, sem objeto
+            // default por tag como `quimico`/`implante` têm, já que aqui
+            // não existe nenhum sub-campo obrigatório fora da lista em
+            // si). Item sem esse campo ainda gravado (criado antes desse
+            // plano, ou de qualquer tag que não seja equipamento médico)
+            // normaliza pra array vazio — não quebra nada, só não tem
+            // efeito nenhum até alguém cadastrar um.
+            efeitosMedicos: Array.isArray(it.efeitosMedicos) ? it.efeitosMedicos : [],
             // Implante de Biomecânica (tag "biomecanica" — ver plano-
             // implantes-biomecanica.txt). Mesmo padrão de `it.quimico`
             // acima: só relevante pra essa tag, mas normaliza pro objeto
@@ -798,6 +836,8 @@ export function fichaVaziaPadrao(nomeExibicao) {
             coma: null,
             saiuDoComaPendente: false,
             desmaiado: false,
+            ignorarPenalidadeSaudeAte: null,
+            fatoresRecuperacaoItens: {},
             pvMaximoOverride: null,
             energiaMaximoOverride: null
         },
@@ -815,6 +855,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         especializacoes: {},
         fatosUniversais: {},
         efeitosDrogas: {},
+        efeitosItens: {},
         receitasConhecidas: {},
         criacao: {
             etapa: 1, funcaoEscolhida: "", escolhaAtributoFuncao: "", etapa1JaConfirmadaAntes: false,
