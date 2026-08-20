@@ -1350,6 +1350,22 @@ export function campoSaldoDoItem(saldoId) {
     return "saldoValor";
 }
 
+// Arredonda qualquer valor monetário (CN$) pra 1 casa decimal antes de
+// gravar (o jogo não usa mais fração de nota/moeda — no máximo 1
+// algarismo depois da vírgula). Sem isso, débitos/créditos sucessivos
+// em ponto flutuante (ex.: 2 - 1 deveria dar 1, mas se o saldo já
+// tinha um resto binário de uma operação anterior, o resultado vira
+// algo como 0.9999999999999998 ou 1.1111111111111112 — dízima
+// aparente por imprecisão de IEEE754, não por conta nenhuma do jogo)
+// — chamado em todo ponto que grava um novo saldo
+// (debitarSaldoFicha/creditarSaldoFicha em mestre.js, edição direta
+// do Mestre em ficha.js) pra que o arredondamento aconteça uma vez só,
+// na escrita, e o erro nunca se acumule de transação em transação.
+export function arredondarMoeda(valor) {
+    const n = Number(valor) || 0;
+    return Math.round(n * 10) / 10;
+}
+
 // Lista unificada de saldos pra exibir/escolher em qualquer lugar da
 // ficha (grid de Finanças, dropdown de "de onde sai" o gasto, origem do
 // pagamento semanal): junta os saldos normais (fichaAtual.saldos) com
@@ -1359,16 +1375,16 @@ export function campoSaldoDoItem(saldoId) {
 // idSaldoDeItem/campoSaldoDoItem); dinheiro físico continua como um só.
 export function todosOsSaldos(fichaAtual) {
     const saldosFicha = Object.entries(fichaAtual.saldos || {}).map(([id, s]) => ({
-        id, nome: s.nome, valor: Number(s.valor) || 0, fixo: !!s.fixo, deItem: false
+        id, nome: s.nome, valor: arredondarMoeda(s.valor), fixo: !!s.fixo, deItem: false
     }));
     const saldosItem = [];
     Object.entries(fichaAtual.inventario || {}).forEach(([itemId, it]) => {
         if (!it.ehSaldo) return;
         if (it.tag === "eletronico") {
-            saldosItem.push({ id: idSaldoDeItem(itemId, "notas"), nome: `${it.nome} (notas)`, valor: Number(it.saldoNotas) || 0, fixo: false, deItem: true, itemId });
-            saldosItem.push({ id: idSaldoDeItem(itemId, "moedas"), nome: `${it.nome} (moedas)`, valor: Number(it.saldoMoedas) || 0, fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId, "notas"), nome: `${it.nome} (notas)`, valor: arredondarMoeda(it.saldoNotas), fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId, "moedas"), nome: `${it.nome} (moedas)`, valor: arredondarMoeda(it.saldoMoedas), fixo: false, deItem: true, itemId });
         } else {
-            saldosItem.push({ id: idSaldoDeItem(itemId), nome: `${it.nome} (dinheiro físico)`, valor: Number(it.saldoValor) || 0, fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId), nome: `${it.nome} (dinheiro físico)`, valor: arredondarMoeda(it.saldoValor), fixo: false, deItem: true, itemId });
         }
     });
     return [...saldosFicha, ...saldosItem];

@@ -1646,6 +1646,109 @@ select.select-guardar-dentro {
     color: var(--neon-blue);
     background: rgba(14, 165, 233, 0.08);
 }
+.inventario-categoria-chip {
+    display: inline-flex;
+}
+.inventario-categoria-chip .inventario-categoria-btn {
+    border-radius: 4px 0 0 4px;
+}
+.inventario-categoria-excluir {
+    border: 1px solid rgba(255,255,255,0.15);
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    line-height: 1;
+    padding: 7px 9px;
+    cursor: pointer;
+}
+.inventario-categoria-excluir:hover {
+    color: #f87171;
+    border-color: #f87171;
+}
+/* ---------- Registro de Sessões ---------- */
+.sessoes-lista {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.sessoes-form {
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0 16px;
+    padding: 12px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+}
+.registro-sessao-card {
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+.registro-sessao-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+}
+.registro-sessao-card-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+.registro-sessao-titulo {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.registro-sessao-periodo {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+.registro-sessao-corpo {
+    display: none;
+    padding: 0 12px 12px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+.registro-sessao-corpo.aberto {
+    display: block;
+}
+.registro-sessao-descricao {
+    white-space: pre-wrap;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    margin: 10px 0;
+}
+.registro-sessao-acoes {
+    display: flex;
+    gap: 8px;
+}
+/* ---------- Finanças: saldos ---------- */
+.saldo-campo-linha {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.saldo-campo-linha input {
+    flex: 1;
+}
+.btn-saldo-excluir {
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    line-height: 1;
+    padding: 8px 9px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.btn-saldo-excluir:hover {
+    color: #f87171;
+    border-color: #f87171;
+}
 .categoria-bloco { margin-bottom: 18px; }
 .categoria-bloco-titulo {
     font-family: var(--font-display);

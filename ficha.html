@@ -134,7 +134,7 @@
     <div id="painel-info-topo" class="painel-info-topo panel">
         <div class="painel-info-topo-linha">
             <span class="badge" id="user-role">—</span>
-            <span class="badge" id="mesa-indicador" title="Mesa ativa nesta sessão">—</span>
+            <span class="badge" id="mesa-indicador" title="Mesa ativa nesta sessão — clique para ver o Registro de Sessões" style="cursor:pointer;">—</span>
             <span class="badge mestre" id="godmode-indicador" style="display:none;">Godmode ativo</span>
             <span id="sync-indicator" class="sync-indicator" title="Status de sincronização">●</span>
         </div>
@@ -693,6 +693,48 @@
         <h4>Subiu de Nível!</h4>
         <div id="levelup-corpo"></div>
         <div class="modal-btns" id="levelup-botoes"></div>
+    </div>
+</div>
+
+<!-- ===================== MODAL: REGISTRO DE SESSÕES =====================
+     Abre ao clicar no badge "Mesa: {mesaId}" no topo (#mesa-indicador).
+     Lista compartilhada por todos na mesa (calendario.js/sessoes.js
+     mesmo esquema); só o Mestre vê os controles de criar/editar/excluir
+     — ver configurarRegistroSessoes, ficha.js. -->
+<div class="modal-overlay" id="modal-sessoes">
+    <div class="modal-content modal-largo">
+        <div class="modal-header-flex">
+            <h4>Registro de Sessões</h4>
+            <button type="button" id="btn-fechar-sessoes" class="btn-ghost" title="Fechar">Fechar ✕</button>
+        </div>
+        <button type="button" id="btn-nova-sessao" class="btn-lime" style="display:none;">+ Nova sessão</button>
+        <div id="sessoes-form" class="sessoes-form" style="display:none;">
+            <div class="modal-field">
+                <label for="sessao-nome">Nome da sessão</label>
+                <input type="text" id="sessao-nome">
+            </div>
+            <div class="modal-field">
+                <label for="sessao-dia-inicio">Dia ingame — começou</label>
+                <input type="text" id="sessao-dia-inicio" placeholder="Ex: 29/10/2077">
+            </div>
+            <div class="modal-field">
+                <label for="sessao-dia-fim">Dia ingame — terminou</label>
+                <input type="text" id="sessao-dia-fim" placeholder="Ex: 30/10/2077">
+            </div>
+            <div class="modal-field">
+                <label for="sessao-descricao">Descrição</label>
+                <textarea id="sessao-descricao" rows="4"></textarea>
+            </div>
+            <div class="modal-field">
+                <label for="sessao-xp">XP da sessão</label>
+                <input type="number" id="sessao-xp" min="0" step="1" value="0">
+            </div>
+            <div class="modal-btns">
+                <button type="button" id="btn-salvar-sessao" class="btn-lime">Salvar</button>
+                <button type="button" id="btn-cancelar-sessao" class="btn-ghost">Cancelar</button>
+            </div>
+        </div>
+        <ul id="sessoes-lista" class="sessoes-lista"></ul>
     </div>
 </div>
 

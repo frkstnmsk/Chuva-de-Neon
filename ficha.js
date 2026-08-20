@@ -74,7 +74,8 @@ import {
     PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA,
     TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip,
     ZONAS_SILHUETA,
-    CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO
+    CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
+    arredondarMoeda
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js";
 import {
@@ -110,6 +111,7 @@ import {
     calcularAvancoDias, diasSemana, climas, registrarRolagem, ouvirLogDados,
     ouvirAvisoCustoVida
 } from "./calendario.js";
+import { ouvirSessoes, criarSessao, atualizarSessao, removerSessao } from "./sessoes.js";
 import {
     PADROES_DE_VIDA, custoSemanalPadraoDeVida, custoSemanalTotal, limiteRecuperacaoSemTratamento,
     ouvirTodasAsFichas, darXp, ouvirXpHistorico, ouvirGodmode, definirGodmode,
@@ -432,6 +434,18 @@ const el = {
     userRole: document.getElementById("user-role"),
     mesaIndicador: document.getElementById("mesa-indicador"),
     godmodeIndicador: document.getElementById("godmode-indicador"),
+    modalSessoes: document.getElementById("modal-sessoes"),
+    btnFecharSessoes: document.getElementById("btn-fechar-sessoes"),
+    btnNovaSessao: document.getElementById("btn-nova-sessao"),
+    sessoesForm: document.getElementById("sessoes-form"),
+    sessaoNome: document.getElementById("sessao-nome"),
+    sessaoDiaInicio: document.getElementById("sessao-dia-inicio"),
+    sessaoDiaFim: document.getElementById("sessao-dia-fim"),
+    sessaoDescricao: document.getElementById("sessao-descricao"),
+    sessaoXp: document.getElementById("sessao-xp"),
+    btnSalvarSessao: document.getElementById("btn-salvar-sessao"),
+    btnCancelarSessao: document.getElementById("btn-cancelar-sessao"),
+    sessoesLista: document.getElementById("sessoes-lista"),
     painelMestreSeletor: document.getElementById("painel-mestre-seletor"),
     selectFicha: document.getElementById("select-ficha"),
     selectNpcAtuar: document.getElementById("select-npc-atuar"),
@@ -919,6 +933,7 @@ async function init() {
     // normalmente, em vez de travar a inicialização inteira da página.
     await tentarOuAvisar("calendário inicial", () => garantirCalendarioInicial(isMestre));
     tentarOuAvisar("calendário (listener)", configurarCalendario);
+    tentarOuAvisar("registro de sessões", configurarRegistroSessoes);
     tentarOuAvisar("log de dados", configurarLogDados);
     tentarOuAvisar("aviso de custo de vida", configurarAvisoCustoVida);
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
@@ -1822,15 +1837,49 @@ function renderizarSaldos() {
         const domId = s.id.replace(/[^a-zA-Z0-9_-]/g, "_");
         const campo = document.createElement("div");
         campo.className = "campo";
+        // Só saldo customizado (fixo:false) e que não é a carteira embutida
+        // de um item (deItem — esse aí some junto com o item, não tem
+        // exclusão própria) ganha o botão de excluir. Os 3 saldos padrão
+        // de toda ficha nova (Dinheiro sujo em casa/limpo na conta/No
+        // bolso) são fixo:true e continuam intocáveis.
+        const podeExcluir = !s.fixo && !s.deItem;
         campo.innerHTML = `
             <label for="saldo-${domId}">${escapeHtml(s.nome)}</label>
-            <input type="number" id="saldo-${domId}" data-saldo-id="${s.id}">
+            <div class="saldo-campo-linha">
+                <input type="number" id="saldo-${domId}" data-saldo-id="${s.id}">
+                ${podeExcluir ? `<button type="button" class="btn-saldo-excluir" data-saldo-excluir-id="${s.id}" data-saldo-excluir-nome="${escapeHtml(s.nome)}" title="Excluir saldo \\"${escapeHtml(s.nome)}\\"">×</button>` : ""}
+            </div>
         `;
         const input = campo.querySelector("input");
-        if (document.activeElement !== input) input.value = s.valor ?? 0;
+        if (document.activeElement !== input) input.value = arredondarMoeda(s.valor) ?? 0;
         input.disabled = !isMestre;
         el.financasSaldosGrid.appendChild(campo);
     });
+    el.financasSaldosGrid.querySelectorAll(".btn-saldo-excluir").forEach(btn => {
+        btn.addEventListener("click", () => excluirSaldoCustomizado(btn.dataset.saldoExcluirId, btn.dataset.saldoExcluirNome));
+    });
+}
+
+// Exclui um saldo customizado (criado via "+ Novo saldo") — nunca os 3
+// fixos da ficha nem os embutidos em item (esses são removidos junto
+// com o item, não por aqui — ver podeExcluir em renderizarSaldos).
+// Trava a exclusão se ainda sobrar valor nele, pra dinheiro não
+// simplesmente desaparecer — pede pra zerar (gastar/mover pra outro
+// saldo) antes.
+async function excluirSaldoCustomizado(saldoId, saldoNome) {
+    if (!fichaAtual || !fichaAtualId || !saldoId) return;
+    const saldo = todosOsSaldos(fichaAtual).find(s => s.id === saldoId);
+    if (!saldo || saldo.fixo || saldo.deItem) return;
+    if (Number(saldo.valor) || 0) {
+        toast(`Zere o saldo "${saldoNome}" (gaste ou mova o dinheiro pra outro saldo) antes de excluí-lo.`, "erro");
+        return;
+    }
+    if (!confirm(`Excluir o saldo "${saldoNome}"? Essa ação não pode ser desfeita.`)) return;
+    if (!fichaAtual.saldos || !fichaAtual.saldos[saldoId]) return;
+    delete fichaAtual.saldos[saldoId];
+    await remove(ref(db, `${caminhoBase()}/saldos/${saldoId}`));
+    toast(`Saldo "${saldoNome}" excluído.`);
+    renderizarFinancas();
 }
 
 // Popula o dropdown "de onde sai" (gastar dinheiro) com os saldos
@@ -1873,7 +1922,7 @@ function configurarFinancas() {
     document.addEventListener("input", (e) => {
         const saldoId = e.target.dataset && e.target.dataset.saldoId;
         if (!saldoId || !fichaAtualId || !isMestre) return;
-        const valor = Number(e.target.value) || 0;
+        const valor = arredondarMoeda(Number(e.target.value) || 0);
         if (ehIdSaldoDeItem(saldoId)) {
             const itemId = idItemDoSaldo(saldoId);
             const campo = campoSaldoDoItem(saldoId);
@@ -7197,12 +7246,29 @@ function renderizarInventario(modificadoresPlanos) {
     const categorias = listaCategorias(fichaAtual);
     el.inventarioCategoriasNav.innerHTML = "";
     categorias.forEach(cat => {
+        const chip = document.createElement("span");
+        chip.className = "inventario-categoria-chip";
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "inventario-categoria-btn" + (cat.id === categoriaInventarioAtiva ? " active" : "");
         btn.innerText = cat.nome;
         btn.addEventListener("click", () => { categoriaInventarioAtiva = cat.id; renderizarInventario(modificadoresPlanos); });
-        el.inventarioCategoriasNav.appendChild(btn);
+        chip.appendChild(btn);
+        // Categorias fixas ("Levando consigo", "Em casa") não podem ser
+        // excluídas — só as customizadas (criadas pelo "+ Nova categoria").
+        if (!cat.fixa) {
+            const btnExcluir = document.createElement("button");
+            btnExcluir.type = "button";
+            btnExcluir.className = "inventario-categoria-excluir";
+            btnExcluir.title = `Excluir categoria "${cat.nome}"`;
+            btnExcluir.innerText = "×";
+            btnExcluir.addEventListener("click", (e) => {
+                e.stopPropagation();
+                excluirCategoriaInventario(cat.id, cat.nome);
+            });
+            chip.appendChild(btnExcluir);
+        }
+        el.inventarioCategoriasNav.appendChild(chip);
     });
 
     const itens = Object.entries(fichaAtual.inventario || {});
@@ -7241,6 +7307,29 @@ function renderizarInventario(modificadoresPlanos) {
     }
     bloco.appendChild(lista);
     el.inventarioListas.appendChild(bloco);
+}
+
+// Exclui uma categoria customizada de inventário (as fixas "Levando
+// consigo"/"Em casa" nunca chegam aqui — filtradas em renderizarInventario
+// pelo cat.fixa). Trava a exclusão se ainda houver item guardado nela,
+// pra não fazer item nenhum sumir/ficar órfão sem categoria — pede pra
+// mover ou remover os itens primeiro. Disponível pro jogador e pro
+// Mestre, mesma permissão de quem pode criar categoria ("+ Nova
+// categoria", configurarBotoesAdicionar).
+async function excluirCategoriaInventario(categoriaId, categoriaNome) {
+    if (!fichaAtual || !fichaAtualId) return;
+    const temItens = Object.values(fichaAtual.inventario || {}).some(it => it.categoria === categoriaId);
+    if (temItens) {
+        toast(`Mova ou remova os itens de "${categoriaNome}" antes de excluir essa categoria.`, "erro");
+        return;
+    }
+    if (!confirm(`Excluir a categoria "${categoriaNome}"? Essa ação não pode ser desfeita.`)) return;
+    if (!fichaAtual.categoriasInventario || !fichaAtual.categoriasInventario[categoriaId]) return;
+    delete fichaAtual.categoriasInventario[categoriaId];
+    await remove(ref(db, `${caminhoBase()}/categoriasInventario/${categoriaId}`));
+    if (categoriaInventarioAtiva === categoriaId) categoriaInventarioAtiva = "levando";
+    toast(`Categoria "${categoriaNome}" excluída.`);
+    renderizarInventario(modificadoresAtuais());
 }
 
 // Monta o <li> de um item do inventário (usado tanto pros itens de topo
@@ -7282,8 +7371,8 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     const classeLabel = it.classeProtecao ? ` · Classe de Proteção ${escapeHtml(rotuloClasseProtecao(it.classeProtecao))}` : "";
     const saldoLabel = it.ehSaldo
         ? (it.tag === "eletronico"
-            ? ` · Saldo: CN$ ${Number(it.saldoNotas) || 0} em notas + CN$ ${Number(it.saldoMoedas) || 0} em moedas`
-            : ` · Saldo: CN$ ${Number(it.saldoValor) || 0}`)
+            ? ` · Saldo: CN$ ${arredondarMoeda(it.saldoNotas)} em notas + CN$ ${arredondarMoeda(it.saldoMoedas)} em moedas`
+            : ` · Saldo: CN$ ${arredondarMoeda(it.saldoValor)}`)
         : "";
     const quantidadeLabel = (it.quantidade && it.quantidade > 1) ? ` (x${it.quantidade})` : "";
     const calibreLabel = it.calibre ? ` · Calibre ${escapeHtml(rotuloCalibre(it.calibre))}` : "";
@@ -11735,7 +11824,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais, c
     const hintRequisito = modal.querySelector("#receita-hint-requisito-engenharia");
     function atualizarAvisoRequisitoEngenharia() {
         if (!hintRequisito) return;
-        if (receitaExistente || !fichaAtual || (isMestre && godmodeAtivo)) { hintRequisito.innerText = ""; return; }
+        if (receitaExistente || !fichaAtual || isMestre) { hintRequisito.innerText = ""; return; }
         const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
         hintRequisito.innerText = requisito.ok ? "" : `⚠️ ${requisito.motivo}`;
         hintRequisito.classList.toggle("hint-alerta", !requisito.ok);
@@ -11891,10 +11980,14 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais, c
         // Requisito de Engenharia (só pra AUTORAR receita nova — editar
         // uma já existente é só corrigir texto, não re-desenhar o
         // esquema do zero; e só quando há uma ficha de personagem de
-        // verdade no contexto — Mestre mexendo direto na Biblioteca de
-        // Receitas sem ficha ativa, ou em godmode, ignora essa trava,
-        // mesmo padrão de atendeRequisitoPericia em salvarPericiaDoModal).
-        if (!receitaExistente && fichaAtual && !(isMestre && godmodeAtivo)) {
+        // verdade no contexto E é o próprio jogador fazendo isso —
+        // Mestre NUNCA é travado por essa exigência, nem precisa de
+        // Godmode ligado: ele pode adicionar à ficha do jogador uma
+        // receita comprada pronta (ex.: no Dark Net/BlackPrint) mesmo
+        // que a Engenharia ou a perícia vinculada do personagem ainda
+        // não cheguem no nível exigido pra "desenhar o esquema" do
+        // zero — ver pedido do usuário 2026-08-19).
+        if (!receitaExistente && fichaAtual && !isMestre) {
             const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
             if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
         }
@@ -16758,6 +16851,139 @@ function configurarTimeskip() {
             console.error(err);
             toast(`Falha ao aplicar o timeskip: ${err.message || err}`, "erro");
         }
+    });
+}
+
+// =====================================================================
+// REGISTRO DE SESSÕES — abre ao clicar no badge "Mesa: {mesaId}" no
+// topo (#mesa-indicador). Lista compartilhada por todos na mesa (igual
+// ao calendário/log de dados — ver sessoes.js); só o Mestre cria,
+// edita ou exclui uma entrada — jogador só lê (form/botões de
+// criar/editar/excluir ficam com display:none pra ele, e os listeners
+// de escrita nem são registrados).
+// ---------------------------------------------------------------------
+let sessoesCache = [];
+let sessaoEditandoId = null; // null = form fechado ou criando nova
+
+function configurarRegistroSessoes() {
+    if (el.mesaIndicador) {
+        el.mesaIndicador.addEventListener("click", () => {
+            el.modalSessoes.classList.add("active");
+            renderizarSessoes();
+        });
+    }
+    el.btnFecharSessoes.addEventListener("click", () => {
+        el.modalSessoes.classList.remove("active");
+        fecharFormSessao();
+    });
+
+    ouvirSessoes((lista) => {
+        sessoesCache = lista;
+        if (el.modalSessoes.classList.contains("active")) renderizarSessoes();
+    });
+
+    if (!isMestre) return; // Jogador: só o listener de leitura acima, sem escrita.
+
+    el.btnNovaSessao.style.display = "inline-block";
+    el.btnNovaSessao.addEventListener("click", () => abrirFormSessao(null));
+    el.btnCancelarSessao.addEventListener("click", fecharFormSessao);
+
+    el.btnSalvarSessao.addEventListener("click", async () => {
+        const nome = el.sessaoNome.value.trim();
+        if (!nome) { toast("Dê um nome pra sessão.", "erro"); return; }
+        const dados = {
+            nome,
+            diaInicio: el.sessaoDiaInicio.value.trim(),
+            diaFim: el.sessaoDiaFim.value.trim(),
+            descricao: el.sessaoDescricao.value,
+            xp: Math.max(0, Number(el.sessaoXp.value) || 0)
+        };
+        try {
+            if (sessaoEditandoId) {
+                await atualizarSessao(sessaoEditandoId, dados);
+                toast("Sessão atualizada.");
+            } else {
+                await criarSessao(dados);
+                toast("Sessão registrada.");
+            }
+            fecharFormSessao();
+        } catch (err) {
+            toast(`Não deu pra salvar a sessão: ${err.message}`, "erro");
+        }
+    });
+}
+
+function abrirFormSessao(sessao) {
+    sessaoEditandoId = sessao ? sessao.id : null;
+    el.sessaoNome.value = sessao ? sessao.nome || "" : "";
+    el.sessaoDiaInicio.value = sessao ? sessao.diaInicio || "" : "";
+    el.sessaoDiaFim.value = sessao ? sessao.diaFim || "" : "";
+    el.sessaoDescricao.value = sessao ? sessao.descricao || "" : "";
+    el.sessaoXp.value = sessao ? (sessao.xp ?? 0) : 0;
+    el.sessoesForm.style.display = "flex";
+}
+
+function fecharFormSessao() {
+    sessaoEditandoId = null;
+    el.sessoesForm.style.display = "none";
+}
+
+// Mais recente primeiro (criadoEm) — diaInicio é texto livre do Mestre,
+// não dá pra confiar numa ordenação cronológica só com ele.
+function renderizarSessoes() {
+    el.sessoesLista.innerHTML = "";
+    const lista = [...sessoesCache].sort((a, b) => (b.criadoEm || 0) - (a.criadoEm || 0));
+    if (!lista.length) {
+        el.sessoesLista.innerHTML = `<li class="entity-list-empty" style="cursor:default;">Nenhuma sessão registrada ainda.</li>`;
+        return;
+    }
+    lista.forEach((sessao) => {
+        const li = document.createElement("li");
+        li.className = "registro-sessao-card";
+
+        const header = document.createElement("div");
+        header.className = "registro-sessao-card-header";
+        const periodo = [sessao.diaInicio, sessao.diaFim].filter(Boolean).join(" → ");
+        header.innerHTML = `
+            <div class="registro-sessao-titulo">
+                <strong>${escapeHtml(sessao.nome || "Sessão sem nome")}</strong>
+                ${periodo ? `<span class="registro-sessao-periodo">${escapeHtml(periodo)}</span>` : ""}
+            </div>
+            <span class="mod-pill">XP ${Number(sessao.xp) || 0}</span>
+        `;
+        header.addEventListener("click", () => corpo.classList.toggle("aberto"));
+
+        const corpo = document.createElement("div");
+        corpo.className = "registro-sessao-corpo";
+        const descricaoHtml = escapeHtml(sessao.descricao || "Sem descrição.").replace(/\n/g, "<br>");
+        corpo.innerHTML = `<p class="registro-sessao-descricao">${descricaoHtml}</p>`;
+
+        if (isMestre) {
+            const acoes = document.createElement("div");
+            acoes.className = "registro-sessao-acoes";
+            const btnEditar = document.createElement("button");
+            btnEditar.type = "button";
+            btnEditar.className = "btn-ghost";
+            btnEditar.innerText = "Editar";
+            btnEditar.addEventListener("click", (e) => { e.stopPropagation(); abrirFormSessao(sessao); });
+            const btnExcluir = document.createElement("button");
+            btnExcluir.type = "button";
+            btnExcluir.className = "btn-ghost";
+            btnExcluir.innerText = "Excluir";
+            btnExcluir.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Excluir a sessão "${sessao.nome || "sem nome"}"? Essa ação não pode ser desfeita.`)) return;
+                await removerSessao(sessao.id);
+                toast("Sessão excluída.");
+            });
+            acoes.appendChild(btnEditar);
+            acoes.appendChild(btnExcluir);
+            corpo.appendChild(acoes);
+        }
+
+        li.appendChild(header);
+        li.appendChild(corpo);
+        el.sessoesLista.appendChild(li);
     });
 }
 
