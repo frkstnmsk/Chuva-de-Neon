@@ -1065,7 +1065,12 @@ export function dificuldadeInfeccao(dificuldadeBase = DIFICULDADE_INFECCAO_MINIM
 // positiva líquida → não fecha par → +0 (exemplo confirmado com o
 // jogador).
 //
-// Sites sem fórmula definida (Dm, Void, P2C, DarkArt, ou qualquer outro
+// P2C (regra da mesa): "status" — um número lançado só pelo Mestre
+// direto na credencial (não é uma pontuação que o jogador acumula
+// jogando, tipo P2K) e que vira o modificador da rolagem 1 pra 1, sem
+// fórmula nenhuma por cima (bônus = status, e só).
+//
+// Sites sem fórmula definida (Dm, Void, DarkArt, ou qualquer outro
 // fora da lista) devolvem 0 — não fica sem número, só não bonifica.
 export function modificadorDarknet(siteId, credencial = {}) {
     if (siteId === "p2k") {
@@ -1080,6 +1085,9 @@ export function modificadorDarknet(siteId, credencial = {}) {
         }).length;
         const liquido = Math.max(0, positivas - negativas);
         return Math.floor(liquido / 2);
+    }
+    if (siteId === "p2c") {
+        return Number(credencial.status) || 0;
     }
     return 0;
 }

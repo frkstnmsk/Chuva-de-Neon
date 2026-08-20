@@ -375,20 +375,27 @@ const CAMPOS_DARKNET_NOTAS = DARKNET_SITES.map(s => s.id);
 // Parte 2/regras.js:modificadorDarknet) — decide o que o card de cada
 // credencial mostra/edita: P2K usa pontuação numérica; Creators/
 // RabbitHole/BlackPrint usam avaliações em estrelas escritas pelo
-// Mestre. Os demais sites (Dm, Void, P2C, DarkArt) não têm fórmula —
-// card fica simples, sem badge de modificador nem botão de rolar.
+// Mestre; P2C usa "status" — número lançado só pelo Mestre, que vira o
+// bônus da rolagem 1 pra 1. Os demais sites (Dm, Void, DarkArt) não têm
+// fórmula — card fica simples, sem badge de modificador nem botão de
+// rolar.
 const DARKNET_SITES_PONTUACAO = ["p2k"];
 const DARKNET_SITES_AVALIACAO = ["creators", "rabbithole", "blackprint"];
+// "Status" da credencial em P2C — mesmo espírito de avaliações
+// (DARKNET_SITES_AVALIACAO), mas um número solto em vez de lista de
+// estrelas, e só o Mestre pode lançar/editar (ver criarCampoStatusDarknet
+// — jogador só lê, input fica desabilitado).
+const DARKNET_SITES_STATUS = ["p2c"];
 // Sites sem fórmula de modificador, mas com corpo expandido próprio
 // (plano-darknet-passo9.txt, Parte 2) — Dm mostra contatos salvos, Void
 // mostra stats de seguidores/posts/seguindo. Nenhum dos dois tem badge
 // de modificador nem botão de rolar, só o corpo expandido.
 const DARKNET_SITES_CONTATOS = ["dm"];
 const DARKNET_SITES_STATS = ["void"];
-// Creators e BlackPrint continuam usando avaliações em estrelas pro
-// modificador (DARKNET_SITES_AVALIACAO acima não muda) e ganham,
+// Creators, BlackPrint e P2C usam avaliações/status pro modificador
+// (DARKNET_SITES_AVALIACAO/_STATUS acima não mudam) e ganham,
 // adicionalmente, cadastro de itens à venda + sorteio por dificuldade.
-const DARKNET_SITES_ITENS = ["creators", "blackprint"];
+const DARKNET_SITES_ITENS = ["creators", "blackprint", "p2c"];
 const TITULOS_MODAL = {
     pericias: "Perícia", inventario: "Item de inventário", vantagens: "Vantagem",
     desvantagens: "Desvantagem", fatosUniversais: "Fato universal",
@@ -12248,7 +12255,7 @@ function criarCardCredencialDarknet(site, credencial) {
     card.className = "darknet-credencial-card";
     card.dataset.darknetCard = `${site.id}:${credencial.id}`;
 
-    const temFormula = DARKNET_SITES_PONTUACAO.includes(site.id) || DARKNET_SITES_AVALIACAO.includes(site.id);
+    const temFormula = DARKNET_SITES_PONTUACAO.includes(site.id) || DARKNET_SITES_AVALIACAO.includes(site.id) || DARKNET_SITES_STATUS.includes(site.id);
     // Corpo expandido também existe pra sites sem fórmula que têm
     // informação própria (Dm: contatos; Void: stats) e pros que ganham
     // itens à venda (Creators/BlackPrint) — só não têm badge/botão de
@@ -12330,6 +12337,10 @@ function criarCardCredencialDarknet(site, credencial) {
             corpo.appendChild(lista);
         }
 
+        if (DARKNET_SITES_STATUS.includes(site.id)) {
+            corpo.appendChild(criarCampoStatusDarknet(site, credencial));
+        }
+
         if (DARKNET_SITES_CONTATOS.includes(site.id)) {
             criarListaContatosDm(site, credencial, corpo);
         }
@@ -12378,6 +12389,13 @@ function atualizarCardCredencialDarknet(site, credencial) {
         if (lista) renderizarAvaliacoesDarknet(site, credencial, lista);
     }
 
+    if (DARKNET_SITES_STATUS.includes(site.id)) {
+        const inputStatus = document.querySelector(`input[data-darknet-credencial-status="${site.id}"][data-darknet-credencial-id="${credencial.id}"]`);
+        if (inputStatus && document.activeElement !== inputStatus) {
+            inputStatus.value = Number(credencial.status) || 0;
+        }
+    }
+
     if (DARKNET_SITES_CONTATOS.includes(site.id)) {
         const listaContatos = document.querySelector(`[data-darknet-contatos-lista="${site.id}:${credencial.id}"]`);
         if (listaContatos) renderizarContatosDm(site, credencial, listaContatos);
@@ -12424,7 +12442,38 @@ function resumoModificadorDarknet(siteId, credencial) {
         }).length;
         return `${avaliacoes.length} avaliação(ões): ${positivas} positiva(s), ${negativas} negativa(s) → ${mod >= 0 ? "+" : ""}${mod} na rolagem`;
     }
+    if (siteId === "p2c") {
+        const status = Number(credencial.status) || 0;
+        return `Status: ${status} → ${mod >= 0 ? "+" : ""}${mod} na rolagem (lançado só pelo Mestre)`;
+    }
     return "";
+}
+
+// Input numérico editável de status (só site "p2c" — ver
+// DARKNET_SITES_STATUS). Ao contrário da pontuação de P2K (editável
+// por jogador e Mestre), esse aqui é lançamento exclusivo do Mestre —
+// jogador só lê (input desabilitado, mesmo padrão do input de saldo em
+// renderizarSaldos).
+function criarCampoStatusDarknet(site, credencial) {
+    const linha = document.createElement("label");
+    linha.className = "darknet-credencial-pontuacao-linha";
+
+    const texto = document.createElement("span");
+    texto.textContent = "Status:";
+    linha.appendChild(texto);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "1";
+    input.className = "darknet-credencial-pontuacao-input";
+    input.dataset.darknetCredencialStatus = site.id;
+    input.dataset.darknetCredencialId = credencial.id;
+    input.value = Number(credencial.status) || 0;
+    input.disabled = !isMestre;
+    if (!isMestre) input.title = "Só o Mestre pode alterar o status.";
+    linha.appendChild(input);
+
+    return linha;
 }
 
 // Input numérico editável de pontuação (só site "p2k" — ver
@@ -12774,13 +12823,19 @@ function atualizarStatVoid(siteId, credencialId, campo, novoValor) {
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
 }
 
-// Corpo expandido de Creators/BlackPrint (plano-darknet-passo9.txt,
+// Corpo expandido de Creators/BlackPrint/P2C (plano-darknet-passo9.txt,
 // Parte 3 e 5): lista de itens à venda cadastrados (nome + valor em
-// CN$), editável por qualquer um com acesso à ficha (mesmo espírito sem
-// trava de isMestre dos contatos do Dm — cadastrar item não é um
-// "lançamento" do Mestre) + form pra adicionar item novo + remover por
-// item. Fica dentro do mesmo corpo expandido do card, ao lado do bloco
-// de avaliações em estrelas já existente (renderizarAvaliacoesDarknet).
+// CN$ — só em P2C também vem com um tipo de preço: único ou assinatura,
+// ver TIPOS_PRECO_ITEM_DARKNET), editável por qualquer um com acesso à
+// ficha (mesmo espírito sem trava de isMestre dos contatos do Dm —
+// cadastrar item não é um "lançamento" do Mestre) + form pra adicionar
+// item novo + remover por item. Fica dentro do mesmo corpo expandido do
+// card, ao lado do bloco de avaliações/status já existente
+// (renderizarAvaliacoesDarknet/criarCampoStatusDarknet).
+const TIPOS_PRECO_ITEM_DARKNET = [
+    { valor: "unico", rotulo: "Preço único" },
+    { valor: "assinatura", rotulo: "Assinatura" }
+];
 function renderizarItensVendaDarknet(site, credencial, container) {
     container.innerHTML = "";
     const itens = Array.isArray(credencial.itens) ? credencial.itens : [];
@@ -12830,6 +12885,19 @@ function criarItemVendaDarknet(site, credencial, item) {
     inputValor.dataset.darknetItemId = item.id;
     linha.appendChild(inputValor);
 
+    const selectTipo = document.createElement("select");
+    selectTipo.className = "darknet-item-venda-tipo";
+    selectTipo.dataset.darknetItemCampo = "tipo";
+    selectTipo.dataset.darknetItemSite = site.id;
+    selectTipo.dataset.darknetCredencialId = credencial.id;
+    selectTipo.dataset.darknetItemId = item.id;
+    selectTipo.innerHTML = TIPOS_PRECO_ITEM_DARKNET.map(t => `<option value="${t.valor}">${t.rotulo}</option>`).join("");
+    selectTipo.value = item.tipo === "assinatura" ? "assinatura" : "unico";
+    // Único/Assinatura é coisa de P2C (mercado de serviços/dados) — os
+    // demais sites com itens à venda (Creators, BlackPrint) vendem
+    // objeto físico, não têm esse conceito de cobrança recorrente.
+    if (site.id === "p2c") linha.appendChild(selectTipo);
+
     const remover = document.createElement("button");
     remover.type = "button";
     remover.className = "btn-ghost darknet-item-venda-remover";
@@ -12857,14 +12925,19 @@ function criarFormNovoItemVenda(site, credencial) {
     inputValor.placeholder = "CN$";
     form.appendChild(inputValor);
 
+    const selectTipo = document.createElement("select");
+    selectTipo.innerHTML = TIPOS_PRECO_ITEM_DARKNET.map(t => `<option value="${t.valor}">${t.rotulo}</option>`).join("");
+    if (site.id === "p2c") form.appendChild(selectTipo);
+
     const btnAdd = document.createElement("button");
     btnAdd.type = "button";
     btnAdd.className = "btn-ghost";
     btnAdd.textContent = "Adicionar item";
     btnAdd.addEventListener("click", () => {
-        adicionarItemVendaDarknet(site.id, credencial.id, inputNome.value.trim(), inputValor.value);
+        adicionarItemVendaDarknet(site.id, credencial.id, inputNome.value.trim(), inputValor.value, selectTipo.value);
         inputNome.value = "";
         inputValor.value = "";
+        selectTipo.value = "unico";
         inputNome.focus();
     });
     form.appendChild(btnAdd);
@@ -12873,15 +12946,22 @@ function criarFormNovoItemVenda(site, credencial) {
 }
 
 // Ignora clique com nome vazio — evita item sem identificação nenhuma
-// (valor 0 é aceitável, ex. item de graça/promoção).
-function adicionarItemVendaDarknet(siteId, credencialId, nome, valor) {
+// (valor 0 é aceitável, ex. item de graça/promoção). tipo: "unico"
+// (preço pago uma vez) ou "assinatura" (cobrança recorrente) — só
+// existe de fato pra P2C (ver criarItemVendaDarknet/criarFormNovoItemVenda,
+// o select nem aparece pros outros sites); em Creators/BlackPrint o
+// campo é sempre gravado como "unico".
+function adicionarItemVendaDarknet(siteId, credencialId, nome, valor, tipo) {
     if (!fichaAtual || !idAtivo()) return;
     if (!nome) return;
     const lista = credenciaisDoSite(siteId);
     const credencial = lista.find(c => c.id === credencialId);
     if (!credencial) return;
     if (!Array.isArray(credencial.itens)) credencial.itens = [];
-    credencial.itens.push({ id: gerarIdLocal(), nome, valor: Math.max(0, Number(valor) || 0) });
+    credencial.itens.push({
+        id: gerarIdLocal(), nome, valor: Math.max(0, Number(valor) || 0),
+        tipo: (siteId === "p2c" && tipo === "assinatura") ? "assinatura" : "unico"
+    });
 
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
     const container = document.querySelector(`[data-darknet-itens-lista="${siteId}:${credencialId}"]`);
@@ -12953,12 +13033,13 @@ async function rolarDarknet(site, credencial) {
         return;
     }
 
-    toast(`Item sorteado: ${item.nome} (CN$ ${Number(item.valor) || 0})`, "ok");
+    const rotuloTipo = item.tipo === "assinatura" ? "assinatura" : "pagamento único";
+    toast(`Item sorteado: ${item.nome} (CN$ ${Number(item.valor) || 0} — ${rotuloTipo})`, "ok");
     await registrarRolagem({
         quem: isMestre ? `Mestre (${modoNpc ? (fichaAtual?.config?.nomeExibicao || npcAtualId) : (nomeDeFicha(fichaAtualId) || "—")})` : (fichaAtual?.config?.nomeExibicao || sessao.nome || "Jogador"),
         modificador: 0,
         resultado: resultadoRolagem.resultado,
-        detalhe: `${nomeAlvo}: item sorteado — ${item.nome} (CN$ ${Number(item.valor) || 0})`,
+        detalhe: `${nomeAlvo}: item sorteado — ${item.nome} (CN$ ${Number(item.valor) || 0} — ${rotuloTipo})`,
         critico: null
     });
 }
@@ -12966,7 +13047,7 @@ async function rolarDarknet(site, credencial) {
 function adicionarCredencialDarknet(siteId) {
     if (!fichaAtual || !idAtivo()) return;
     credenciaisDoSite(siteId).push({
-        id: gerarIdLocal(), nome: "", pontuacao: 0, avaliacoes: [],
+        id: gerarIdLocal(), nome: "", pontuacao: 0, status: 0, avaliacoes: [],
         contatos: [], stats: { seguidores: 0, posts: 0, seguindo: 0 }, itens: []
     });
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
@@ -13038,6 +13119,34 @@ document.addEventListener("input", (e) => {
     atualizarPontuacaoDarknet(siteId, credId, e.target.value);
 });
 
+// Grava o status (só site "p2c") — lançamento exclusivo do Mestre (o
+// input já vem desabilitado pro jogador em criarCampoStatusDarknet,
+// mas a checagem isMestre aqui também trava a escrita, caso alguém
+// force o campo via devtools).
+function atualizarStatusDarknet(siteId, credencialId, novoValor) {
+    if (!fichaAtual || !idAtivo() || !isMestre) return;
+    const lista = credenciaisDoSite(siteId);
+    const credencial = lista.find(c => c.id === credencialId);
+    if (!credencial) return;
+    credencial.status = Math.floor(Number(novoValor) || 0);
+    agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
+
+    const site = DARKNET_SITES.find(s => s.id === siteId);
+    if (site) {
+        const badge = document.querySelector(`[data-darknet-badge="${siteId}:${credencialId}"]`);
+        atualizarBadgeCredencialDarknet(site, credencial, badge);
+        const resumo = document.querySelector(`[data-darknet-resumo="${siteId}:${credencialId}"]`);
+        if (resumo) resumo.textContent = resumoModificadorDarknet(siteId, credencial);
+    }
+}
+
+document.addEventListener("input", (e) => {
+    const siteId = e.target.dataset && e.target.dataset.darknetCredencialStatus;
+    const credId = e.target.dataset && e.target.dataset.darknetCredencialId;
+    if (siteId === undefined || credId === undefined) return;
+    atualizarStatusDarknet(siteId, credId, e.target.value);
+});
+
 // Edição de contato existente do Dm (número/nome) — mesmo padrão "set
 // direto no objeto do array" das outras caixas de texto da ficha.
 document.addEventListener("input", (e) => {
@@ -13076,7 +13185,9 @@ document.addEventListener("input", (e) => {
     if (!credencial || !Array.isArray(credencial.itens)) return;
     const item = credencial.itens.find(it => it.id === itemId);
     if (!item) return;
-    item[campo] = campo === "valor" ? Math.max(0, Number(e.target.value) || 0) : e.target.value;
+    if (campo === "valor") item.valor = Math.max(0, Number(e.target.value) || 0);
+    else if (campo === "tipo") item.tipo = e.target.value === "assinatura" ? "assinatura" : "unico";
+    else item[campo] = e.target.value;
     agendarSalvamento("darknetCredenciais", fichaAtual.darknetCredenciais);
 });
 

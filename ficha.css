@@ -507,10 +507,13 @@
 }
 .darknet-abertos:empty { display: none; }
 /* Poço dos sites minimizados — só o nome, lado a lado, sem ocupar
-   espaço; quebra linha quando não cabem mais. */
+   espaço; quebra linha quando não cabem mais. Grid (não flex) de
+   propósito: cada "pill" vira uma coluna do MESMO tamanho, senão o
+   nome mais curto (Dm) fica minúsculo e o mais longo (BlackPrint/
+   RabbitHole) fica bem maior que os outros. */
 .darknet-minimizados {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 8px;
 }
 .darknet-site {
@@ -730,8 +733,8 @@
     gap: 6px;
 }
 .darknet-contato-numero {
-    width: 90px;
-    flex-shrink: 0;
+    flex: 1;
+    min-width: 0;
 }
 .darknet-contato-nome {
     flex: 1;
@@ -756,8 +759,8 @@
     min-width: 0;
 }
 .darknet-form-contato input:nth-child(2) {
-    width: 90px;
-    flex-shrink: 0;
+    flex: 1;
+    min-width: 0;
 }
 .darknet-form-contato button {
     flex-shrink: 0;
@@ -776,9 +779,16 @@
     gap: 3px;
     font-size: 0.72rem;
     color: var(--text-dim);
+    /* Largura fixa igual pras 3 caixas (Seguidores/Posts/Seguindo) —
+       sem isso, cada uma só tinha a largura do próprio texto do
+       rótulo, e "Seguidores"/"Seguindo" (rótulo mais longo) ficavam
+       bem mais largas que "Posts". */
+    width: 92px;
+    flex-shrink: 0;
 }
 .darknet-stat-campo input {
-    width: 80px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 /* ---------- Creators/BlackPrint: itens à venda + sorteio ---------- */
@@ -809,6 +819,11 @@
     width: 80px;
     flex-shrink: 0;
 }
+.darknet-item-venda-tipo {
+    width: 110px;
+    flex-shrink: 0;
+    font-size: 0.72rem;
+}
 .darknet-item-venda-remover {
     padding: 1px 6px;
     font-size: 0.68rem;
@@ -830,6 +845,11 @@
 .darknet-form-item-venda input:nth-child(2) {
     width: 80px;
     flex-shrink: 0;
+}
+.darknet-form-item-venda select {
+    width: 110px;
+    flex-shrink: 0;
+    font-size: 0.72rem;
 }
 .darknet-form-item-venda button {
     flex-shrink: 0;
