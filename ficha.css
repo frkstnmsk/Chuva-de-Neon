@@ -1144,6 +1144,18 @@
     max-height: 120px;
     opacity: 1;
 }
+/* Em telas touch (celular/tablet) não existe hover de verdade — e tocar
+   no item já abre o modal de edição antes de dar tempo de "passar o
+   mouse". Sem isso, o texto acima nunca aparecia pra quem usa o site
+   pelo celular. Aqui ele fica sempre visível nesses dispositivos,
+   voltando a ser a exceção (só desktop com mouse) que era a intenção
+   original do hover. */
+@media (hover: none) {
+    .entity-list .entity-sub {
+        max-height: 120px;
+        opacity: 1;
+    }
+}
 .entity-list .entity-badges {
     display: flex;
     gap: 6px;
