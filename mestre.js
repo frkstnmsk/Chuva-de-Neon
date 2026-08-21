@@ -19,7 +19,7 @@ import {
     aplicarDanoVeiculo, zerarDeterioracoesDoAtributoVeiculo, vencedorPerseguicao
 } from "./regras.js";
 import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } from "./calendario.js";
-import { avancarUmDiaTreinamento } from "./treinamento.js";
+import { avancarDiasTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js";
 import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado, arredondarMoeda } from "./dados-manual.js";
@@ -3105,11 +3105,13 @@ export async function passarODia(calendarioAtual, fichasAtivas) {
         }
     }
 
-    // Sinaliza popup de treinamento pro Mestre, por ficha com treino ativo.
+    // Sinaliza popup de treinamento pro Mestre, por ficha com treino
+    // ativo. `dias: 1` porque "Passar o Dia" sempre avança 1 dia só (ver
+    // passarVariosDias abaixo pro caso do Timeskip, que avança N).
     const popups = [];
     for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
         if (ficha.treinamento && ficha.treinamento.ativo) {
-            popups.push({ fichaId, nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId });
+            popups.push({ fichaId, nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId, dias: 1 });
         }
     }
     if (popups.length) {
@@ -3148,12 +3150,15 @@ export async function passarVariosDias(calendarioAtual, fichasAtivas, quantidade
     }
 
     // Sinaliza popup de treinamento pro Mestre, por ficha com treino
-    // ativo — igual passarODia (o avanço do treino em si continua
-    // acontecendo dia a dia, via confirmarAvancoTreinamento).
+    // ativo — igual passarODia, mas com `dias: quantidade`: ao confirmar
+    // o popup, o treino avança os N dias inteiros do Timeskip de uma vez
+    // (via confirmarAvancoTreinamento → avancarDiasTreinamento), com os
+    // dias excedentes cascateando pra fila de espera em vez de se
+    // perderem (ver treinamento.js).
     const popups = [];
     for (const [fichaId, ficha] of Object.entries(fichasAtivas)) {
         if (ficha.treinamento && ficha.treinamento.ativo) {
-            popups.push({ fichaId, nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId });
+            popups.push({ fichaId, nomeFicha: (ficha.config && ficha.config.nomeExibicao) || fichaId, dias: quantidade });
         }
     }
     if (popups.length) {
@@ -3183,12 +3188,12 @@ export function ouvirPopupTreinamento(callback) {
     });
 }
 
-export async function confirmarAvancoTreinamento(fichaId, popupId) {
+export async function confirmarAvancoTreinamento(fichaId, popupId, dias = 1) {
     const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}`)));
     if (!snap.exists()) return [];
     const ficha = snap.val();
     if (!ficha.treinamento) return [];
-    const concluidos = avancarUmDiaTreinamento(ficha);
+    const concluidos = avancarDiasTreinamento(ficha, dias);
     await update(ref(db, caminhoMesa(`fichas/${fichaId}`)), { treinamento: ficha.treinamento, dados: ficha.dados, pericias: ficha.pericias });
     if (popupId) await remove(ref(db, caminhoMesa(`popupTreinamento/${popupId}`)));
     return concluidos;

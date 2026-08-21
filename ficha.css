@@ -2195,6 +2195,29 @@ select.select-guardar-dentro {
     color: var(--text-dim);
 }
 .treino-card select, .treino-card button { margin-top: 4px; }
+.treino-fila-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 2px 0 0;
+    padding-left: 18px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+.treino-fila-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.btn-remover-fila-treino {
+    line-height: 1;
+    padding: 0 6px;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+}
+.btn-remover-fila-treino:hover { color: var(--neon-lime); }
 
 /* ---------- Barra de Volume dos recipientes (mochila etc., expandidos) ---------- */
 .volume-bar-wrap {

@@ -528,6 +528,7 @@
                     <div class="section-header">Implantes <span class="hint-inline">testes de adaptação pós-cirurgia — só o dono da ficha rola</span></div>
                     <div class="hint" id="implantes-contador"></div>
                     <div id="implantes-lista"></div>
+                    <div id="implantes-pendentes-mestre"></div>
                 </section>
 
                 <!-- ===================== VEÍCULOS ===================== -->
@@ -1025,6 +1026,22 @@
                 <div class="modal-field">
                     <label for="modal-implante-subtipo">Subtipo</label>
                     <select id="modal-implante-subtipo">
+                        <option value="">Escolha…</option>
+                    </select>
+                </div>
+                <!-- Só aparece pra subtipo "Membro superior/inferior" (braço/
+                     perna) ou "Extremidade periférica" (mão/pé) — os únicos
+                     dois com lado esquerdo/direito de verdade no corpo. Usa
+                     as MESMAS 8 chaves de Golpes Mirados (LOCAIS_MIRA,
+                     dados-manual.js) — braco_esquerdo/direito,
+                     perna_esquerda/direita, mao_esquerda/direita,
+                     pe_esquerda/direita — filtradas por localArmadura
+                     batendo com o subtipo escolhido (ver
+                     atualizarBlocoSubtipoImplante). É o que faz a aba Saúde
+                     conseguir mostrar ONDE a prótese com rejeição está. -->
+                <div class="modal-field" id="modal-implante-local-bloco" style="display:none;">
+                    <label for="modal-implante-local">Local implantado</label>
+                    <select id="modal-implante-local">
                         <option value="">Escolha…</option>
                     </select>
                 </div>

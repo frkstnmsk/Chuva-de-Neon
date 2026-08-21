@@ -104,7 +104,8 @@ import {
 import {
     estadoInicialTreinamento, labelAtributo, opcoesAtributoFisico, opcoesAtributoMental,
     opcoesPericiaFisica, opcoesPericiaMental, iniciarTreinoCaracteristica,
-    cancelarTreinoCaracteristica, avancarUmDiaTreinamento
+    cancelarTreinoCaracteristica, avancarDiasTreinamento, filaTreino, removerDaFilaTreino,
+    estaDeRepouso
 } from "./treinamento.js";
 import {
     garantirCalendarioInicial, ouvirCalendario, salvarCalendario, passarUmDia,
@@ -564,6 +565,7 @@ const el = {
     saudeSilhuetaPopoverFechar: document.getElementById("saude-silhueta-popover-fechar"),
     implantesLista: document.getElementById("implantes-lista"),
     implantesContador: document.getElementById("implantes-contador"),
+    implantesPendentesMestre: document.getElementById("implantes-pendentes-mestre"),
     mestreComaPainel: document.getElementById("mestre-coma-painel"),
     mestreDesmaioPainel: document.getElementById("mestre-desmaio-painel"),
     btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
@@ -682,6 +684,8 @@ const el = {
     modalExplosivoModulo: document.getElementById("modal-explosivo-modulo"),
     modalConfigImplante: document.getElementById("modal-config-implante"),
     modalImplanteSubtipo: document.getElementById("modal-implante-subtipo"),
+    modalImplanteLocalBloco: document.getElementById("modal-implante-local-bloco"),
+    modalImplanteLocal: document.getElementById("modal-implante-local"),
     modalImplanteDificuldadeInstalar: document.getElementById("modal-implante-dificuldade-instalar"),
     modalImplanteFuncoesEspeciais: document.getElementById("modal-implante-funcoes-especiais"),
     modalImplanteTomadaInfo: document.getElementById("modal-implante-tomada-info"),
@@ -1626,7 +1630,7 @@ function podeEditarPericiaAtributo() {
     // Treinamento NÃO libera edição da ficha. O ganho da perícia/atributo
     // treinado é aplicado automaticamente pelo próprio sistema de
     // Treinamento (ver treinamento.js → aplicarAumentoCaracteristica,
-    // chamada quando avancarUmDiaTreinamento bate o total de dias). Deixar
+    // chamada quando avancarDiasTreinamento bate o total de dias). Deixar
     // treinamento.ativo liberar esta função era um exploit: enquanto
     // qualquer característica estivesse em treino, o jogador podia editar
     // QUALQUER atributo/perícia da ficha livremente, não só a treinada.
@@ -10836,60 +10840,115 @@ function renderizarTreinamento() {
 
     TIPOS_TREINO.forEach(({ tipo, label, opcoes }) => {
         const atual = treino[tipo];
+        const fila = filaTreino(fichaAtual, tipo);
+        const ehAtributo = tipo.startsWith("atributo");
+        const limite = ehAtributo ? 7 : 5;
+
         const card = document.createElement("div");
         card.className = "treino-card";
 
+        const titulo = document.createElement("span");
+        titulo.className = "treino-card-titulo";
+        titulo.innerText = label;
+        card.appendChild(titulo);
+
         if (atual) {
             const pct = atual.totalDias > 0 ? Math.min(100, Math.round((atual.progressoDias / atual.totalDias) * 100)) : 0;
-            const nomeExibido = tipo.startsWith("atributo") ? labelAtributo(atual.nome) : atual.nome;
-            card.innerHTML = `
-                <span class="treino-card-titulo">${label}</span>
+            const nomeExibido = ehAtributo ? labelAtributo(atual.nome) : atual.nome;
+            const blocoAtivo = document.createElement("div");
+            blocoAtivo.innerHTML = `
                 <span class="entity-nome">${escapeHtml(nomeExibido)} → nível ${atual.novoNivel}</span>
                 <div class="treino-progresso-bar"><div class="treino-progresso-fill" style="width:${pct}%;"></div></div>
                 <span class="treino-progresso-texto">${atual.progressoDias} / ${atual.totalDias} dias</span>
                 <button type="button" class="btn-ghost btn-cancelar-treino">Cancelar treino</button>
             `;
-            card.querySelector(".btn-cancelar-treino").addEventListener("click", async () => {
+            blocoAtivo.querySelector(".btn-cancelar-treino").addEventListener("click", async () => {
                 cancelarTreinoCaracteristica(fichaAtual, tipo);
                 await salvarTreinamento();
             });
-        } else {
-            const select = document.createElement("select");
-            select.innerHTML = `<option value="">-- escolha --</option>`;
-            const ehAtributo = tipo.startsWith("atributo");
-            const limite = ehAtributo ? 7 : 5;
-            opcoes().forEach(nome => {
-                const nivelAtual = ehAtributo
-                    ? (Number(fichaAtual.dados[nome]) || 0)
-                    : ((Object.values(fichaAtual.pericias).find(p => p.nome === nome) || {}).nivel || 0);
-                if (nivelAtual >= limite) return; // já no limite, não oferece pra treinar
-                const opt = document.createElement("option");
-                opt.value = nome;
-                const nomeExibido = ehAtributo ? labelAtributo(nome) : nome;
-                opt.innerText = `${nomeExibido} (atual: ${nivelAtual})`;
-                select.appendChild(opt);
-            });
-            const btn = document.createElement("button");
-            btn.className = "btn-lime";
-            btn.type = "button";
-            btn.innerText = "Iniciar treino";
-            card.innerHTML = `<span class="treino-card-titulo">${label}</span>`;
-            card.appendChild(select);
-            card.appendChild(btn);
-            btn.addEventListener("click", async () => {
-                if (!select.value) { toast("Escolha uma opção antes.", "erro"); return; }
-                if (tipo === "periciaFisica" || tipo === "periciaMental") {
-                    const jaTem = Object.values(fichaAtual.pericias).find(p => p.nome === select.value);
-                    if (!jaTem) {
-                        const requisito = atendeRequisitoPericia(select.value, fichaAtual.dados, fichaAtual.pericias);
-                        if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
-                    }
-                }
-                const iniciou = iniciarTreinoCaracteristica(fichaAtual, tipo, select.value);
-                if (!iniciou) { toast("Essa característica já está no limite máximo.", "erro"); return; }
-                await salvarTreinamento();
-            });
+            card.appendChild(blocoAtivo);
+
+            // Fila de espera desse tipo — o que vem a seguir depois que o
+            // treino ativo acima terminar. É o que evita perder dias de
+            // treino/estudo em Timeskips grandes: quando sobram dias, eles
+            // cascateiam automaticamente pro próximo item daqui.
+            if (fila.length) {
+                const listaFila = document.createElement("ol");
+                listaFila.className = "treino-fila-lista";
+                fila.forEach((nome, indice) => {
+                    const nomeExibidoFila = ehAtributo ? labelAtributo(nome) : nome;
+                    const item = document.createElement("li");
+                    item.className = "treino-fila-item";
+                    const span = document.createElement("span");
+                    span.innerText = nomeExibidoFila;
+                    const btnRemover = document.createElement("button");
+                    btnRemover.type = "button";
+                    btnRemover.className = "btn-ghost btn-remover-fila-treino";
+                    btnRemover.title = "Remover da fila";
+                    btnRemover.innerText = "×";
+                    btnRemover.addEventListener("click", async () => {
+                        removerDaFilaTreino(fichaAtual, tipo, indice);
+                        await salvarTreinamento();
+                    });
+                    item.appendChild(span);
+                    item.appendChild(btnRemover);
+                    listaFila.appendChild(item);
+                });
+                card.appendChild(listaFila);
+            }
         }
+
+        // Formulário pra iniciar treino (quando não há nada ativo) OU
+        // adicionar mais um item à fila de espera (quando já tem um
+        // treino ativo desse tipo) — iniciarTreinoCaracteristica cuida
+        // dos dois casos automaticamente.
+        const bloqueadoPorRepouso = (tipo === "periciaFisica" || tipo === "atributoFisico") && estaDeRepouso(fichaAtual);
+        if (bloqueadoPorRepouso) {
+            const aviso = document.createElement("span");
+            aviso.className = "treino-progresso-texto";
+            aviso.innerText = "De repouso — só treino/estudo mental progride. Volta a liberar quando a recuperação de PV terminar.";
+            card.appendChild(aviso);
+            el.treinoGrid.appendChild(card);
+            return;
+        }
+
+        const select = document.createElement("select");
+        select.innerHTML = `<option value="">-- escolha --</option>`;
+        opcoes().forEach(nome => {
+            const nivelAtual = ehAtributo
+                ? (Number(fichaAtual.dados[nome]) || 0)
+                : ((Object.values(fichaAtual.pericias).find(p => p.nome === nome) || {}).nivel || 0);
+            // Cada vez que a característica já aparece ativa/na fila
+            // representa mais 1 nível reservado — só esconde a opção
+            // quando isso já bate no limite máximo.
+            const reservados = (atual && atual.nome === nome ? 1 : 0) + fila.filter(n => n === nome).length;
+            if (nivelAtual + reservados >= limite) return;
+            const opt = document.createElement("option");
+            opt.value = nome;
+            const nomeExibido = ehAtributo ? labelAtributo(nome) : nome;
+            opt.innerText = `${nomeExibido} (atual: ${nivelAtual})`;
+            select.appendChild(opt);
+        });
+        const btn = document.createElement("button");
+        btn.className = "btn-lime";
+        btn.type = "button";
+        btn.innerText = atual ? "Adicionar à fila" : "Iniciar treino";
+        card.appendChild(select);
+        card.appendChild(btn);
+        btn.addEventListener("click", async () => {
+            if (!select.value) { toast("Escolha uma opção antes.", "erro"); return; }
+            if (tipo === "periciaFisica" || tipo === "periciaMental") {
+                const jaTem = Object.values(fichaAtual.pericias).find(p => p.nome === select.value);
+                if (!jaTem) {
+                    const requisito = atendeRequisitoPericia(select.value, fichaAtual.dados, fichaAtual.pericias);
+                    if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
+                }
+            }
+            const iniciou = iniciarTreinoCaracteristica(fichaAtual, tipo, select.value);
+            if (!iniciou) { toast("Não deu pra iniciar/enfileirar (limite máximo ou fila cheia).", "erro"); return; }
+            await salvarTreinamento();
+        });
+
         el.treinoGrid.appendChild(card);
     });
 }
@@ -15881,6 +15940,30 @@ function atualizarBlocoSubtipoImplante(implanteConfigAtual) {
     const nivel = Number(el.modalNivelTag.value) || 0;
     const ehTomada = subtipo === "tomada";
     const ehChip = subtipo === "chip";
+    // "Membro" (braço/perna) e "Extremidade" (mão/pé) são os dois
+    // únicos subtipos com lado esquerdo/direito de verdade no manual —
+    // os outros 5 (tomada, chip, olho, endoesqueleto, órgão) não têm
+    // essa distinção, então o select de local nem aparece pra eles.
+    // Usa as MESMAS 8 chaves de Golpes Mirados (LOCAIS_MIRA), filtradas
+    // por localArmadura batendo com o subtipo escolhido.
+    const localArmaduraDoSubtipo = (subtipo === "membro" || subtipo === "extremidade") ? subtipo : null;
+    el.modalImplanteLocalBloco.style.display = localArmaduraDoSubtipo ? "flex" : "none";
+    if (localArmaduraDoSubtipo) {
+        const localSelecionadoAntes = el.modalImplanteLocal.value;
+        const opcoesLocal = LOCAIS_MIRA.filter(l => l.localArmadura === localArmaduraDoSubtipo);
+        el.modalImplanteLocal.innerHTML = `<option value="">Escolha…</option>` +
+            opcoesLocal.map(l => `<option value="${l.key}">${escapeHtml(l.label)}</option>`).join("");
+        // Prioriza o que já estava selecionado nesta mesma abertura do
+        // modal (troca de Nível, por exemplo, não deve apagar o local
+        // já escolhido); só cai pro valor salvo no item quando o modal
+        // acabou de abrir. Se o subtipo mudou de "membro" pra
+        // "extremidade" (ou vice-versa), nenhum dos dois bate mais com
+        // as opções novas — fica em branco de propósito, não tenta
+        // adivinhar (evita salvar "Braço esquerdo" numa prótese de pé).
+        const candidato = opcoesLocal.some(l => l.key === localSelecionadoAntes) ? localSelecionadoAntes
+            : (implanteConfigAtual && implanteConfigAtual.local) || "";
+        el.modalImplanteLocal.value = opcoesLocal.some(l => l.key === candidato) ? candidato : "";
+    }
 
     // Dificuldade de instalar automática (mesmo padrão de "autoGerado"
     // do bloco Químico): só sobrescreve enquanto a mesa não tiver
@@ -15978,8 +16061,10 @@ function atualizarBlocoSubtipoImplante(implanteConfigAtual) {
 function lerConfigImplanteDoModal(existenteImplante) {
     const subtipo = el.modalImplanteSubtipo.value || null;
     const ehChip = subtipo === "chip";
+    const temLocal = subtipo === "membro" || subtipo === "extremidade";
     return {
         subtipo,
+        local: temLocal ? (el.modalImplanteLocal.value || null) : (existenteImplante?.local ?? null),
         dificuldadeInstalar: Number(el.modalImplanteDificuldadeInstalar.value) || 0,
         funcoesEspeciais: el.modalImplanteFuncoesEspeciais.value.trim(),
         instalado: existenteImplante?.instalado ?? false,
@@ -17867,12 +17952,30 @@ function implantesInstaladosDaFichaAtual() {
         .map(([id, it]) => ({ id, ...it }));
 }
 
+// Implantes AINDA NÃO instalados da fichaAtual — mesmo espírito da
+// função acima, só que o inverso. Usado só pelo atalho do Mestre
+// abaixo (instalar sem rolar nada): normalmente um implante
+// não-instalado é só um item comum no Inventário, sem ação própria —
+// a única forma de instalar é via kit de cirurgia + cenário + outro
+// personagem (abrirModalCirurgiaImplante). Esse atalho existe
+// EXATAMENTE pra pular tudo isso quando o Mestre quer só narrar "a
+// cirurgia deu certo" sem rolar Biomecânica nem exigir cenário/kit —
+// mas o fluxo normal (com as rolagens) continua existindo do mesmo
+// jeito, sem nenhuma mudança.
+function implantesPendentesDaFichaAtual() {
+    const inventario = (fichaAtual && fichaAtual.inventario) || {};
+    return Object.entries(inventario)
+        .filter(([, it]) => it && it.tag === "biomecanica" && it.implante && !it.implante.instalado)
+        .map(([id, it]) => ({ id, ...it }));
+}
+
 function renderizarImplantes() {
     if (!el.implantesLista) return;
 
     if (modoNpc) {
         if (el.implantesContador) el.implantesContador.innerText = "";
         el.implantesLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de implantes.</p>`;
+        if (el.implantesPendentesMestre) el.implantesPendentesMestre.innerHTML = "";
         return;
     }
 
@@ -17890,6 +17993,7 @@ function renderizarImplantes() {
 
     if (!implantes.length) {
         el.implantesLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">Nenhum implante instalado.</p>`;
+        renderizarImplantesPendentesMestre();
         return;
     }
 
@@ -17908,8 +18012,17 @@ function renderizarImplantes() {
         const dificuldadeAdaptacao = 10 + nivel;
         const danoUso = 2 * nivel;
 
+        // Local implantado (braço/perna/mão/pé esquerdo ou direito — só
+        // existe pra subtipo "membro"/"extremidade", ver
+        // atualizarBlocoSubtipoImplante no modal do item) — mostrado
+        // junto do badge de rejeição, que é quando a mesa mais precisa
+        // saber ONDE está a prótese rejeitando (pra narrar/aplicar
+        // efeito local). Implante sem local salvo (subtipo sem lado, ou
+        // cadastrado antes desse campo existir) só mostra a rejeição
+        // mesmo, sem o pino de local.
+        const localLabel = imp.local ? localMiraPorKey(imp.local).label : null;
         const badgeRejeicao = rejeicao > 0
-            ? `<span class="mod-pill negativo">⚠️ Rejeição parcial: ${rejeicao}</span>` : "";
+            ? `<span class="mod-pill negativo">⚠️ Rejeição parcial: ${rejeicao}${localLabel ? ` — 📍 ${escapeHtml(localLabel)}` : ""}</span>` : "";
         const badgeQuebrado = imp.quebrado
             ? `<span class="mod-pill negativo">💥 Quebrado</span>` : "";
 
@@ -18006,6 +18119,87 @@ function renderizarImplantes() {
             btn.addEventListener("click", () => aplicarDanoUsoImplanteGodmode(btn.dataset.implanteId, btn.dataset.implanteNome, Number(btn.dataset.dano) || 0));
         });
     }
+
+    renderizarImplantesPendentesMestre();
+}
+
+// Atalho do Mestre: instala um implante que ainda está no inventário
+// sem instalado:true, SEM passar pela rolagem de Biomecânica do
+// instalador nem pelos testes de adaptação (Constituição) do paciente
+// — os dois ficam marcados como já resolvidos direto (mesmo espírito
+// do botão de dano de uso: "Direto na cena, sem Ação Pendente, o
+// Mestre já É a confirmação"). O fluxo normal com kit de
+// cirurgia+cenário+rolagens (abrirModalCirurgiaImplante,
+// resolverInstalarImplante/testarAdaptacaoImplante) continua existindo
+// sem nenhuma mudança — isso aqui é só uma porta extra pro Mestre
+// narrar "a cirurgia deu certo" sem rolar nada. Só visível/disponível
+// pro Mestre (o painel de Implantes inteiro só existe fora do modo
+// NPC — ver renderizarImplantes).
+function renderizarImplantesPendentesMestre() {
+    if (!el.implantesPendentesMestre) return;
+    if (!isMestre) { el.implantesPendentesMestre.innerHTML = ""; return; }
+
+    const pendentes = implantesPendentesDaFichaAtual();
+    if (!pendentes.length) { el.implantesPendentesMestre.innerHTML = ""; return; }
+
+    const { contam, nivel } = implantesContagemELimite(fichaAtual);
+
+    el.implantesPendentesMestre.innerHTML = `
+        <div class="eyebrow" style="margin-top:10px;">Implantes aguardando cirurgia (${pendentes.length})</div>
+        ${pendentes.map(it => {
+            const nivelImp = Number(it.nivelTag) || 0;
+            const contaPraLimite = subtipoContaComoImplante(it.implante?.subtipo);
+            const semVaga = contaPraLimite && (contam >= nivel);
+            return `
+            <div class="ferida-card implante-card" data-implante-pendente-id="${it.id}">
+                <div class="ferida-topo">
+                    <span class="ferida-tipo">${escapeHtml(it.nome)}${it.implante?.subtipo ? ` — ${escapeHtml(rotuloSubtipoImplante(it.implante.subtipo))}` : ""}</span>
+                    <span class="mod-pill tag">Nível ${nivelImp}</span>
+                </div>
+                <div class="hint">Ainda não instalado.${semVaga ? " ⚠️ Personagem já está no limite de implantes." : ""}</div>
+                <div class="ferida-acoes">
+                    <button type="button" class="btn-lime btn-instalar-sem-teste-mestre" data-implante-id="${it.id}" title="Instala direto — sem rolar Biomecânica nem exigir testes de Constituição do paciente">⚡ Instalar sem testes (Mestre)</button>
+                </div>
+            </div>`;
+        }).join("")}
+    `;
+
+    el.implantesPendentesMestre.querySelectorAll(".btn-instalar-sem-teste-mestre").forEach(btn => {
+        btn.addEventListener("click", () => mestreInstalarImplanteSemTeste(btn.dataset.implanteId));
+    });
+}
+
+async function mestreInstalarImplanteSemTeste(itemId) {
+    if (!isMestre || !fichaAtualId || !fichaAtual) return;
+    const item = fichaAtual.inventario?.[itemId];
+    if (!item || !item.implante || item.implante.instalado) {
+        toast("Esse implante não está mais disponível pra instalar.", "erro");
+        return;
+    }
+
+    const nivel = Number(item.nivelTag) || 0;
+    const contaPraLimite = subtipoContaComoImplante(item.implante.subtipo);
+    if (contaPraLimite) {
+        const { semVaga } = implantesContagemELimite(fichaAtual);
+        if (semVaga && !confirm(`${fichaAtual?.config?.nomeExibicao || fichaAtualId} já está no limite de implantes (chips não contam). Instalar "${item.nome}" mesmo assim?`)) {
+            return;
+        }
+    }
+
+    const historicoAtual = Array.isArray(item.implante.historico) ? item.implante.historico : [];
+    const linha = { tipo: "instalar", resultado: "instalado_sem_teste_pelo_mestre", por: "Mestre", em: Date.now() };
+
+    // testesAdaptacaoFeitos já sai igual ao nível — feitos >= nivel
+    // faz o botão "Testar adaptação" nem aparecer mais pro jogador
+    // (ver renderizarImplantes/testarAdaptacaoImplante acima), exatamente
+    // como "livrar dos testes de Constituição" pede.
+    await update(ref(db, caminhoMesa(`fichas/${fichaAtualId}/inventario/${itemId}/implante`)), {
+        instalado: true,
+        testesAdaptacaoFeitos: nivel,
+        historico: [...historicoAtual, linha]
+    });
+
+    toast(`"${item.nome}" instalado direto em ${fichaAtual?.config?.nomeExibicao || fichaAtualId} — sem rolagens, sem testes de adaptação.`, "ok");
 }
 
 // Fase 6.2: cada clique rola Constituição (mesmo cálculo estruturado —
@@ -19780,9 +19974,13 @@ function configurarPopupTreinamento() {
     function mostrarProximoPopupTreino() {
         if (!filaPopups.length) { el.modalPopupTreino.classList.remove("active"); return; }
         const popup = filaPopups[0];
-        el.popupTreinoTexto.innerText = `Pode subir o treinamento de ${popup.nomeFicha}?`;
+        const dias = Number(popup.dias) || 1;
+        el.popupTreinoTexto.innerText = dias > 1
+            ? `Pode subir o treinamento de ${popup.nomeFicha}? (avança ${dias} dias de treino/estudo de uma vez — Timeskip)`
+            : `Pode subir o treinamento de ${popup.nomeFicha}?`;
         el.modalPopupTreino.dataset.popupId = popup.id;
         el.modalPopupTreino.dataset.fichaId = popup.fichaId;
+        el.modalPopupTreino.dataset.dias = String(dias);
         el.modalPopupTreino.classList.add("active");
     }
 
@@ -19797,11 +19995,12 @@ function configurarPopupTreinamento() {
     el.popupTreinoSim.addEventListener("click", async () => {
         const popupId = el.modalPopupTreino.dataset.popupId;
         const fichaId = el.modalPopupTreino.dataset.fichaId;
-        const concluidos = await confirmarAvancoTreinamento(fichaId, popupId);
+        const dias = Number(el.modalPopupTreino.dataset.dias) || 1;
+        const concluidos = await confirmarAvancoTreinamento(fichaId, popupId, dias);
         if (concluidos.length) {
             toast(`Treinamento concluído: ${concluidos.map(c => c.nome).join(", ")}.`);
         } else {
-            toast("Progresso de treino +1 dia.");
+            toast(dias > 1 ? `Progresso de treino +${dias} dia(s).` : "Progresso de treino +1 dia.");
         }
         filaPopups = filaPopups.filter(p => p.id !== popupId);
         el.modalPopupTreino.classList.remove("active");
