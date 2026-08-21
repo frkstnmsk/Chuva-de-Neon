@@ -1095,8 +1095,8 @@
 /* Miniatura do item no inventário (só aparece quando o item tem
    imagem cadastrada — ver campo "imagem" e criarLiItem em ficha.js). */
 .entity-list .entity-thumb {
-    width: 36px;
-    height: 36px;
+    width: 45px;
+    height: 45px;
     border-radius: 4px;
     object-fit: cover;
     flex-shrink: 0;

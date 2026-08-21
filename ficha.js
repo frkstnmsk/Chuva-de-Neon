@@ -77,7 +77,7 @@ import {
     CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
     arredondarMoeda
 } from "./dados-manual.js";
-import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260821-imagens3";
+import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260821-imagens4";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
