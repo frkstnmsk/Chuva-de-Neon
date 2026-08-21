@@ -555,6 +555,10 @@ export function normalizarInventario(lista) {
             descricao: it.descricao || "",
             modificadores: it.modificadores || [],
             ativo: it.ativo ?? true,
+            // Miniatura opcional do item (ver configurarImagemItemGenerico
+            // em ficha.js) — sem essa linha, a normalização apagava o
+            // campo toda vez que a ficha recarregava do Firebase.
+            imagem: it.imagem || null,
             tag: it.tag || "geral",
             nivelTag: it.nivelTag ?? null,
             // Checkbox "Limitar rolagem" (ver tagPermiteLimiteRolagemPorNivel

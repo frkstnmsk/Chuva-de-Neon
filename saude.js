@@ -15,7 +15,7 @@
 import { db } from "./firebase-config.js";
 import { ref, get, set, update, remove, push, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 import { caminhoMesa } from "./mesa.js";
-import { normalizarFicha } from "./normalizacao.js";
+import { normalizarFicha } from "./normalizacao.js?v=20260821-imagens3";
 import {
     rolarD20, coletarModificadores, calcularDificuldadeDefesaJogador,
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem,
