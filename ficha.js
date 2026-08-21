@@ -303,6 +303,12 @@ let categoriaInventarioAtiva = "levando";
 // Inventário — só existe em memória local, não é salvo na ficha; some
 // ao recarregar a página. Ver renderizarInventario.
 let containersInventarioAbertos = new Set();
+// Imagem em edição no modal de item (data URL da miniatura já
+// redimensionada, ou null se o item não tem/não vai ter imagem) — vive
+// só em memória enquanto o modal está aberto; ver limparImagemModal,
+// definirImagemModalAPartirDeArquivo e o campo `imagem` gravado junto
+// do resto do item em salvarItemDoModal/salvarItemBancoDoModal.
+let imagemItemModalAtual = null;
 let ultimoAvisoCustoVida = {}; // fila de pendentes de `avisoCustoVida/pendentes` no Firebase: { [pendenteId]: timestampDoDomingo }
 let combateAtivoCache = { ativo: false, participantes: {} }; // Gerenciador de Combate (compartilhado)
 let combateNpcFormVisivel = false; // controla se o formulário de "Criar novo NPC" está aberto dentro do Gerenciador de Combate
@@ -600,6 +606,11 @@ const el = {
     modalNivel: document.getElementById("modal-nivel"),
     modalCampoTag: document.getElementById("modal-campo-tag"),
     modalTag: document.getElementById("modal-tag"),
+    modalCampoImagem: document.getElementById("modal-campo-imagem"),
+    modalImagemArquivo: document.getElementById("modal-imagem-arquivo"),
+    modalImagemPreview: document.getElementById("modal-imagem-preview"),
+    btnEscolherImagemItem: document.getElementById("btn-escolher-imagem-item"),
+    btnRemoverImagemItem: document.getElementById("btn-remover-imagem-item"),
     modalCampoEquipavel: document.getElementById("modal-campo-equipavel"),
     modalEquipavel: document.getElementById("modal-equipavel"),
     modalCampoMaosNecessarias: document.getElementById("modal-campo-maos-necessarias"),
@@ -1003,6 +1014,7 @@ async function init() {
     tentarOuAvisar("modificadores genéricos", configurarModificadoresGenerico);
     tentarOuAvisar("efeitos de equipamento médico", configurarEfeitosMedicosGenerico);
     tentarOuAvisar("compartimentos de recipiente", configurarCompartimentosGenerico);
+    tentarOuAvisar("imagem do item", configurarImagemItemGenerico);
     tentarOuAvisar("campo substância (vício)", configurarCampoSubstanciaVicio);
     tentarOuAvisar("carrossel de status do topo", configurarStatusTopoCarrossel);
 }
@@ -7544,6 +7556,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     if (nivel > 0) li.classList.add("entity-item-aninhado");
 
     li.innerHTML = `
+        ${it.imagem ? `<img class="entity-thumb" src="${escapeHtml(it.imagem)}" alt="">` : ""}
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
             <span class="entity-sub">${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel}${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${implanteInfoLabel}${avisoArmarSemCenarioLabel}</span>
@@ -13843,6 +13856,8 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoPericiaBusca.style.display = "none";
     el.modalCampoNivel.style.display = "none";
     el.modalCampoTag.style.display = "none";
+    el.modalCampoImagem.style.display = "none";
+    limparImagemModal();
     el.modalCampoNivelTag.style.display = "none";
     el.modalCampoInstalarVeiculo.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
@@ -14197,6 +14212,80 @@ function lerCompartimentosDoModal() {
     });
 }
 
+// ---------------------------------------------------------------------
+// Imagem do item (miniatura opcional mostrada no inventário — ver
+// .entity-thumb no CSS e o campo `imagem` gravado junto do item em
+// salvarItemDoModal/salvarItemBancoDoModal). Tudo acontece no
+// navegador: a foto escolhida é redesenhada num <canvas> já reduzida
+// (máx. 96px no lado maior) e reexportada como JPEG comprimido, então
+// o que efetivamente vai pro Firebase é só uma string pequena (alguns
+// KB) — não precisa de Firebase Storage nem de regra de acesso nova
+// pra isso funcionar.
+const IMAGEM_ITEM_LADO_MAXIMO = 96;
+const IMAGEM_ITEM_QUALIDADE_JPEG = 0.72;
+
+function limparImagemModal() {
+    imagemItemModalAtual = null;
+    el.modalImagemArquivo.value = "";
+    el.modalImagemPreview.src = "";
+    el.modalImagemPreview.style.display = "none";
+    el.btnRemoverImagemItem.style.display = "none";
+}
+
+function definirImagemModal(dataUrl) {
+    imagemItemModalAtual = dataUrl || null;
+    if (imagemItemModalAtual) {
+        el.modalImagemPreview.src = imagemItemModalAtual;
+        el.modalImagemPreview.style.display = "";
+        el.btnRemoverImagemItem.style.display = "";
+    } else {
+        el.modalImagemPreview.src = "";
+        el.modalImagemPreview.style.display = "none";
+        el.btnRemoverImagemItem.style.display = "none";
+    }
+}
+
+// Lê o arquivo escolhido, desenha num canvas já reduzido (mantendo a
+// proporção) e devolve o data URL comprimido via callback — feito com
+// Image/canvas em vez de alguma lib externa pra não precisar adicionar
+// dependência nova só por causa disso.
+function redimensionarImagemParaThumbnail(arquivo, aoTerminar) {
+    const leitor = new FileReader();
+    leitor.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+            const escala = Math.min(1, IMAGEM_ITEM_LADO_MAXIMO / Math.max(img.width, img.height));
+            const largura = Math.max(1, Math.round(img.width * escala));
+            const altura = Math.max(1, Math.round(img.height * escala));
+            const canvas = document.createElement("canvas");
+            canvas.width = largura;
+            canvas.height = altura;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, largura, altura);
+            aoTerminar(canvas.toDataURL("image/jpeg", IMAGEM_ITEM_QUALIDADE_JPEG));
+        };
+        img.onerror = () => toast("Não consegui ler essa imagem — tente outro arquivo.", "erro");
+        img.src = e.target.result;
+    };
+    leitor.onerror = () => toast("Falha ao carregar o arquivo de imagem.", "erro");
+    leitor.readAsDataURL(arquivo);
+}
+
+function configurarImagemItemGenerico() {
+    el.btnEscolherImagemItem.addEventListener("click", () => el.modalImagemArquivo.click());
+    el.modalImagemArquivo.addEventListener("change", () => {
+        const arquivo = el.modalImagemArquivo.files && el.modalImagemArquivo.files[0];
+        if (!arquivo) return;
+        if (!arquivo.type.startsWith("image/")) {
+            toast("Escolha um arquivo de imagem.", "erro");
+            el.modalImagemArquivo.value = "";
+            return;
+        }
+        redimensionarImagemParaThumbnail(arquivo, (dataUrl) => definirImagemModal(dataUrl));
+    });
+    el.btnRemoverImagemItem.addEventListener("click", () => limparImagemModal());
+}
+
 function prepararModalItem(existente, ehBanco) {
     // "chave" (ver plano-veiculos.txt, adendo "chave") só aparece no
     // dropdown se o item que está sendo editado JÁ é uma chave — assim
@@ -14207,6 +14296,7 @@ function prepararModalItem(existente, ehBanco) {
     if (opcaoChave) opcaoChave.style.display = (existente && existente.tag === "chave") ? "" : "none";
 
     el.modalCampoTag.style.display = "flex";
+    el.modalCampoImagem.style.display = "flex";
     el.modalCampoPeso.style.display = "flex";
     el.modalCampoVolume.style.display = "flex";
     el.modalCampoTamanho.style.display = "flex";
@@ -14252,6 +14342,7 @@ function prepararModalItem(existente, ehBanco) {
     if (existente) {
         el.modalNome.value = existente.nome || "";
         el.modalTag.value = existente.tag || "";
+        definirImagemModal(existente.imagem || null);
         el.modalPeso.value = existente.pesoUnitario ?? existente.peso ?? 0;
         el.modalVolume.value = existente.volumeUnitario ?? existente.volume ?? 0;
         popularSelectTamanho(el.modalTamanho, existente.tamanho);
@@ -14271,6 +14362,7 @@ function prepararModalItem(existente, ehBanco) {
     } else {
         el.modalNome.value = "";
         el.modalTag.value = "";
+        limparImagemModal();
         el.modalPeso.value = 0;
         el.modalVolume.value = 0;
         popularSelectTamanho(el.modalTamanho, null);
@@ -16378,6 +16470,9 @@ async function salvarItemDoModal(id) {
         modificadores: modificadoresItem,
         efeitosMedicos: efeitosMedicosItem,
         ativo: existenteItem.ativo ?? (modificadoresItem.length && tag !== "droga" ? false : true),
+        // Miniatura opcional (ver configurarImagemItemGenerico) — já
+        // chega aqui como data URL pequeno, redimensionado no navegador.
+        imagem: imagemItemModalAtual || null,
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         limitarRolagemPorNivel: tagPermiteLimiteRolagemPorNivel(tag) ? !!el.modalLimitarRolagem.checked : false,
@@ -16591,6 +16686,10 @@ async function salvarItemBancoDoModal(id) {
         // copiado dele pra uma ficha já nasce com os efeitos prontos
         // (ver autopreencherItemDoBanco/configurarAutocompleteItemBanco).
         efeitosMedicos: tag === "equipamento_medico" ? lerEfeitosMedicosDoModal() : [],
+        // Miniatura opcional (ver configurarImagemItemGenerico) — copiada
+        // automaticamente pra qualquer ficha que puxar este molde do
+        // Banco Global (autopreencherItemDoBanco, em itens-globais.js).
+        imagem: imagemItemModalAtual || null,
         tag,
         nivelTag: tagTemNivel(tag) ? Number(el.modalNivelTag.value) : null,
         limitarRolagemPorNivel: tagPermiteLimiteRolagemPorNivel(tag) ? !!el.modalLimitarRolagem.checked : false,
@@ -21497,7 +21596,10 @@ function montarPainelBibliotecaItens(corpo) {
         card.className = "npc-card";
         const origem = it.origemFichaId ? `Salvo a partir da ficha de ${escapeHtml(it.origemFichaId)}` : "Cadastrado direto na Biblioteca";
         card.innerHTML = `
-            <strong>${escapeHtml(it.nome)}</strong>
+            <div style="display:flex; align-items:center; gap:8px;">
+                ${it.imagem ? `<img class="entity-thumb" src="${escapeHtml(it.imagem)}" alt="">` : ""}
+                <strong>${escapeHtml(it.nome)}</strong>
+            </div>
             <span>${escapeHtml(rotuloTag(it.tag))}${it.nivelTag ? ` (nível ${it.nivelTag})` : ""} · ${it.peso ?? 0} kg</span>
             ${it.categoriaBanco ? `<span class="hint-inline">Categoria: ${escapeHtml(it.categoriaBanco)}</span>` : ""}
             ${it.arma ? `<span>Dano base: ${it.arma.danoBase ?? 0}</span>` : ""}

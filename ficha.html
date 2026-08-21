@@ -793,6 +793,24 @@
             <label for="modal-tag">Tag (obrigatória)</label>
             <select id="modal-tag"></select>
         </div>
+
+        <!-- Imagem do item (opcional) — miniatura mostrada no inventário.
+             O arquivo é redimensionado no navegador antes de salvar (ver
+             lerImagemDoModal em ficha.js), então não precisa de Firebase
+             Storage nem de regra de acesso nova: a miniatura já sai
+             pequena o bastante pra caber junto do resto do item no banco. -->
+        <div class="modal-field" id="modal-campo-imagem" style="display:none;">
+            <label for="modal-imagem-arquivo">Imagem (opcional)</label>
+            <div class="modal-imagem-linha">
+                <img id="modal-imagem-preview" class="modal-imagem-preview" style="display:none;" alt="Pré-visualização da imagem do item">
+                <div class="modal-imagem-botoes">
+                    <input type="file" id="modal-imagem-arquivo" accept="image/*" style="display:none;">
+                    <button type="button" id="btn-escolher-imagem-item" class="btn-ghost">📷 Escolher imagem</button>
+                    <button type="button" id="btn-remover-imagem-item" class="btn-ghost" style="display:none;">Remover imagem</button>
+                </div>
+            </div>
+            <p class="hint">A imagem é reduzida automaticamente pra uma miniatura pequena antes de salvar.</p>
+        </div>
         <div class="modal-field" id="modal-campo-nivel-tag" style="display:none;">
             <label for="modal-nivel-tag">Nível da tag</label>
             <select id="modal-nivel-tag"></select>
