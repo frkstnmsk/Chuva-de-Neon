@@ -77,7 +77,7 @@ import {
     CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
     arredondarMoeda
 } from "./dados-manual.js";
-import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260821-imagens4";
+import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260821-imagens5";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
@@ -7896,6 +7896,12 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
         abrirModalEdicao("inventario", id);
     });
 
+    // Prévia flutuante da imagem em tamanho maior, seguindo o mouse
+    // (ver ativarPreviewFlutuanteImagem) — só faz sentido com mouse de
+    // verdade, então em touch (celular/tablet) o hover nem dispara.
+    const thumbHover = li.querySelector(".entity-thumb");
+    if (thumbHover) ativarPreviewFlutuanteImagem(thumbHover, it.imagem);
+
     // Se é um recipiente aberto (expandido), a lista de filhos entra
     // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
     // o conteúdo "viaja" junto se o item pai for movido/filtrado).
@@ -14284,6 +14290,56 @@ function configurarImagemItemGenerico() {
         redimensionarImagemParaThumbnail(arquivo, (dataUrl) => definirImagemModal(dataUrl));
     });
     el.btnRemoverImagemItem.addEventListener("click", () => limparImagemModal());
+}
+
+// ---------------------------------------------------------------------
+// Prévia flutuante da imagem do item ao passar o mouse (ver uso em
+// criarLiItem e nos cards da Biblioteca de Itens do Mestre). Um único
+// elemento é criado e reaproveitado pra qualquer item da tela, em vez
+// de criar um novo a cada renderização da lista — a lista inteira é
+// redesenhada com frequência (equipar, mover item, abrir/fechar
+// recipiente etc.), então isso evita ficar acumulando elementos soltos
+// no <body>.
+let previewFlutuanteImagemEl = null;
+function obterPreviewFlutuanteImagem() {
+    if (!previewFlutuanteImagemEl) {
+        previewFlutuanteImagemEl = document.createElement("img");
+        previewFlutuanteImagemEl.className = "preview-flutuante-imagem-item";
+        document.body.appendChild(previewFlutuanteImagemEl);
+    }
+    return previewFlutuanteImagemEl;
+}
+
+// Só ativa em dispositivos com mouse de verdade (`hover: hover`) — em
+// touch, tocar no item já abre o modal de edição antes de qualquer
+// "hover" fazer sentido, e a prévia ficaria grudada na tela depois do
+// toque sem jeito fácil de "tirar o mouse de cima".
+const TEM_MOUSE_DE_VERDADE = window.matchMedia && window.matchMedia("(hover: hover)").matches;
+
+function ativarPreviewFlutuanteImagem(elemento, src) {
+    if (!TEM_MOUSE_DE_VERDADE || !src) return;
+    elemento.addEventListener("mouseenter", () => {
+        const preview = obterPreviewFlutuanteImagem();
+        preview.src = src;
+        preview.style.display = "block";
+    });
+    elemento.addEventListener("mousemove", (e) => {
+        const preview = obterPreviewFlutuanteImagem();
+        // Desloca um pouco da ponta do cursor e evita vazar pra fora da
+        // tela nas bordas direita/inferior.
+        const margem = 18;
+        const largura = preview.offsetWidth || 220;
+        const altura = preview.offsetHeight || 220;
+        let x = e.clientX + margem;
+        let y = e.clientY + margem;
+        if (x + largura > window.innerWidth) x = e.clientX - largura - margem;
+        if (y + altura > window.innerHeight) y = e.clientY - altura - margem;
+        preview.style.left = `${x}px`;
+        preview.style.top = `${y}px`;
+    });
+    elemento.addEventListener("mouseleave", () => {
+        obterPreviewFlutuanteImagem().style.display = "none";
+    });
 }
 
 function prepararModalItem(existente, ehBanco) {
@@ -21605,6 +21661,8 @@ function montarPainelBibliotecaItens(corpo) {
             ${it.arma ? `<span>Dano base: ${it.arma.danoBase ?? 0}</span>` : ""}
             <span class="hint-inline">${escapeHtml(origem)}</span>
         `;
+        const thumbHoverBanco = card.querySelector(".entity-thumb");
+        if (thumbHoverBanco) ativarPreviewFlutuanteImagem(thumbHoverBanco, it.imagem);
         const linhaBtns = document.createElement("div");
         linhaBtns.className = "modal-btns";
         const btnEditar = document.createElement("button");

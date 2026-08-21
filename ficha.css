@@ -1094,6 +1094,23 @@
 .entity-list li.entity-list-subheader:hover { background: none; }
 /* Miniatura do item no inventário (só aparece quando o item tem
    imagem cadastrada — ver campo "imagem" e criarLiItem em ficha.js). */
+/* Prévia flutuante da imagem do item ao passar o mouse (ver
+   ativarPreviewFlutuanteImagem em ficha.js) — segue o cursor, fica por
+   cima de tudo e não intercepta clique/hover (pointer-events: none),
+   senão ela mesma bloquearia o mouseleave do item logo abaixo dela. */
+.preview-flutuante-imagem-item {
+    display: none;
+    position: fixed;
+    z-index: 3000;
+    max-width: 220px;
+    max-height: 220px;
+    object-fit: contain;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    background: rgba(20,20,20,0.9);
+    pointer-events: none;
+}
 .entity-list .entity-thumb {
     width: 45px;
     height: 45px;
@@ -1102,6 +1119,9 @@
     flex-shrink: 0;
     border: 1px solid rgba(255,255,255,0.12);
     background: rgba(255,255,255,0.04);
+}
+@media (hover: hover) {
+    .entity-list .entity-thumb { cursor: zoom-in; }
 }
 .entity-list .entity-main {
     display: flex;
