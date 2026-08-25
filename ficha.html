@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Chuva de Neon // Ficha</title>
 <link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="ficha.css?v=20260821-imagens5">
+<link rel="stylesheet" href="ficha.css?v=20260822-esteroide9">
 <link rel="stylesheet" href="combate.css">
 </head>
 <body>
@@ -579,6 +579,10 @@
                 <section class="tab-panel panel" data-tab="treinamento">
                     <div class="section-header">Treinamento simultâneo <span class="hint-inline">1 perícia física + 1 perícia mental + 1 atributo físico + 1 atributo mental</span></div>
                     <div class="hint">O Mestre confirma o avanço de +1 dia sempre que clicar em "Passar o Dia" no calendário.</div>
+                    <label id="linha-esteroides" title="Regra do Esteroide (manual, catálogo de drogas): eleva o limite de Força e Constituição de 7 para 9, mas só através de treinamento — subir de nível continua travado em 7 normalmente.">
+                        <input type="checkbox" id="chk-usa-esteroides">
+                        Usa Esteroide <span class="hint-inline">(libera treinar Força/Constituição até 9 — só o Mestre marca)</span>
+                    </label>
                     <div class="treino-grid" id="treino-grid"></div>
                 </section>
 
@@ -1478,6 +1482,6 @@
      data-lucide="nome-do-icone" viram SVG automaticamente quando
      lucide.createIcons() roda (ver atualizarIcones() em ficha.js). -->
 <script src="https://unpkg.com/lucide@latest"></script>
-<script type="module" src="ficha.js?v=20260821-imagens5"></script>
+<script type="module" src="ficha.js?v=20260822-esteroide9"></script>
 </body>
 </html>

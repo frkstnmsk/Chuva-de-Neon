@@ -23,7 +23,7 @@ import {
     tempoTreinoAtributo, tempoTreinoPericia
 } from "./regras.js";
 import { listaPericiasPorCategoria, atendeRequisitoPericia } from "./dados-manual.js";
-import { ATRIBUTOS_PRIMARIOS } from "./regras.js";
+import { ATRIBUTOS_PRIMARIOS, limiteTreinoAtributo } from "./regras.js";
 
 const TIPOS = ["periciaFisica", "periciaMental", "atributoFisico", "atributoMental"];
 const TIPOS_FISICOS = ["periciaFisica", "atributoFisico"];
@@ -99,7 +99,8 @@ function iniciarTreinoDireto(fichaAtual, tipo, chave) {
         treino[tipo] = { nome: chave, nivelAtual, novoNivel, progressoDias: 0, totalDias: tempoTreinoPericia(novoNivel) };
     } else if (tipo === "atributoFisico" || tipo === "atributoMental") {
         const nivelAtual = Number(fichaAtual.dados[chave]) || 0;
-        if (nivelAtual >= 7) return false;
+        const limite = limiteTreinoAtributo(fichaAtual, chave);
+        if (nivelAtual >= limite) return false;
         const novoNivel = nivelAtual + 1;
         treino[tipo] = { nome: chave, nivelAtual, novoNivel, progressoDias: 0, totalDias: tempoTreinoAtributo(novoNivel) };
     } else {
@@ -271,6 +272,7 @@ function aplicarAumentoCaracteristica(fichaAtual, tipo, t) {
         }
     } else {
         const atual = Number(fichaAtual.dados[t.nome]) || 0;
-        fichaAtual.dados[t.nome] = Math.max(atual, Math.min(7, t.novoNivel)); // respeita limite humano 7
+        const limite = limiteTreinoAtributo(fichaAtual, t.nome);
+        fichaAtual.dados[t.nome] = Math.max(atual, Math.min(limite, t.novoNivel)); // respeita limite humano (7, ou 8 com Esteroide — ver limiteTreinoAtributo)
     }
 }

@@ -904,6 +904,23 @@ export function calcularEstadoEnergia(energiaAtual, energiaMaxima, ignorarPenali
 // agora, validado de novo aqui no backend antes de gastar o ponto.
 export const MAX_ATRIBUTO_JOGO = 7;
 
+// Limite de TREINO (não de level up!) pra Força e Constituição — regra
+// do Esteroide (catálogo de drogas, dados-manual.js): com o uso ativo,
+// cada um dos dois pode chegar a 9 em vez do limite humano normal (7),
+// mas só via treinamento gradual — nunca de graça ao subir de nível
+// (levelup.js continua usando MAX_ATRIBUTO_JOGO puro, sem checar
+// esteroide, de propósito).
+// `fichaAtual.usaEsteroides` é um flag manual que só o Mestre marca (ver
+// checkbox em ficha.html), representando a decisão narrativa de que
+// aquele personagem está de fato tomando a droga.
+const ATRIBUTOS_ESTEROIDE = ["forca", "constituicao"];
+export function limiteTreinoAtributo(fichaAtual, chaveAtributo) {
+    if (fichaAtual?.usaEsteroides && ATRIBUTOS_ESTEROIDE.includes(chaveAtributo)) {
+        return 9;
+    }
+    return MAX_ATRIBUTO_JOGO;
+}
+
 // ---------------------------------------------------------------------
 // XP necessária para o próximo nível: nível atual x 100 (manual pg. 31).
 // ---------------------------------------------------------------------

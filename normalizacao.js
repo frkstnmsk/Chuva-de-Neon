@@ -154,6 +154,12 @@ export function normalizarFicha(raw) {
         // credenciaisDoSite/renderizarCredenciaisDarknet em ficha.js.
         // Aceita só objeto; qualquer coisa fora do formato vira {}.
         darknetCredenciais: normalizarDarknetCredenciais(raw.darknetCredenciais),
+        // Regra do Esteroide (catálogo de drogas, dados-manual.js): flag
+        // manual que só o Mestre marca (checkbox na aba Treinamento),
+        // liberando treinar Força/Constituição até 8 em vez do limite
+        // humano normal (7) — ver limiteTreinoAtributo em regras.js e
+        // configurarTreinamento em ficha.js. Não afeta level up.
+        usaEsteroides: raw.usaEsteroides ?? false,
         notas: raw.notas || ""
     };
     // Sistema de Slots de Porte (Fase 8): migra containers antigos pro

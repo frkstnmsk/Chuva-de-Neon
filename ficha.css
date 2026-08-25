@@ -1056,6 +1056,7 @@
 }
 .attr-card.locked { opacity: 0.6; }
 .attr-card.locked input { pointer-events: none; opacity: 0.7; }
+#linha-esteroides.locked { opacity: 0.6; }
 
 /* ---------- Listas de entidade (perícias, itens, vantagens...) ---------- */
 .entity-list {

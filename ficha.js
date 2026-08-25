@@ -31,7 +31,7 @@ import {
     efeitoOleoVeiculo, efeitoCospePregoVeiculo,
     itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO,
     modificadorDarknet, dificuldadeItemDarknet, sortearItemPorResultado,
-    chipEstaAtivo, tomadaSlotsOcupados
+    chipEstaAtivo, tomadaSlotsOcupados, limiteTreinoAtributo
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -77,7 +77,7 @@ import {
     CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
     arredondarMoeda
 } from "./dados-manual.js";
-import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260821-imagens5";
+import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-esteroide9";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
@@ -792,6 +792,8 @@ const el = {
     mestreCorpoTitulo: document.getElementById("mestre-corpo-titulo"),
     mestreCorpoFechar: document.getElementById("mestre-corpo-fechar"),
     chkGodmode: document.getElementById("chk-godmode"),
+    chkUsaEsteroides: document.getElementById("chk-usa-esteroides"),
+    linhaEsteroides: document.getElementById("linha-esteroides"),
     chkGodmodeIgnorarSaude: document.getElementById("chk-godmode-ignorar-saude"),
     inputFatorPrecoMateriaisVeiculo: document.getElementById("input-fator-preco-materiais-veiculo"),
     inputFatorPrecoDarknet: document.getElementById("input-fator-preco-darknet"),
@@ -10857,11 +10859,22 @@ function renderizarTreinamento() {
     el.treinoGrid.innerHTML = "";
     const treino = fichaAtual.treinamento;
 
+    // Checkbox "Usa Esteroide" (ver limiteTreinoAtributo em regras.js) —
+    // decisão narrativa que só o Mestre marca; jogador só visualiza.
+    el.chkUsaEsteroides.checked = !!fichaAtual.usaEsteroides;
+    el.chkUsaEsteroides.disabled = !isMestre;
+    el.linhaEsteroides.classList.toggle("locked", !isMestre);
+
     TIPOS_TREINO.forEach(({ tipo, label, opcoes }) => {
         const atual = treino[tipo];
         const fila = filaTreino(fichaAtual, tipo);
         const ehAtributo = tipo.startsWith("atributo");
-        const limite = ehAtributo ? 7 : 5;
+        // Limite de treino: 5 pra perícia, 7 pra atributo — exceto Força e
+        // Constituição com Esteroide ativo, que sobem pra 8 (ver
+        // limiteTreinoAtributo em regras.js). Por isso é calculado por
+        // característica dentro do forEach abaixo, não um número único
+        // fixo pro card inteiro.
+        const limitePericia = 5;
 
         const card = document.createElement("div");
         card.className = "treino-card";
@@ -10941,6 +10954,7 @@ function renderizarTreinamento() {
             // representa mais 1 nível reservado — só esconde a opção
             // quando isso já bate no limite máximo.
             const reservados = (atual && atual.nome === nome ? 1 : 0) + fila.filter(n => n === nome).length;
+            const limite = ehAtributo ? limiteTreinoAtributo(fichaAtual, nome) : limitePericia;
             if (nivelAtual + reservados >= limite) return;
             const opt = document.createElement("option");
             opt.value = nome;
@@ -10975,6 +10989,20 @@ function renderizarTreinamento() {
 async function salvarTreinamento() {
     await update(ref(db, `${caminhoBase()}/treinamento`), fichaAtual.treinamento);
 }
+
+// Flag "Usa Esteroide" (ver limiteTreinoAtributo em regras.js) — decisão
+// narrativa manual, só o Mestre marca (checkbox trava sozinho pra
+// jogador em renderizarTreinamento). Fica salva direto na raiz da
+// ficha, igual outros poucos campos soltos que não têm objeto próprio.
+el.chkUsaEsteroides.addEventListener("change", async (e) => {
+    if (!isMestre) return;
+    fichaAtual.usaEsteroides = e.target.checked;
+    await update(ref(db, caminhoBase()), { usaEsteroides: e.target.checked });
+    toast(e.target.checked
+        ? "Esteroide ativado — Força e Constituição podem ser treinadas até 9."
+        : "Esteroide desativado — Força e Constituição voltam ao limite normal de treino (7).");
+    renderizarTreinamento();
+});
 
 // ---------------------------------------------------------------------
 // RECEITAS — uma seção pra cada perícia de criação de item (Ferramenta
