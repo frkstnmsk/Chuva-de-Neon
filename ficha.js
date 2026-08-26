@@ -77,7 +77,7 @@ import {
     CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
     arredondarMoeda
 } from "./dados-manual.js";
-import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-esteroide9";
+import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-fixhistorico";
 import {
     listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria,
     calcularCargaAtual, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario,
@@ -13608,7 +13608,16 @@ async function salvarTudo(manual) {
         return;
     }
     try {
-        await set(ref(db, `${caminhoBase()}`), fichaAtual);
+        // update() em vez de set(): o histórico de XP (xpHistorico) vive
+        // como um nó separado dentro de fichas/{id}/, gravado por
+        // mestre.js, e NUNCA fica dentro de `fichaAtual` (é carregado à
+        // parte, em xpHistoricoCache). Um set() na raiz da ficha
+        // substitui a árvore inteira pelo que tem em `fichaAtual` — como
+        // xpHistorico não está lá, ele era apagado toda vez que alguém
+        // clicava em "Salvar". update() faz o mesmo trabalho (substitui
+        // cada campo por inteiro) mas preserva qualquer chave-irmã que
+        // não esteja no objeto salvo.
+        await update(ref(db, `${caminhoBase()}`), fichaAtual);
         if (manual) toast("Ficha salva.");
     } catch (e) {
         console.error(e);
