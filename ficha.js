@@ -13955,6 +13955,14 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoSubstanciaVicio.style.display = "none";
     el.modalCampoTipoVeiculo.style.display = "none";
     el.modalConfigVeiculo.style.display = "none";
+    el.modalCampoCalibre.style.display = "none";
+    el.modalCampoMaosNecessarias.style.display = "none";
+    el.modalCampoLimitarRolagem.style.display = "none";
+    el.modalCampoEquipavel.style.display = "none";
+    el.modalCampoItemSaldo.style.display = "none";
+    el.modalCampoJaEquipar.style.display = "none";
+    el.modalCampoCarregadorCapacidade.style.display = "none";
+    el.modalCampoProjetilQuantidade.style.display = "none";
     el.modalSecaoNarrativa.style.display = "";
     el.modalNome.parentElement.style.display = "flex";
     document.querySelector('label[for="modal-nivel"]').innerText = "Nível (0–5)";
