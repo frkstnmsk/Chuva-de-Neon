@@ -622,6 +622,8 @@ const el = {
     modalCampoInstalarVeiculo: document.getElementById("modal-campo-instalar-veiculo"),
     modalInstalarVeiculo: document.getElementById("modal-instalar-veiculo"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
+    modalCampoEspecializacaoPericia: document.getElementById("modal-campo-especializacao-pericia"),
+    modalEspecializacaoPericia: document.getElementById("modal-especializacao-pericia"),
     hintFerramentaCriacaoGeral: document.getElementById("hint-ferramenta-criacao-geral"),
     modalLabelPericiaUso: document.getElementById("modal-label-pericia-uso"),
     modalPericiaUso: document.getElementById("modal-pericia-uso"),
@@ -3282,10 +3284,13 @@ function renderizarPericias(modificadoresPlanos) {
                 `).join("")}
             </div>
         ` : "";
+        const especializacoesCompradas = Array.isArray(p.especializacoes) && p.especializacoes.length
+            ? ` · especialização nível ${p.especializacoes.slice().sort().join(", ")}`
+            : "";
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
-                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}</span>
+                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}${especializacoesCompradas}</span>
             </div>
             <div class="entity-badges">
                 <button type="button" class="btn-rolar btn-blue" title="Rolar d20 + ${calc.total}">🎲 ${calc.total >= 0 ? "+" : ""}${calc.total}</button>
@@ -10381,7 +10386,9 @@ function resumoModificadores(entidade) {
 // ---------------------------------------------------------------------
 function renderizarEspecializacoes() {
     renderizarListaSimples(el.listaEspecializacoes, fichaAtual.especializacoes || {}, (id, v) => ({
-        nome: v.nome || "(sem nome)", sub: v.descricao || "", direita: resumoModificadores(v)
+        nome: v.nome || "(sem nome)",
+        sub: [v.periciaVinculada ? `Perícia: ${v.periciaVinculada}` : null, v.descricao || null].filter(Boolean).join(" — "),
+        direita: resumoModificadores(v)
     }), "especializacoes");
 }
 
@@ -11937,7 +11944,7 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais, c
     const hintRequisito = modal.querySelector("#receita-hint-requisito-engenharia");
     function atualizarAvisoRequisitoEngenharia() {
         if (!hintRequisito) return;
-        if (receitaExistente || !fichaAtual || isMestre) { hintRequisito.innerText = ""; return; }
+        if (receitaExistente || !fichaAtual || isMestre || opcoesSlot?.origem === "livre") { hintRequisito.innerText = ""; return; }
         const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
         hintRequisito.innerText = requisito.ok ? "" : `⚠️ ${requisito.motivo}`;
         hintRequisito.classList.toggle("hint-alerta", !requisito.ok);
@@ -12100,9 +12107,27 @@ function abrirModalCriarReceita(receitaExistente, opcoesSlot, valoresIniciais, c
         // que a Engenharia ou a perícia vinculada do personagem ainda
         // não cheguem no nível exigido pra "desenhar o esquema" do
         // zero — ver pedido do usuário 2026-08-19).
+        //
+        // Slot GRÁTIS (opcoesSlot?.origem === "livre", ver
+        // receitasConhecidas/renderizarReceitas): 1 receita de graça por
+        // nível, do 1 até o nível atual da perícia vinculada — não exige
+        // Engenharia nenhuma, só a própria perícia vinculada no nível da
+        // receita (já garantido pela UI só oferecer o slot até
+        // nivelPericia, mas revalida aqui também). Engenharia só entra
+        // quando o jogador quer uma receita ADICIONAL além da gratuita
+        // desse nível (fluxo sem opcoesSlot, vindo do botão "Rolar
+        // Engenharia" → "Criar receita").
         if (!receitaExistente && fichaAtual && !isMestre) {
-            const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
-            if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
+            if (opcoesSlot?.origem === "livre") {
+                const nivelPericiaVinculadaSlot = Number(Object.values(fichaAtual.pericias || {}).find(p => p.nome === selectPericia.value)?.nivel) || 0;
+                if (nivelPericiaVinculadaSlot < (Number(selectNivel.value) || 1)) {
+                    toast(`Sua ${selectPericia.value} ainda não chegou no nível ${selectNivel.value} pra ter essa receita gratuita.`, "erro");
+                    return;
+                }
+            } else {
+                const requisito = atendeRequisitoCriarReceita(fichaAtual.pericias, Number(selectNivel.value) || 1, selectPericia.value);
+                if (!requisito.ok) { toast(requisito.motivo, "erro"); return; }
+            }
         }
         const nomeCriador = fichaAtual?.config?.nomeExibicao || sessao?.nome || (isMestre ? "Mestre" : "Jogador");
         const receita = {
@@ -13904,6 +13929,9 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoNivelTag.style.display = "none";
     el.modalCampoInstalarVeiculo.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
+    el.modalCampoEspecializacaoPericia.style.display = "none";
+    const hintEspecializacoesPericiaExistente = document.getElementById("hint-especializacoes-pericia");
+    if (hintEspecializacoesPericiaExistente) hintEspecializacoesPericiaExistente.style.display = "none";
     el.hintFerramentaCriacaoGeral.style.display = "none";
     el.modalCampoClasseProtecao.style.display = "none";
     el.modalCampoLocalProtegido.style.display = "none";
@@ -13959,6 +13987,20 @@ function prepararModalParaLista(lista, objetoExistente) {
         } else if (el.modalCampoSubstanciaVicio) {
             el.modalCampoSubstanciaVicio.style.display = "none";
             el.modalSubstanciaVicio.value = "";
+        }
+        if (lista === "especializacoes") {
+            el.modalCampoEspecializacaoPericia.style.display = "flex";
+            const periciaVinculadaAtual = (objetoExistente && objetoExistente.periciaVinculada) || "";
+            const idsPericias = Object.keys(fichaAtual.pericias || {})
+                .filter(id => (Number(fichaAtual.pericias[id].nivel) || 0) >= 3 || fichaAtual.pericias[id].nome === periciaVinculadaAtual)
+                .sort((a, b) => fichaAtual.pericias[a].nome.localeCompare(fichaAtual.pericias[b].nome));
+            el.modalEspecializacaoPericia.innerHTML = `<option value="">-- nenhuma --</option>` +
+                idsPericias.map(id => {
+                    const p = fichaAtual.pericias[id];
+                    const abaixoDoMinimo = p.nome === periciaVinculadaAtual && (Number(p.nivel) || 0) < 3;
+                    return `<option value="${escapeHtml(p.nome)}">${escapeHtml(p.nome)} (nível ${p.nivel})${abaixoDoMinimo ? " — abaixo do nível 3" : ""}</option>`;
+                }).join("");
+            el.modalEspecializacaoPericia.value = periciaVinculadaAtual;
         }
     }
 
@@ -14026,7 +14068,26 @@ function prepararModalPericia(existente) {
         el.modalPericiaBusca.disabled = true; // não dá pra trocar o nome de uma perícia já criada
         el.modalNivel.value = existente.nivel ?? 0;
         popularOpcoesPericia(oficial ? oficial.categoria : "");
+        // Especializações compradas no Level Up (níveis 3/4/5, ver
+        // levelup.js) não têm campo próprio de edição aqui — são só
+        // informativas, pra não sumirem de vista fora do assistente de
+        // Level Up. O nome/efeito de cada uma continua sendo cadastrado
+        // à mão na aba "Especializações" (com o vínculo de perícia).
+        const especializacoesExistentes = Array.isArray(existente.especializacoes) ? existente.especializacoes : [];
+        let hintEspecializacoes = document.getElementById("hint-especializacoes-pericia");
+        if (!hintEspecializacoes) {
+            hintEspecializacoes = document.createElement("p");
+            hintEspecializacoes.id = "hint-especializacoes-pericia";
+            hintEspecializacoes.className = "hint";
+            el.modalCampoNivel.insertAdjacentElement("afterend", hintEspecializacoes);
+        }
+        hintEspecializacoes.style.display = "";
+        hintEspecializacoes.innerText = especializacoesExistentes.length
+            ? `Especialização(ões) comprada(s) no Level Up: nível ${especializacoesExistentes.slice().sort().join(", ")}. Cadastre o nome/efeito de cada uma na aba "Especializações".`
+            : "Nenhuma especialização comprada ainda (disponível a partir do nível 3, via Level Up).";
     } else {
+        const hintEspecializacoes = document.getElementById("hint-especializacoes-pericia");
+        if (hintEspecializacoes) hintEspecializacoes.style.display = "none";
         el.modalCategoriaPericia.value = "";
         el.modalPericiaValor.value = "";
         el.modalPericiaBusca.value = "";
@@ -15813,6 +15874,11 @@ async function salvarEntidadeAtual() {
                 ? existente.diaIndiceUltimoUso
                 : (calendarioAtual ? calendarioAtual.diaIndice : 0);
         }
+    }
+    // Especializações: vínculo opcional com uma perícia da ficha (só
+    // organizacional/exibição — ver modal-campo-especializacao-pericia).
+    if (lista === "especializacoes") {
+        registro.periciaVinculada = el.modalEspecializacaoPericia.value || null;
     }
     const idFinal = id || gerarIdLocal();
     if (!fichaAtual[lista]) fichaAtual[lista] = {};

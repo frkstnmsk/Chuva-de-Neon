@@ -767,6 +767,17 @@
             <datalist id="modal-substancia-vicio-opcoes"></datalist>
         </div>
 
+        <!-- Especializações: vincula o registro a uma perícia específica
+             da ficha (nível 3+, regra do manual) — puramente informativo/
+             organizacional, não interfere em nenhum cálculo. -->
+        <div class="modal-field" id="modal-campo-especializacao-pericia" style="display:none;">
+            <label for="modal-especializacao-pericia">Perícia vinculada</label>
+            <select id="modal-especializacao-pericia">
+                <option value="">-- nenhuma --</option>
+            </select>
+            <p class="hint">Escolha a perícia (nível 3+) a que esta especialização pertence — só perícias elegíveis aparecem na lista. Serve de organização/exibição; o efeito de verdade continua sendo os modificadores cadastrados abaixo.</p>
+        </div>
+
         <!-- Inventário: opção de salvar este item no Banco Global -->
         <div class="modal-field" id="modal-campo-salvar-banco" style="display:none;">
             <label class="checkbox-inline">
