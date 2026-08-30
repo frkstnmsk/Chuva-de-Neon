@@ -31,7 +31,7 @@ import {
     efeitoOleoVeiculo, efeitoCospePregoVeiculo,
     itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, PENALIDADE_ARMA_VEICULO_PILOTANDO,
     modificadorDarknet, dificuldadeItemDarknet, sortearItemPorResultado,
-    chipEstaAtivo, tomadaSlotsOcupados, limiteTreinoAtributo
+    chipEstaAtivo, tomadaSlotsOcupados, limiteTreinoAtributo, TIPOS_FERIDA
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, listaPericiasPorCategoria, buscarPericiaPorNome,
@@ -575,6 +575,7 @@ const el = {
     mestreComaPainel: document.getElementById("mestre-coma-painel"),
     mestreDesmaioPainel: document.getElementById("mestre-desmaio-painel"),
     btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
+    btnMestreAplicarFerida: document.getElementById("btn-mestre-aplicar-ferida"),
     modalCampoTipoVeiculo: document.getElementById("modal-campo-tipo-veiculo"),
     modalTipoVeiculo: document.getElementById("modal-tipo-veiculo"),
     modalConfigVeiculo: document.getElementById("modal-config-veiculo"),
@@ -889,6 +890,19 @@ async function init() {
         // já cobre "tratador NPC" sem nenhuma tela nova.
         el.btnTratarOutroJogador.style.display = "inline-block";
         el.btnTratarOutroJogador.addEventListener("click", abrirModalTratarOutroJogador);
+    }
+
+    // "Aplicar ferida" (aba Saúde): só o Mestre — cria uma ferida
+    // manualmente na ficha atualmente aberta, pra qualquer situação
+    // narrativa sem golpe/ataque por trás (queda, explosão, acidente de
+    // veículo etc. — ver texto do section-header em ficha.html: "fraturas
+    // e queimaduras são lançadas manualmente pelo Mestre", que até agora
+    // não tinha nenhum jeito de fazer isso de verdade). Escondido em
+    // modoNpc igual o resto da aba Saúde (NPCs não entram no sistema de
+    // feridas — ver renderizarSaude).
+    if (el.btnMestreAplicarFerida) {
+        el.btnMestreAplicarFerida.style.display = isMestre ? "inline-block" : "none";
+        if (isMestre) el.btnMestreAplicarFerida.addEventListener("click", abrirModalMestreAplicarFerida);
     }
 
     el.btnLogout.addEventListener("click", () => {
@@ -18160,10 +18174,12 @@ function renderizarSaude() {
 
     if (modoNpc) {
         if (el.saudeSilhuetaWrap) el.saudeSilhuetaWrap.style.display = "none";
+        if (el.btnMestreAplicarFerida) el.btnMestreAplicarFerida.style.display = "none";
         el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">NPCs ainda não entram no sistema de feridas.</p>`;
         return;
     }
     if (el.saudeSilhuetaWrap) el.saudeSilhuetaWrap.style.display = "";
+    if (el.btnMestreAplicarFerida) el.btnMestreAplicarFerida.style.display = isMestre ? "inline-block" : "none";
     renderizarSilhuetaSaude();
     if (!feridasCache.length) {
         el.saudeLista.innerHTML = `<p class="entity-list-empty" style="cursor:default;">Nenhuma ferida registrada.</p>`;
@@ -18284,6 +18300,91 @@ async function excluirFeridaGodmode(feridaId) {
         console.error(err);
         toast("Falha ao excluir a ferida.", "erro");
     }
+}
+
+// "Aplicar ferida" (Mestre): cria uma ferida manualmente na ficha
+// atualmente aberta na tela, pra qualquer situação narrativa sem golpe/
+// ataque automatizado por trás (queda, explosão, acidente de veículo,
+// arma branca fora de combate etc.) — reaproveita criarFerida (saude.js),
+// a mesma função usada pelos gatilhos automáticos de combate. Não exige
+// Godmode (mesmo nível de acesso de "Testar Infecção" — é uma ferramenta
+// normal do Mestre, não uma correção de emergência). feridasCache
+// atualiza sozinho via ouvirFeridas assim que a ferida é criada.
+function abrirModalMestreAplicarFerida() {
+    if (!isMestre || modoNpc || !fichaAtualId) return;
+
+    let modal = document.getElementById("modal-mestre-aplicar-ferida");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-mestre-aplicar-ferida";
+        modal.className = "panel combate-painel-jogador";
+        document.body.appendChild(modal);
+    }
+
+    const nomeFicha = fichaAtual?.config?.nomeExibicao || fichaAtualId;
+    const opcoesTipo = TIPOS_FERIDA.map(t => `<option value="${t}">${tituloTipoFerida(t)}</option>`).join("");
+    const opcoesLocal = ZONAS_SILHUETA.map(z => `<option value="${z}">${labelLocalFerida(z)}</option>`).join("");
+
+    modal.innerHTML = `
+        <div class="combate-painel-topo">
+            <span class="eyebrow">Aplicar ferida — ${escapeHtml(nomeFicha)}</span>
+            <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+        </div>
+        <p class="hint">Cria a ferida direto na aba Saúde desse personagem, no estado "Aberta" — pra qualquer ferimento narrativo sem golpe/ataque automatizado por trás.</p>
+        <label style="display:block;margin-top:10px;">Tipo
+            <select id="mestre-ferida-tipo" style="width:100%;">${opcoesTipo}</select>
+        </label>
+        <label style="display:block;margin-top:10px;">Local (opcional)
+            <select id="mestre-ferida-local" style="width:100%;">
+                <option value="">Sem local específico</option>
+                ${opcoesLocal}
+            </select>
+        </label>
+        <label style="display:block;margin-top:10px;">Origem
+            <input type="text" id="mestre-ferida-origem" style="width:100%;" placeholder="Ex.: queda de 3 andares, explosão, faca enferrujada...">
+        </label>
+        <div id="mestre-ferida-campos-sangramento" style="display:none;">
+            <label style="display:block;margin-top:10px;">Dano por turno
+                <input type="number" id="mestre-ferida-dano-turno" style="width:100%;" value="2" min="0">
+            </label>
+            <label style="display:block;margin-top:10px;">Nº de turnos (ticks)
+                <input type="number" id="mestre-ferida-turnos" style="width:100%;" value="3" min="0">
+            </label>
+        </div>
+        <button type="button" class="btn-lime" id="btn-mestre-confirmar-aplicar-ferida" style="margin-top:14px;width:100%;">Aplicar ferida</button>
+    `;
+    const fechar = () => modal.remove();
+    modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+
+    const selectTipo = modal.querySelector("#mestre-ferida-tipo");
+    const camposSangramento = modal.querySelector("#mestre-ferida-campos-sangramento");
+    selectTipo.addEventListener("change", () => {
+        camposSangramento.style.display = selectTipo.value === "sangramento" ? "" : "none";
+    });
+
+    modal.querySelector("#btn-mestre-confirmar-aplicar-ferida").addEventListener("click", async () => {
+        const tipo = selectTipo.value;
+        const local = modal.querySelector("#mestre-ferida-local").value || null;
+        const origem = modal.querySelector("#mestre-ferida-origem").value.trim() || "Aplicada manualmente pelo Mestre";
+        const dadosFerida = { tipo, local, origem, estadoInicial: "aberta" };
+        if (tipo === "sangramento") {
+            const dano = Number(modal.querySelector("#mestre-ferida-dano-turno").value) || 0;
+            const turnos = Number(modal.querySelector("#mestre-ferida-turnos").value) || 0;
+            if (dano <= 0 || turnos <= 0) { toast("Informe o dano por turno e o número de turnos.", "erro"); return; }
+            dadosFerida.danoPorTurno = dano;
+            dadosFerida.turnosRestantes = turnos;
+        }
+        try {
+            await criarFerida(fichaAtualId, dadosFerida);
+            const detalhe = `Mestre aplicou uma ferida (${tituloTipoFerida(tipo)}${local ? ` — ${labelLocalFerida(local)}` : ""}) em ${nomeFicha}: ${origem}`;
+            await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: 0, detalhe });
+            toast(`Ferida aplicada em ${nomeFicha}.`);
+            fechar();
+        } catch (err) {
+            console.error(err);
+            toast(err.message || "Falha ao aplicar a ferida.", "erro");
+        }
+    });
 }
 
 // =====================================================================
