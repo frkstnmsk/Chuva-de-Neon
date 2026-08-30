@@ -7,14 +7,13 @@
 // perícia ficam travados pro jogador na ficha normal.
 
 import {
-    ATRIBUTOS_PRIMARIOS
+    ATRIBUTOS_PRIMARIOS, MAX_ATRIBUTO_CRIACAO
 } from "./regras.js";
 import {
     FUNCOES, listaFuncoes, PERICIAS_MANUAL, listaPericiasPorCategoria,
     CATEGORIAS_PERICIA, buscarPericiaPorNome
 } from "./dados-manual.js";
 
-const MAX_ATRIBUTO_CRIACAO = 5;
 const MAX_PERICIA_CRIACAO = 3;
 const PONTOS_ATRIBUTOS_BASE = 7;
 const PONTOS_PERICIAS_BASE = 5;

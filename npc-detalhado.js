@@ -44,7 +44,7 @@
 // }
 // =====================================================================
 
-import { ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS, calcularDerivados } from "./regras.js";
+import { ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS, calcularDerivados, MAX_ATRIBUTO_CRIACAO } from "./regras.js";
 
 export function estadoInicialAtributosPrimariosNpc() {
     const out = {};
@@ -65,6 +65,10 @@ export function estadoInicialNpcDetalhado() {
         vulgo: "",
         idade: "",
         funcaoNarrativa: "",
+        // Nível do NPC (opcional, default 1) — usado só pra sugerir a
+        // faixa de PV (ver faixaPvSugeridaNpc abaixo). Não trava nada
+        // no NPC: continua sendo um número livre digitado pelo Mestre.
+        nivel: 1,
         atributosPrimarios: estadoInicialAtributosPrimariosNpc(),
         secundariosOverride: estadoInicialSecundariosOverrideNpc(),
         periciasNpc: {},
@@ -155,4 +159,104 @@ export function adicionarPericiaNpc(npcDetalhado, nome, nivel) {
 
 export function removerPericiaNpc(npcDetalhado, periciaId) {
     if (npcDetalhado.periciasNpc) delete npcDetalhado.periciasNpc[periciaId];
+}
+
+// =====================================================================
+// Sugestão de PV por Nível (Mestre)
+// =====================================================================
+// Ao informar o Nível de um NPC na mini-ficha, sugere a faixa de PV
+// (mínimo e máximo) que ele PODERIA ter naquele nível com a Constituição
+// digitada — simulando os Dados de Vida que ele teria rolado em cada
+// Level Up (mesma regra do jogador: dadoVidaPorConstituicao/rolarDadoVida
+// em regras.js), do nível 1 até o nível informado.
+//
+// Por que uma FAIXA e não um valor único: o Dado de Vida rolado em cada
+// Level Up depende da Constituição ATUAL naquele momento (regras.js,
+// dadoVidaPorConstituicao) — e a Constituição pode ter subido ao longo
+// do caminho (1 ponto de atributo por Level Up, à escolha do jogador).
+// Como só sabemos o nível e a Constituição FINAIS do NPC, não dá pra
+// saber exatamente quando cada ponto de Constituição foi gasto — então
+// calculamos os dois extremos possíveis:
+//
+// - MÁXIMO: a Constituição subiu o quanto antes (nos primeiros Level
+//   Ups), então mais rolagens aconteceram com um dado maior; e cada
+//   Dado de Vida saiu no maior resultado possível.
+// - MÍNIMO: a Constituição só subiu no fim (adiada o quanto pôde), então
+//   mais rolagens aconteceram com o dado ainda pequeno (o da criação);
+//   e cada Dado de Vida saiu no menor resultado possível (a "regra do
+//   mínimo" do próprio dado: metade do dado + 1).
+//
+// Exemplo do próprio pedido: NPC nível 3, Constituição 7. O limite de
+// CRIAÇÃO é 5 (MAX_ATRIBUTO_CRIACAO) — ou seja, esse NPC só chega a 7
+// gastando 2 pontos de atributo em Constituição ao longo de Level Ups.
+// Nível 3 = 2 Level Ups a partir do nível 1 (1→2 e 2→3), que é
+// exatamente o mínimo de Level Ups necessário pra isso — logo esse NPC
+// só é "alcançável" (campo `alcancavel`) se tiver subido Constituição
+// nos dois Level Ups, sem sobra pra outro atributo.
+//
+// `atributosPrimarios` = objeto completo do NPC (não só a Constituição),
+// pra reaproveitar a MESMA fórmula de PV do jogo (regras.js, RECURSOS,
+// já conta qualquer Vantagem passada em `modificadoresExtras`).
+export function faixaPvSugeridaNpc(atributosPrimarios, nivel, modificadoresExtras = []) {
+    const nivelAlvo = Math.max(1, Math.floor(Number(nivel)) || 1);
+    const constituicaoFinal = Math.max(0, Number(atributosPrimarios?.constituicao) || 0);
+    const levelUps = nivelAlvo - 1;
+    const pontosNecessarios = Math.max(0, constituicaoFinal - MAX_ATRIBUTO_CRIACAO);
+    // Alcançável = há Level Ups suficientes pra ter chegado nessa
+    // Constituição gastando no máximo 1 ponto de atributo por nível
+    // (regra do jogo) — mesmo raciocínio do exemplo acima.
+    const alcancavel = pontosNecessarios <= levelUps;
+    // Pontos efetivamente simulados: nunca mais que o número de Level
+    // Ups disponíveis (senão o histórico simulado não caberia nesse
+    // nível) — quando não alcançável, a faixa vira só uma estimativa,
+    // sinalizada por `alcancavel: false`.
+    const pontosSimulados = Math.min(pontosNecessarios, levelUps);
+
+    // PV base (fórmula 50 + CONx4 do manual, + Vantagens) com a
+    // Constituição FINAL — é o mesmo "calculado" já mostrado na
+    // mini-ficha pro campo PV.
+    const derivados = calcularDerivados(atributosPrimarios || {}, modificadoresExtras);
+    const pvBase = derivados.recursos?.pv?.total ?? 0;
+
+    if (levelUps <= 0) {
+        const pv = Math.round(pvBase);
+        return {
+            valido: true, nivelAlvo, constituicaoFinal, levelUps: 0,
+            pontosNecessarios, alcancavel,
+            pvBase, pvMinimo: pv, pvMaximo: pv
+        };
+    }
+
+    // Fórmulas fechadas a partir de dadoVidaPorConstituicao/rolarDadoVida
+    // (regras.js): faces = 16 + 2xCON, bônus = CON.
+    // Mínimo do dado (regra de "metade do dado + 1") = floor(faces/2)+1
+    //   = (8+CON)+1 = 9+CON  →  + bônus (CON)  →  9 + 2xCON.
+    // Máximo do dado = faces  →  + bônus (CON)  →  16 + 3xCON.
+    const rollMin = con => 9 + (2 * con);
+    const rollMax = con => 16 + (3 * con);
+
+    let somaMax = 0;
+    for (let i = 1; i <= levelUps; i++) {
+        // Constituição sobe o quanto antes: nos primeiros `pontosSimulados`
+        // Level Ups.
+        const con = i <= pontosSimulados ? MAX_ATRIBUTO_CRIACAO + i : constituicaoFinal;
+        somaMax += rollMax(con);
+    }
+
+    let somaMin = 0;
+    const levelUpsSemSubir = levelUps - pontosSimulados;
+    for (let i = 1; i <= levelUps; i++) {
+        // Constituição sobe o quanto mais tarde possível: só nos
+        // últimos `pontosSimulados` Level Ups.
+        const con = i <= levelUpsSemSubir ? MAX_ATRIBUTO_CRIACAO : MAX_ATRIBUTO_CRIACAO + (i - levelUpsSemSubir);
+        somaMin += rollMin(con);
+    }
+
+    return {
+        valido: true, nivelAlvo, constituicaoFinal, levelUps,
+        pontosNecessarios, alcancavel,
+        pvBase,
+        pvMinimo: Math.round(pvBase + somaMin),
+        pvMaximo: Math.round(pvBase + somaMax)
+    };
 }

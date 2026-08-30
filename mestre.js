@@ -219,6 +219,44 @@ export async function mestreRolarDado({ faces = 20, modificador = 0, quem = "Mes
 // Mestre que não têm noção de golpe mirado). Retorna o resumo completo
 // pro Mestre/automação montarem a mensagem do Log de Dados.
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Sincroniza PV/PV máximo/estado de saúde (e o resto que depende deles —
+// velocidade, modAgilidade) do(s) participante(s) do Gerenciador de
+// Combate que correspondem a um alvo (ficha ou NPC), IMEDIATAMENTE após
+// dano ou cura — sem esperar o próximo avanço de turno (avancarTurnoCombate
+// já fazia essa sincronia, mas só pra TODOS os participantes de uma vez,
+// na troca de turno; um jogador batendo num alvo no meio da rodada ficava
+// sem refletir na tela dos outros até alguém passar de turno). Só mexe em
+// algo se houver combate ativo E esse alvo estiver de fato entre os
+// participantes — nas demais situações (dano fora de combate) não faz
+// nada. Chamada por aplicarDano e curarAlvo logo depois de gravarem o
+// pvAtual "de verdade" na ficha/NPC.
+async function sincronizarParticipantesCombateDoAlvo(alvoTipo, alvoId) {
+    const snapCombate = await get(ref(db, caminhoMesa("combateAtivo")));
+    if (!snapCombate.exists()) return;
+    const estado = snapCombate.val() || {};
+    if (!estado.ativo || !estado.participantes) return;
+    const pares = Object.entries(estado.participantes).filter(([, p]) => p && p.tipo === alvoTipo && p.refId === alvoId);
+    if (!pares.length) return;
+
+    const snapIgnorarSaude = await get(ref(db, caminhoMesa("godmodeIgnorarPenalidadeSaude")));
+    const snapGodmode = await get(ref(db, caminhoMesa("godmode")));
+    const godmodeAtivo = snapGodmode.exists() ? !!snapGodmode.val() : false;
+    const ignorarPenalidadeSaude = godmodeAtivo && (snapIgnorarSaude.exists() ? !!snapIgnorarSaude.val() : false);
+
+    const atualizacoes = {};
+    for (const [pid, participante] of pares) {
+        const stats = await calcularStatsCombateParticipante(participante, ignorarPenalidadeSaude);
+        atualizacoes[`participantes/${pid}/pv`] = stats.pv;
+        atualizacoes[`participantes/${pid}/pvMax`] = stats.pvMax;
+        atualizacoes[`participantes/${pid}/estadoSaude`] = stats.estadoSaude;
+        atualizacoes[`participantes/${pid}/estadoSaudeLabel`] = stats.estadoSaudeLabel;
+        atualizacoes[`participantes/${pid}/modAgilidade`] = stats.modAgilidade;
+        atualizacoes[`participantes/${pid}/velocidade`] = stats.velocidade;
+    }
+    await update(ref(db, caminhoMesa("combateAtivo")), atualizacoes);
+}
+
 export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, localArmadura = null, ignorarArmaduraPontos = 0, calibreProjetil = null, localFerida = null) {
     const brutoNum = Number(danoBruto) || 0;
     const ignorarArmadura = Math.max(0, Number(ignorarArmaduraPontos) || 0);
@@ -331,6 +369,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
         }
         const novoPv = pvAtual - danoFinal;
         await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
+        await sincronizarParticipantesCombateDoAlvo("ficha", alvoId);
         // Coma (item 6 do plano de saúde/complicações): gatilho
         // automático quando o PV cai abaixo de 1/10 do total. Não cria
         // Ação Pendente de novo se a ficha já estiver em coma (evita
@@ -418,6 +457,7 @@ export async function aplicarDano(alvoTipo, alvoId, danoBruto, tipoDanoKey, loca
     const danoFinal = Math.max(0, brutoNum - reducao);
     const novoPv = pvAtual - danoFinal;
     await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
+    await sincronizarParticipantesCombateDoAlvo("npc", alvoId);
     return { nomeAlvo, danoBruto: brutoNum, reducao, danoFinal, novoPv, tipoDanoFinalAjustado: tipoDanoKey };
 }
 
@@ -453,6 +493,7 @@ export async function curarAlvo(alvoTipo, alvoId, valorCura) {
         const pvAtual = (dadosRaw.pvAtual !== null && dadosRaw.pvAtual !== undefined) ? Number(dadosRaw.pvAtual) : pvMaximoRaw;
         const novoPv = pvMaximoFicha > 0 ? Math.min(pvMaximoFicha, pvAtual + curaNum) : pvAtual + curaNum;
         await update(ref(db, caminhoMesa(`fichas/${alvoId}/dados`)), { pvAtual: novoPv });
+        await sincronizarParticipantesCombateDoAlvo("ficha", alvoId);
         return { nomeAlvo, curaAplicada: novoPv - pvAtual, pvAtual: novoPv, pvMaximo: pvMaximoFicha };
     }
 
@@ -464,6 +505,7 @@ export async function curarAlvo(alvoTipo, alvoId, valorCura) {
     const pvAtual = (npc.pvAtual !== null && npc.pvAtual !== undefined) ? Number(npc.pvAtual) : pvMaximoNpc;
     const novoPv = pvMaximoNpc > 0 ? Math.min(pvMaximoNpc, pvAtual + curaNum) : pvAtual + curaNum;
     await update(ref(db, caminhoMesa(`npcs/${alvoId}`)), { pvAtual: novoPv });
+    await sincronizarParticipantesCombateDoAlvo("npc", alvoId);
     return { nomeAlvo, curaAplicada: novoPv - pvAtual, pvAtual: novoPv, pvMaximo: pvMaximoNpc };
 }
 
@@ -1019,6 +1061,10 @@ export async function criarNpcDetalhado({ nome, npcDetalhado, reducoesDano, cate
         vulgo: npcDetalhado.vulgo || "",
         idade: npcDetalhado.idade || "",
         funcaoNarrativa: npcDetalhado.funcaoNarrativa || "",
+        // Nível do NPC (opcional, default 1) — só alimenta a sugestão de
+        // faixa de PV na mini-ficha (ver faixaPvSugeridaNpc em
+        // npc-detalhado.js); não trava nem recalcula nada sozinho aqui.
+        nivel: Math.max(1, Number(npcDetalhado.nivel) || 1),
         atributosPrimarios: npcDetalhado.atributosPrimarios,
         secundariosOverride: npcDetalhado.secundariosOverride,
         periciasNpc: npcDetalhado.periciasNpc || {},
@@ -1054,6 +1100,7 @@ export async function atualizarNpcDetalhado(npcId, { nome, npcDetalhado, reducoe
         vulgo: npcDetalhado.vulgo || "",
         idade: npcDetalhado.idade || "",
         funcaoNarrativa: npcDetalhado.funcaoNarrativa || "",
+        nivel: Math.max(1, Number(npcDetalhado.nivel) || 1),
         atributosPrimarios: npcDetalhado.atributosPrimarios,
         secundariosOverride: npcDetalhado.secundariosOverride,
         periciasNpc: npcDetalhado.periciasNpc || {}

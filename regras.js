@@ -904,6 +904,13 @@ export function calcularEstadoEnergia(energiaAtual, energiaMaxima, ignorarPenali
 // agora, validado de novo aqui no backend antes de gastar o ponto.
 export const MAX_ATRIBUTO_JOGO = 7;
 
+// Limite de atributo NA criação de personagem (manual pg. 19): valor
+// canônico usado por criacao.js (wizard do jogador) e também pela
+// sugestão de PV por Nível de NPC (ver faixaPvSugeridaNpc em
+// npc-detalhado.js) — um personagem só ultrapassa esse teto em Level
+// Up/Treinamento, nunca na criação.
+export const MAX_ATRIBUTO_CRIACAO = 5;
+
 // Limite de TREINO (não de level up!) pra Força e Constituição — regra
 // do Esteroide (catálogo de drogas, dados-manual.js): com o uso ativo,
 // cada um dos dois pode chegar a 9 em vez do limite humano normal (7),

@@ -21,7 +21,7 @@ import {
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem,
     danoPorMargemFalha
 } from "./regras.js";
-import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js?v=20260829-fixmaosguardar";
+import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js?v=20260830-npcnivelpv";
 import { SUB_LOCAIS_FERIDA, ZONAS_SILHUETA } from "./dados-manual.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha

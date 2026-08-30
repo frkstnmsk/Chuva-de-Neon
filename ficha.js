@@ -155,7 +155,7 @@ import {
     aplicarDesmaioTemporizado, aplicarTesteAtrasado, aplicarPerdaAcaoTemporizada,
     ouvirPerseguicaoAtiva, iniciarPerseguicao, removerParticipantePerseguicao, encerrarPerseguicao,
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
-} from "./mestre.js?v=20260829-fixmaosguardar";
+} from "./mestre.js?v=20260830-npcnivelpv";
 import {
     criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, isentarInfeccaoFerida, removerFerida, aplicarTickSangramento,
     agruparFeridasPorLocal, estadoVisualFerida
@@ -169,7 +169,7 @@ import {
 } from "./receitas-globais.js";
 import {
     estadoInicialNpcDetalhado, calcularSecundariosNpc,
-    adicionarPericiaNpc, removerPericiaNpc
+    adicionarPericiaNpc, removerPericiaNpc, faixaPvSugeridaNpc
 } from "./npc-detalhado.js";
 
 // ---------------------------------------------------------------------
@@ -21277,7 +21277,7 @@ function montarPainelNpcs(corpo) {
             ? reducoesParaExibir.map(r => `${TIPOS_DANO.find(t => t.key === r.tipo)?.label || r.tipo} -${r.valor}`).join(", ")
             : "nenhuma";
         card.innerHTML = `
-            <strong>${npc.modelo ? "⭐ " : ""}${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}</strong>
+            <strong>${npc.modelo ? "⭐ " : ""}${escapeHtml(npc.nome)}${npc.modoDetalhado ? ' <span class="hint-inline">(mini-ficha)</span>' : ""}${npc.modoDetalhado && npc.nivel ? ` <span class="hint-inline">· Nível ${Number(npc.nivel) || 1}</span>` : ""}</strong>
             ${npc.vulgo || npc.funcaoNarrativa ? `<span>${escapeHtml([npc.vulgo, npc.funcaoNarrativa].filter(Boolean).join(" · "))}</span>` : ""}
             ${npc.categoria ? `<span class="hint-inline">Categoria: ${escapeHtml(npc.categoria)}</span>` : ""}
             <span>PV: ${npc.pvAtual ?? npc.pvs} / ${npc.pvs}</span>
@@ -21404,6 +21404,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
             vulgo: fontePrefill.vulgo || "",
             idade: fontePrefill.idade || "",
             funcaoNarrativa: fontePrefill.funcaoNarrativa || "",
+            nivel: Math.max(1, Number(fontePrefill.nivel) || 1),
             atributosPrimarios: { ...estadoInicialNpcDetalhado().atributosPrimarios, ...(fontePrefill.atributosPrimarios || {}) },
             secundariosOverride: { ...estadoInicialNpcDetalhado().secundariosOverride, ...(fontePrefill.secundariosOverride || {}) },
             periciasNpc: { ...(fontePrefill.periciasNpc || {}) },
@@ -21494,6 +21495,21 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
     campoCategoria.append(labelCategoria, inputCategoria, datalistCategoria);
     container.appendChild(campoCategoria);
 
+    // ---- Nível (opcional) — só alimenta a sugestão de faixa de PV
+    // logo abaixo, no campo PV (ver faixaPvSugeridaNpc, npc-detalhado.js).
+    // Não trava nem sobrescreve nada sozinho; o Mestre continua livre
+    // pra digitar qualquer PV, calculado ou sobrescrito.
+    const campoNivel = document.createElement("div");
+    campoNivel.className = "modal-field";
+    const labelNivel = document.createElement("label");
+    labelNivel.innerText = "Nível (opcional — sugere a faixa de PV)";
+    const inputNivel = document.createElement("input");
+    inputNivel.type = "number";
+    inputNivel.min = 1;
+    inputNivel.value = npcDet.nivel;
+    campoNivel.append(labelNivel, inputNivel);
+    container.appendChild(campoNivel);
+
     // ---- Atributos primários ----
     const secAtributos = document.createElement("div");
     secAtributos.className = "section-header";
@@ -21530,6 +21546,14 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
     gridSecundarios.style.gridTemplateColumns = "1fr 1fr 1fr";
     gridSecundarios.style.gap = "8px";
     container.appendChild(gridSecundarios);
+
+    // ---- Sugestão de faixa de PV pelo Nível (ver campoNivel acima e
+    // faixaPvSugeridaNpc em npc-detalhado.js) — só um texto informativo
+    // logo abaixo do grid de secundários/recursos, não interfere em
+    // nada calculado ou sobrescrito ali.
+    const hintPvSugerido = document.createElement("p");
+    hintPvSugerido.className = "hint";
+    container.appendChild(hintPvSugerido);
 
     const chavesSecundarias = [...ATRIBUTOS_SECUNDARIOS, ...RECURSOS];
     const inputsSecundarios = {};
@@ -21572,9 +21596,21 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
             inputsSecundarios[s.key] = input;
             checksOverride[s.key] = chk;
         });
+
+        // Sugestão de PV pelo Nível — recalcula com a Constituição/Nível
+        // atuais do formulário (não com os já salvos), pra atualizar
+        // enquanto o Mestre digita.
+        const faixa = faixaPvSugeridaNpc(atuais, inputNivel.value);
+        const avisoInalcancavel = !faixa.alcancavel
+            ? ` ⚠️ Constituição ${faixa.constituicaoFinal} não é alcançável no nível ${faixa.nivelAlvo} pela progressão normal (precisaria de pelo menos ${faixa.pontosNecessarios} Level Up(s) gasto(s) em Constituição; esse nível só tem ${faixa.levelUps}) — faixa abaixo é só uma estimativa.`
+            : "";
+        hintPvSugerido.innerText = faixa.levelUps > 0
+            ? `Sugestão de PV pro nível ${faixa.nivelAlvo} com Constituição ${faixa.constituicaoFinal}: entre ${faixa.pvMinimo} e ${faixa.pvMaximo} (mínimo e máximo possíveis de Dados de Vida ao longo dos ${faixa.levelUps} Level Up(s)).${avisoInalcancavel}`
+            : `Sugestão de PV pro nível ${faixa.nivelAlvo} com Constituição ${faixa.constituicaoFinal}: ${faixa.pvMinimo} (nível 1, ainda sem Dado de Vida extra).`;
     }
     renderSecundarios();
     Object.values(inputsAtributos).forEach(input => input.addEventListener("input", renderSecundarios));
+    inputNivel.addEventListener("input", renderSecundarios);
 
     // ---- Perícias dinâmicas (1 a 5, qualquer perícia do manual) ----
     const secPericias = document.createElement("div");
@@ -21695,6 +21731,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
     btnSalvar.style.marginTop = "12px";
     btnSalvar.addEventListener("click", async () => {
         if (!inputNome.value.trim()) { toast("Dê um nome ao NPC.", "erro"); return; }
+        npcDet.nivel = Math.max(1, Number(inputNivel.value) || 1);
         ATRIBUTOS_PRIMARIOS.forEach(a => { npcDet.atributosPrimarios[a.key] = Number(inputsAtributos[a.key].value) || 0; });
         chavesSecundarias.forEach(s => {
             npcDet.secundariosOverride[s.key] = checksOverride[s.key].checked
@@ -21709,6 +21746,7 @@ function montarFormularioNpcDetalhado(container, npcExistente, onSalvo, prefillM
                 vulgo: inputVulgo.value.trim(),
                 idade: inputIdade.value.trim(),
                 funcaoNarrativa: inputFuncaoNarrativa.value.trim(),
+                nivel: npcDet.nivel,
                 atributosPrimarios: npcDet.atributosPrimarios,
                 secundariosOverride: npcDet.secundariosOverride,
                 periciasNpc: npcDet.periciasNpc,
