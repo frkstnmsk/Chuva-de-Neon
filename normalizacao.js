@@ -525,7 +525,19 @@ function normalizarTreinamento(t) {
         periciaFisica: t.periciaFisica ?? null,
         periciaMental: t.periciaMental ?? null,
         atributoFisico: t.atributoFisico ?? null,
-        atributoMental: t.atributoMental ?? null
+        atributoMental: t.atributoMental ?? null,
+        // Fila de espera de cada tipo (ver treinamento.js, iniciarTreinoCaracteristica/
+        // filaTreino) — sem isso aqui, a sincronização em tempo real apagava
+        // a fila da ficha em memória assim que o próprio salvarTreinamento()
+        // (ficha.js) confirmava a gravação: enfileirava certinho no banco,
+        // mas sumia na hora porque essa função reconstrói o objeto inteiro
+        // sem esses 4 campos. Precisa ser array (não objeto) — Object.values
+        // cobre tanto array quanto o formato de objeto-com-chaves-numéricas
+        // que o Realtime Database às vezes entrega pra arrays esparsos.
+        filaPericiaFisica: Array.isArray(t.filaPericiaFisica) ? t.filaPericiaFisica : Object.values(t.filaPericiaFisica || {}),
+        filaPericiaMental: Array.isArray(t.filaPericiaMental) ? t.filaPericiaMental : Object.values(t.filaPericiaMental || {}),
+        filaAtributoFisico: Array.isArray(t.filaAtributoFisico) ? t.filaAtributoFisico : Object.values(t.filaAtributoFisico || {}),
+        filaAtributoMental: Array.isArray(t.filaAtributoMental) ? t.filaAtributoMental : Object.values(t.filaAtributoMental || {})
     };
 }
 
@@ -867,7 +879,10 @@ export function fichaVaziaPadrao(nomeExibicao) {
             bonusGasto: 0, bonusGastoDetalhe: {},
             concluida: false
         },
-        treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
+        treinamento: {
+            ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null,
+            filaPericiaFisica: [], filaPericiaMental: [], filaAtributoFisico: [], filaAtributoMental: []
+        },
         levelUpPendente: null,
         determinacoes: [],
         determinacoesValidadas: [],
@@ -972,7 +987,10 @@ export function normalizarNpcComoFicha(npcId, raw) {
             bonusGasto: 0, bonusGastoDetalhe: {},
             concluida: true
         },
-        treinamento: { ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null },
+        treinamento: {
+            ativo: false, periciaFisica: null, periciaMental: null, atributoFisico: null, atributoMental: null,
+            filaPericiaFisica: [], filaPericiaMental: [], filaAtributoFisico: [], filaAtributoMental: []
+        },
         levelUpPendente: null,
         determinacoes: [],
         determinacoesValidadas: [],
