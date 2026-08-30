@@ -654,6 +654,18 @@ export function subtipoPorteOcupaMao(subtipoKey) {
     return s ? s.ocupaMao : false;
 }
 
+// Decide se um item "levando consigo" e equipado ocupa uma mão do
+// personagem (ver maosDisponiveis em inventario.js). Container (roupa/
+// recipiente) segue seu subtipoPorte (só bolsa_mao ocupa mão hoje).
+// Qualquer item comum equipável — arma, carregador solto (fora da
+// arma), item marcado equipável, ou item comum qualquer segurado solto
+// — sempre ocupa mão: é o que fica "na mão" em vez de guardado (ver
+// item.dentroDe) ou vestido.
+export function itemOcupaMao(tagKey, subtipoPorte) {
+    if (ehContainer(tagKey)) return subtipoPorteOcupaMao(subtipoPorte);
+    return true;
+}
+
 export function subtipoPorteExclusivo(subtipoKey) {
     const s = SUBTIPOS_PORTE.find(s => s.key === subtipoKey);
     return s ? s.exclusivo : false;

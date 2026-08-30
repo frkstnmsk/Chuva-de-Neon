@@ -75,7 +75,7 @@ import {
     TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip,
     ZONAS_SILHUETA,
     CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO,
-    arredondarMoeda
+    arredondarMoeda, itemOcupaMao
 } from "./dados-manual.js";
 import { normalizarFicha, fichaVaziaPadrao, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-fixhistorico";
 import {
@@ -6189,6 +6189,26 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
     }
 
     let resultadoDano;
+    // Local detalhado (plano-silhueta-saude.txt, Fase 1/Fase 6; golpes
+    // mirados por lado depois disso): resolvido ANTES de aplicarDano
+    // (não depende do resultado dele) pra poder ser repassado como 8º
+    // parâmetro — se este golpe bater o limiar de Amputação (regras.js,
+    // dentro de aplicarDano), o Mestre confirma contra ESSE local
+    // específico, não um genérico. Reaproveitado embaixo pra toda
+    // ferida criada por este mesmo golpe (Sangramento + Corte
+    // vinculados, "chance de ferida por dano" etc.) — sortearLocalDetalhado
+    // só sorteia de fato no caso de compatibilidade com chave antiga
+    // genérica; pra qualquer local específico (o normal agora) ele só
+    // devolve a própria chave.
+    // Declarada FORA do try (com `let`, não `const`) porque é usada bem
+    // depois dele — no teste de Sangramento e na criação de ferida, logo
+    // abaixo. Antes estava presa ao escopo do bloco try{} e sumia assim
+    // que ele fechava, gerando "ReferenceError: localFerida is not
+    // defined" pra todo ataque que não passa pela reação de Esquiva/
+    // Bloqueio (isto é, todo tiro de arma de fogo, sempre) — o erro
+    // interrompia a função ali mesmo, antes do registrarRolagem no final,
+    // por isso o tiro não aparecia no Log nem gerava ferida.
+    let localFerida;
     try {
         // Golpes Mirados: a redução de armadura do alvo só conta itens
         // de Proteção cujo localProtegido bate com o local mirado (ver
@@ -6198,18 +6218,7 @@ async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opc
         // arma de fogo — arma branca/contundente manda null, e
         // aplicarDano já ignora a regra nova quando calibreProjetil é
         // null).
-        // Local detalhado (plano-silhueta-saude.txt, Fase 1/Fase 6; golpes
-        // mirados por lado depois disso): resolvido ANTES de aplicarDano
-        // (não depende do resultado dele) pra poder ser repassado como 8º
-        // parâmetro — se este golpe bater o limiar de Amputação (regras.js,
-        // dentro de aplicarDano), o Mestre confirma contra ESSE local
-        // específico, não um genérico. Reaproveitado embaixo pra toda
-        // ferida criada por este mesmo golpe (Sangramento + Corte
-        // vinculados, "chance de ferida por dano" etc.) — sortearLocalDetalhado
-        // só sorteia de fato no caso de compatibilidade com chave antiga
-        // genérica; pra qualquer local específico (o normal agora) ele só
-        // devolve a própria chave.
-        const localFerida = localMira.key === "padrao" ? "torso" : sortearLocalDetalhado(localMira.key);
+        localFerida = localMira.key === "padrao" ? "torso" : sortearLocalDetalhado(localMira.key);
         resultadoDano = await aplicarDano(participante.tipo, participante.refId, danoTotal, tipoDanoKey, localMira.localArmadura, ignorarArmaduraPontos, it.calibre || null, localFerida);
     } catch (err) {
         console.error(err);
@@ -7264,10 +7273,11 @@ function renderizarInventario(modificadoresPlanos) {
     // equipado, fora de qualquer recipiente e que ocupe mão).
     const maosBase = 2;
     const maosLivres = maosDisponiveis(fichaAtual);
-    const itensOcupandoMao = Object.values(fichaAtual.inventario || {}).filter(it2 => {
+    const itensOcupandoMao = Object.entries(fichaAtual.inventario || {}).filter(([id2, it2]) => {
         if (it2.categoria !== "levando" || !it2.equipada || it2.dentroDe) return false;
-        return ehContainer(it2.tag) ? subtipoPorteOcupaMao(it2.subtipoPorte) : true;
-    });
+        if (ehCarregador(it2.tag) && carregadorEstaAnexado(fichaAtual, id2)) return false;
+        return itemOcupaMao(it2.tag, it2.subtipoPorte);
+    }).map(([, it2]) => it2);
     el.resumoMaos.innerText = `🖐️ Mãos livres: ${maosLivres}/${maosBase}`;
     el.resumoMaos.title = itensOcupandoMao.length
         ? `Ocupando mão:\n${itensOcupandoMao.map(it2 => `${it2.nome} (${Number(it2.maosNecessarias) || 1})`).join("\n")}`
@@ -7479,7 +7489,7 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
     // qualquer — pra poder ir pra mão; container segue seu próprio
     // fluxo de vestir/carregar (podeEquiparContainerItem).
     const podeEquiparCategoria = ehContainerItem ? podeEquiparContainerItem : podeEquipar;
-    const ocupaMaoEsteItem = ehContainerItem ? subtipoPorteOcupaMao(it.subtipoPorte) : true;
+    const ocupaMaoEsteItem = (ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id)) ? false : itemOcupaMao(it.tag, it.subtipoPorte);
     const maosNecessariasItem = Number(it.maosNecessarias) || 1;
     const maosLivresAtuais = maosDisponiveis(fichaAtual);
     const semMaosLivres = !equipadaItem && ocupaMaoEsteItem && maosLivresAtuais < maosNecessariasItem;
@@ -16562,13 +16572,13 @@ async function salvarItemDoModal(id) {
             toast(`Já tem outra peça de "${rotuloSubtipoPorte(subtipoPorte)}" equipada — desequipe-a primeiro.`, "erro");
             return;
         }
-        const ocupaMaoEsteItem = ehContainer(tag) ? subtipoPorteOcupaMao(subtipoPorte) : true;
+        const ocupaMaoEsteItem = (ehCarregador(tag) && carregadorEstaAnexado(fichaAtual, id)) ? false : itemOcupaMao(tag, subtipoPorte);
         if (ocupaMaoEsteItem) {
             // Se o item já estava equipado (edição) e já contava como mão
             // ocupada, devolve essa mão antes de checar — senão ele
             // "brigaria" contra a própria mão que já era dele.
             const jaOcupavaMao = existenteItem.equipada && existenteItem.categoria === "levando" && !existenteItem.dentroDe
-                && (ehContainer(tag) ? ocupaMaoEsteItem : true);
+                && ocupaMaoEsteItem;
             const maosLivres = maosDisponiveis(fichaAtual) + (jaOcupavaMao ? (Number(existenteItem.maosNecessarias) || 1) : 0);
             if (maosLivres < maosNecessarias) {
                 toast(`Sem mãos livres pra equipar (${maosLivres} livre${maosLivres === 1 ? "" : "s"} — precisa de ${maosNecessarias}).`, "erro");

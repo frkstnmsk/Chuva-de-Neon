@@ -6,7 +6,7 @@ import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehArmaOuExplosivo, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
     TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe,
-    SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo
+    SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo, itemOcupaMao
 } from "./dados-manual.js";
 import { calcularCarga } from "./regras.js";
 
@@ -318,14 +318,17 @@ export function listaCompartimentos(item) {
 // itemPodeEquiparContainer/seção 5.2 do doc de projeto).
 export function maosDisponiveis(fichaAtual) {
     const base = 2;
-    const itens = Object.values(fichaAtual.inventario || {});
-    const ocupadas = itens.reduce((acc, it) => {
+    const itens = Object.entries(fichaAtual.inventario || {});
+    const ocupadas = itens.reduce((acc, [id, it]) => {
         if (it.categoria !== "levando") return acc;
         if (!it.equipada) return acc;
         if (it.dentroDe) return acc;
-        const ocupaMao = ehContainer(it.tag)
-            ? subtipoPorteOcupaMao(it.subtipoPorte)
-            : true; // item comum equipável (arma etc.) sempre ocupa mão
+        // Carregador anexado a uma arma virou parte dela (ver
+        // carregadorEstaAnexado) — não ocupa mão própria, mesmo que
+        // tenha ficado marcado como "levando"/equipado por engano (dado
+        // legado); a mão gasta é só a da própria arma.
+        if (ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id)) return acc;
+        const ocupaMao = itemOcupaMao(it.tag, it.subtipoPorte);
         if (!ocupaMao) return acc;
         return acc + (Number(it.maosNecessarias) || 1);
     }, 0);
@@ -433,7 +436,10 @@ export function resolverEntradaLevandoConsigo(fichaAtual, item, idItemAtual) {
         return { ok: true, equipar: true };
     }
 
-    // Item comum (arma ou não) vai pra mão.
+    // Item comum (arma ou não) vai pra mão — exceto o carregador que já
+    // está anexado a uma arma (virou parte dela, não precisa de mão
+    // própria — ver carregadorEstaAnexado).
+    if (ehCarregador(item.tag) && carregadorEstaAnexado(fichaAtual, idItemAtual)) return { ok: true, equipar: true };
     const maosNecessarias = Number(item.maosNecessarias) || 1;
     if (maosDisponiveis(fichaAtual) < maosNecessarias) {
         return { ok: false, motivo: `não pode ir pra "Levando consigo" agora — sem mãos livres pra segurar; libere uma mão antes.` };
