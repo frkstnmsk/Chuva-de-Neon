@@ -21,7 +21,7 @@ import {
     TRATAMENTOS_FERIDA, feridaAceitaSutura, feridaEstaFechada, modificadorPorSituacaoItem,
     danoPorMargemFalha
 } from "./regras.js";
-import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js";
+import { aplicarDano, criarAcaoPendente, cancelarStatusSangramentoPorFerida } from "./mestre.js?v=20260829-fixmaosguardar";
 import { SUB_LOCAIS_FERIDA, ZONAS_SILHUETA } from "./dados-manual.js";
 
 // Nível de uma perícia pelo nome, direto do objeto `pericias` da ficha
@@ -215,16 +215,6 @@ export async function sincronizarFlagInfeccaoAgregada(fichaId) {
     await set(ref(db, caminho), { ativo: true, garantida, origem: origens });
 }
 
-// Item 3 do plano (Tier "Tratamento em hospital"): flag simples na
-// ficha inteira (não conta nem empilha — um novo tratamento em
-// hospital bem-sucedido só sobrescreve/reafirma o anterior). Consumida
-// e limpa em confirmarAcaoPendente "iniciar_recuperacao_pv" (mestre.js)
-// na hora em que o Mestre aprova a recuperação de PV, já com o -1/10
-// aplicado (ver aplicarReducaoTratamentoHospital em regras.js).
-async function marcarTratamentoHospital(fichaId) {
-    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), { tratamentoHospital: true });
-}
-
 // Marca infecção GARANTIDA numa ferida específica, sem rolar teste —
 // caso do manual: falha com complicação em Remover Projétil.
 async function marcarInfeccaoGarantida(fichaId, feridaId) {
@@ -319,7 +309,7 @@ async function registrarHistorico(fichaId, feridaId, { acao, quem, resultado }) 
 // ---------------------------------------------------------------------
 export async function tratarFerida(fichaId, feridaId, {
     acao, tratadorPericias, tratadorNome, situacaoItem = "nenhum",
-    dificuldadeEscolhida, modificadorExtra = 0, godmode = false, emHospital = false,
+    dificuldadeEscolhida, modificadorExtra = 0, godmode = false,
     sucessoAutomaticoItem = false, nomeItemUsado = ""
 }) {
     const config = TRATAMENTOS_FERIDA[acao];
@@ -365,9 +355,6 @@ export async function tratarFerida(fichaId, feridaId, {
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesGodmode);
         }
         await registrarHistorico(fichaId, feridaId, { acao: config.label, quem: tratadorNome, resultado: detalheGodmode });
-        if (emHospital) {
-            await marcarTratamentoHospital(fichaId);
-        }
         // Ferida "sangramento" tratada com sucesso (Estancar Sangramento
         // ou Suturar Ferimento fechando ela direto) para de sangrar NA
         // HORA — cancela também o status de combate por turno vinculado
@@ -385,8 +372,7 @@ export async function tratarFerida(fichaId, feridaId, {
             acao, dificuldade: null, bruto: null, nivelPericia: null, penalidadeItem: null, modificadorExtra: null,
             resultado: null, sucesso: true, complicacao: false, danoExtra: null, detalhe: detalheGodmode,
             novoEstado: atualizacoesGodmode.estado || ferida.estado, godmode: !!godmode,
-            sucessoAutomaticoItem: !!sucessoAutomaticoItem,
-            tratamentoHospitalRegistrado: emHospital
+            sucessoAutomaticoItem: !!sucessoAutomaticoItem
         };
     }
 
@@ -490,9 +476,6 @@ export async function tratarFerida(fichaId, feridaId, {
     if (atualizacoesFerida.infeccaoAtiva) {
         await sincronizarFlagInfeccaoAgregada(fichaId);
     }
-    if (emHospital && sucesso) {
-        await marcarTratamentoHospital(fichaId);
-    }
     // Mesmo cancelamento do caminho Godmode acima: ferida "sangramento"
     // tratada com sucesso (rolagem normal) para de sangrar na hora,
     // cancelando também o status de combate por turno vinculado.
@@ -509,7 +492,6 @@ export async function tratarFerida(fichaId, feridaId, {
         acao, dificuldade, bruto, nivelPericia, penalidadeItem, modificadorExtra,
         resultado, sucesso, complicacao, danoMargem, danoComplicacao, danoExtra, detalhe,
         novoEstado: atualizacoesFerida.estado || ferida.estado,
-        tratamentoHospitalRegistrado: emHospital && sucesso,
         comaSinalizado
     };
 }

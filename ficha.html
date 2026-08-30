@@ -412,6 +412,26 @@
                          Ações Pendentes — ver configurarRecuperacaoPV em ficha.js. -->
                     <div class="recuperacao-pv-painel" id="recuperacao-pv-painel" style="display:none;">
                         <p class="hint" id="recuperacao-pv-status"></p>
+                        <div class="recuperacao-pv-modo" id="recuperacao-pv-modo">
+                            <label class="radio-inline">
+                                <input type="radio" name="recuperacao-pv-modo" id="recuperacao-pv-modo-padrao" value="padrao_vida" checked>
+                                Padrão de Vida
+                            </label>
+                            <label class="radio-inline">
+                                <input type="radio" name="recuperacao-pv-modo" id="recuperacao-pv-modo-tratamento" value="tratamento">
+                                Tratamento médico
+                            </label>
+                        </div>
+                        <div class="recuperacao-pv-checkboxes" id="recuperacao-pv-checkboxes" style="display:none;">
+                            <label class="checkbox-inline">
+                                <input type="checkbox" id="recuperacao-pv-especializado">
+                                Tratamento especializado (-1/10 no tempo)
+                            </label>
+                            <label class="checkbox-inline">
+                                <input type="checkbox" id="recuperacao-pv-hospital">
+                                Em hospital (-1/10 no tempo)
+                            </label>
+                        </div>
                         <button id="btn-solicitar-recuperacao-pv" class="btn-lime" type="button" style="display:none;">Solicitar recuperação de PVs ao Mestre</button>
                     </div>
 
@@ -1493,6 +1513,6 @@
      data-lucide="nome-do-icone" viram SVG automaticamente quando
      lucide.createIcons() roda (ver atualizarIcones() em ficha.js). -->
 <script src="https://unpkg.com/lucide@latest"></script>
-<script type="module" src="ficha.js?v=20260829-fixlocalferida"></script>
+<script type="module" src="ficha.js?v=20260829-fixmaosguardar"></script>
 </body>
 </html>

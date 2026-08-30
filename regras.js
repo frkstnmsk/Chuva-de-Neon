@@ -2061,18 +2061,24 @@ export function modificadorPorSituacaoItem(situacao) {
 }
 
 // ---------------------------------------------------------------------
-// Tratamento em hospital (item 3 do plano de saúde/complicações):
-// reduz em 1/10 o tempo de recuperação de PV da FICHA INTEIRA
+// Desconto de -1/10 no tempo de recuperação de PV da FICHA INTEIRA
 // (diasNecessarios), não só o risco de infecção da ferida tratada.
-// Sinal armazenado como flag simples em fichas/{id}/dados/tratamentoHospital
-// (ver tratarFerida em saude.js) — não empilha, um novo tratamento em
-// hospital só sobrescreve o anterior. Aplicado DEPOIS do arredondamento
-// de calcularTempoRecuperacaoPV (é um desconto "em cima" do valor já
-// calculado, não parte da fórmula base como o +50% de infecção).
+//
+// A partir do plano "recuperação com tratamento médico" (modo
+// "tratamento" no painel de Recursos Vitais — ver renderizarRecuperacaoPV
+// em ficha.js e o tipo "iniciar_recuperacao_pv" em mestre.js), essa
+// função passou a ser chamada UMA VEZ PARA CADA checkbox marcada no
+// pedido ("Tratamento especializado" e/ou "Em hospital", cada uma -1/10),
+// então pode ser aplicada 0, 1 ou 2 vezes em sequência sobre o mesmo
+// valor — não empilha sozinha, quem empilha é o chamador ao invocar de
+// novo. Aplicado DEPOIS do arredondamento de calcularTempoRecuperacaoPV
+// (é um desconto "em cima" do valor já calculado, não parte da fórmula
+// base como o +50% de infecção). Não tem mais nenhuma flag persistente
+// na ficha por trás — os dois booleans vêm direto do pedido do jogador.
 // ---------------------------------------------------------------------
-export function aplicarReducaoTratamentoHospital(diasNecessarios, tratadoEmHospital) {
+export function aplicarReducaoTratamentoHospital(diasNecessarios, aplicarDesconto) {
     const dias = Number(diasNecessarios) || 0;
-    if (!tratadoEmHospital || dias <= 0) return dias;
+    if (!aplicarDesconto || dias <= 0) return dias;
     return Math.max(0, Math.floor(dias - dias / 10));
 }
 

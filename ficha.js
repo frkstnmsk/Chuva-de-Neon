@@ -155,7 +155,7 @@ import {
     aplicarDesmaioTemporizado, aplicarTesteAtrasado, aplicarPerdaAcaoTemporizada,
     ouvirPerseguicaoAtiva, iniciarPerseguicao, removerParticipantePerseguicao, encerrarPerseguicao,
     registrarPontosPerseguicao, avancarVoltaManualPerseguicao, registrarTentativaRotaFugaPerseguicao
-} from "./mestre.js";
+} from "./mestre.js?v=20260829-fixmaosguardar";
 import {
     criarFerida, ouvirFeridas, tratarFerida, testarInfeccaoFerida, isentarInfeccaoFerida, removerFerida, aplicarTickSangramento,
     agruparFeridasPorLocal, estadoVisualFerida
@@ -772,6 +772,12 @@ const el = {
     // recuperação de PV
     recuperacaoPvPainel: document.getElementById("recuperacao-pv-painel"),
     recuperacaoPvStatus: document.getElementById("recuperacao-pv-status"),
+    recuperacaoPvModo: document.getElementById("recuperacao-pv-modo"),
+    recuperacaoPvModoPadrao: document.getElementById("recuperacao-pv-modo-padrao"),
+    recuperacaoPvModoTratamento: document.getElementById("recuperacao-pv-modo-tratamento"),
+    recuperacaoPvCheckboxes: document.getElementById("recuperacao-pv-checkboxes"),
+    recuperacaoPvEspecializado: document.getElementById("recuperacao-pv-especializado"),
+    recuperacaoPvHospital: document.getElementById("recuperacao-pv-hospital"),
     btnSolicitarRecuperacaoPv: document.getElementById("btn-solicitar-recuperacao-pv"),
     // log de dados
     logDados: document.getElementById("log-dados"),
@@ -2568,6 +2574,19 @@ function configurarStatusTopoCarrossel() {
 //   3. Recuperação já autorizada e em andamento: mostra o progresso
 //      (dias decorridos / necessários) e some com o botão, já que só o
 //      Mestre autoriza (não dá pra pedir de novo por cima).
+//
+// Dentro do estado 2, o jogador escolhe um MODO antes de pedir (radio
+// "recuperacao-pv-modo", lido direto do DOM aqui — não é persistido,
+// é só uma escolha momentânea de UI que entra no payload do pedido):
+//   - "padrao_vida" (default): igual ao comportamento de sempre —
+//     recuperação capada em limiteRecuperacaoSemTratamento(padraoDeVida),
+//     sem nenhum dos dois bônus abaixo.
+//   - "tratamento": SEM teto (recupera pvPerdidos inteiro). Duas
+//     checkboxes aparecem ("Tratamento especializado" / "Em hospital"),
+//     cada uma dando -1/10 no tempo (aplicarReducaoTratamentoHospital
+//     chamado 1x por checkbox marcada — cumulativo, até -2/10 com as
+//     duas). Continua exigindo Mestre aprovar a Ação Pendente; nenhum
+//     custo/local é cobrado pelo app.
 // ---------------------------------------------------------------------
 function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     if (!el.recuperacaoPvPainel) return;
@@ -2575,18 +2594,21 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
 
     if (rec && rec.ativa) {
         pvRecuperacaoContexto = null;
+        if (el.recuperacaoPvModo) el.recuperacaoPvModo.style.display = "none";
+        if (el.recuperacaoPvCheckboxes) el.recuperacaoPvCheckboxes.style.display = "none";
         const diasNecessarios = Number(rec.diasNecessarios) || 0;
         const diasDecorridos = Math.min(diasNecessarios, Number(rec.diasDecorridos) || 0);
         const diasFaltando = Math.max(0, diasNecessarios - diasDecorridos);
         const notaInfeccao = rec.infectadoNoPedido ? " (+50% pela infecção ativa no momento do pedido)" : "";
-        const notaHospital = rec.tratamentoHospitalNoPedido ? " (-1/10 pelo tratamento em hospital aprovado)" : "";
+        const notaEspecializado = rec.tratamentoEspecializadoNoPedido ? " (-1/10 pelo tratamento especializado)" : "";
+        const notaHospital = rec.emHospitalNoPedido ? " (-1/10 pelo tratamento em hospital)" : "";
         const notaComa = rec.veioDoComaEm ? " (dobro pela saída de coma recente)" : "";
         const fatoresNoPedido = rec.fatoresRecuperacaoItensNoPedido ? Object.values(rec.fatoresRecuperacaoItensNoPedido) : [];
         const notaFatoresItens = fatoresNoPedido.length
             ? ` (${fatoresNoPedido.map(f => `${f.origem || "item"} ×${f.fator}`).join(", ")})`
             : "";
         el.recuperacaoPvPainel.style.display = "";
-        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
+        el.recuperacaoPvStatus.innerText = `Recuperando PVs: ${diasDecorridos}/${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaEspecializado}${notaHospital}${notaComa} (faltam ${diasFaltando}). Avança sozinho a cada Timeskip do Mestre.`;
         if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
@@ -2597,6 +2619,8 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     if (pvPerdidos <= 0 || pvMaximoTotal <= 0) {
         pvRecuperacaoContexto = null;
         el.recuperacaoPvPainel.style.display = "none";
+        if (el.recuperacaoPvModo) el.recuperacaoPvModo.style.display = "none";
+        if (el.recuperacaoPvCheckboxes) el.recuperacaoPvCheckboxes.style.display = "none";
         return;
     }
 
@@ -2606,76 +2630,101 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     // sincronia com a ficha atualmente aberta por configurarSaude
     // (ouvirFeridas em saude.js). Em modoNpc feridasCache fica sempre
     // vazio (NPCs ficam de fora do sistema de feridas nesta fase), então
-    // nunca bloqueia.
+    // nunca bloqueia. Vale pros dois modos (Padrão de Vida e Tratamento).
     const feridaAberta = feridasCache.find(f => !feridaEstaFechada(f));
     if (feridaAberta) {
         pvRecuperacaoContexto = null;
         el.recuperacaoPvPainel.style.display = "";
+        if (el.recuperacaoPvModo) el.recuperacaoPvModo.style.display = "none";
+        if (el.recuperacaoPvCheckboxes) el.recuperacaoPvCheckboxes.style.display = "none";
         el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Trate os ferimentos antes de pedir recuperação de PV.`;
         if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
 
-    // Padrão de Vida (manual, pg. 106-107): sem tratamento médico
-    // especializado, a recuperação "natural" só cobre até um certo teto
-    // de PV, conforme o Padrão de Vida do personagem (ver
-    // limiteRecuperacaoSemTratamento em mestre.js). A fórmula de tempo
-    // (perdidos/total × 30) continua igual — só muda o que entra como
-    // "perdidos": em vez do total de PV perdido, usamos o quanto desse
-    // total o Padrão de Vida cobre. O restante (pvSemRecuperar) fica de
-    // fora do pedido e não é recuperado por esse caminho — só com
-    // tratamento médico de verdade.
-    const limite = limiteRecuperacaoSemTratamento(d.padraoDeVida);
-    const pvRecuperavel = Math.min(pvPerdidos, limite);
-    const pvSemRecuperar = pvPerdidos - pvRecuperavel;
+    if (el.recuperacaoPvModo) el.recuperacaoPvModo.style.display = "";
+    const modo = (el.recuperacaoPvModoTratamento && el.recuperacaoPvModoTratamento.checked) ? "tratamento" : "padrao_vida";
+    if (el.recuperacaoPvCheckboxes) el.recuperacaoPvCheckboxes.style.display = (modo === "tratamento") ? "" : "none";
 
     // Infecção (manual, "Complicações de ferimentos"): aumenta em 50% o
     // tempo de repouso necessário. A flag é persistente na própria ficha
     // (fichas/{id}/dados/infeccao — ver aplicarInfeccao/curarInfeccao em
-    // mestre.js), não só durante o combate em que foi aplicada.
+    // mestre.js), não só durante o combate em que foi aplicada. Vale pros
+    // dois modos.
     const infectado = !!(d.infeccao && d.infeccao.ativo);
-    const diasBase = calcularTempoRecuperacaoPV(pvRecuperavel, pvMaximoTotal, infectado);
     // Item 6 do plano (Coma): saída de coma dobra o tempo da PRÓXIMA
     // recuperação de PV (flag em dados.saiuDoComaPendente, setada só
     // manualmente pelo Mestre em Godmode — ver reverterComaGodmode em
-    // mestre.js). Aplicado ANTES dos fatores de item/desconto de
-    // hospital abaixo.
+    // mestre.js). Vale pros dois modos.
     const saiuDoComa = !!d.saiuDoComaPendente;
-    const diasComComa = saiuDoComa ? diasBase * 2 : diasBase;
     // Fase 7 do plano de efeitos de equipamentos médicos: fatores de
     // tempo de recuperação gravados por item usado num tratamento de
-    // ferida bem-sucedido (dados.fatoresRecuperacaoItens, ver
-    // aplicarFatoresRecuperacaoItens em regras.js e o handler do botão
-    // "Rolar tratamento" em abrirModalTratarFerida) — aplicado depois
-    // do dobro por coma, antes do desconto de hospital abaixo.
+    // ferida bem-sucedido (dados.fatoresRecuperacaoItens). Vale pros
+    // dois modos.
     const temFatoresRecuperacaoItens = !!(d.fatoresRecuperacaoItens && Object.keys(d.fatoresRecuperacaoItens).length);
-    const diasComFatoresItens = aplicarFatoresRecuperacaoItens(diasComComa, d.fatoresRecuperacaoItens);
-    // Item 3 do plano de saúde/complicações: tratamento em hospital
-    // bem-sucedido (flag em dados.tratamentoHospital, ver saude.js)
-    // reduz em 1/10 o tempo de recuperação da FICHA INTEIRA — aplicado
-    // por cima do valor já calculado acima, não dentro da fórmula base.
-    const tratadoEmHospital = !!d.tratamentoHospital;
-    const diasNecessarios = aplicarReducaoTratamentoHospital(diasComFatoresItens, tratadoEmHospital);
-    // diasBase (sem desconto de hospital nem dobro por coma nem fatores
-    // de item) também é guardado no contexto — é o que vai no payload
-    // da Ação Pendente, pra confirmarAcaoPendente em mestre.js poder
-    // reaplicar as três fontes em cima do que estiver VALENDO na hora
-    // em que o Mestre aprovar (podem ter mudado entre o pedido e a
-    // aprovação), em vez de confiar só no valor já calculado aqui no
-    // momento do pedido.
-    pvRecuperacaoContexto = { pvPerdidos, pvRecuperavel, pvSemRecuperar, pvMaximoTotal, diasNecessarios, diasBase, infectado, tratadoEmHospital, saiuDoComa };
-    el.recuperacaoPvPainel.style.display = "";
-    const notaInfeccao = infectado ? " — infecção ativa: +50% no tempo de recuperação" : "";
-    const notaHospital = tratadoEmHospital ? " — tratamento em hospital: -1/10 no tempo de recuperação" : "";
-    const notaComa = saiuDoComa ? " — saiu do coma recentemente: dobro no tempo de recuperação" : "";
     const notaFatoresItens = temFatoresRecuperacaoItens
         ? ` — ${Object.values(d.fatoresRecuperacaoItens).map(f => `${f.origem || "item"} ×${f.fator}`).join(", ")}`
         : "";
+    const notaInfeccao = infectado ? " — infecção ativa: +50% no tempo de recuperação" : "";
+    const notaComa = saiuDoComa ? " — saiu do coma recentemente: dobro no tempo de recuperação" : "";
+
+    if (modo === "tratamento") {
+        // Modo "Tratamento médico": sem teto do Padrão de Vida — recupera
+        // o pvPerdidos inteiro. As duas checkboxes (lidas direto do DOM,
+        // igual ao modo) só entram como desconto de tempo, não mexem no
+        // teto (que já caiu por causa do modo escolhido).
+        const tratamentoEspecializado = !!(el.recuperacaoPvEspecializado && el.recuperacaoPvEspecializado.checked);
+        const emHospital = !!(el.recuperacaoPvHospital && el.recuperacaoPvHospital.checked);
+        const pvRecuperavel = pvPerdidos;
+        const pvSemRecuperar = 0;
+        const diasBase = calcularTempoRecuperacaoPV(pvRecuperavel, pvMaximoTotal, infectado);
+        const diasComComa = saiuDoComa ? diasBase * 2 : diasBase;
+        const diasComFatoresItens = aplicarFatoresRecuperacaoItens(diasComComa, d.fatoresRecuperacaoItens);
+        let diasNecessarios = diasComFatoresItens;
+        if (tratamentoEspecializado) diasNecessarios = aplicarReducaoTratamentoHospital(diasNecessarios, true);
+        if (emHospital) diasNecessarios = aplicarReducaoTratamentoHospital(diasNecessarios, true);
+
+        pvRecuperacaoContexto = {
+            modo, pvPerdidos, pvRecuperavel, pvSemRecuperar, pvMaximoTotal,
+            diasNecessarios, diasBase, infectado, saiuDoComa,
+            tratamentoEspecializado, emHospital
+        };
+        el.recuperacaoPvPainel.style.display = "";
+        const notaEspecializado = tratamentoEspecializado ? " — tratamento especializado: -1/10 no tempo de recuperação" : "";
+        const notaHospital = emHospital ? " — em hospital: -1/10 no tempo de recuperação" : "";
+        el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Com tratamento médico, recupera os ${pvRecuperavel} PV (sem o teto do Padrão de Vida) em ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaEspecializado}${notaHospital}${notaComa}.`;
+        if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "";
+        return;
+    }
+
+    // Modo "Padrão de Vida" (manual, pg. 106-107): sem tratamento
+    // médico, a recuperação "natural" só cobre até um certo teto de PV,
+    // conforme o Padrão de Vida do personagem (ver
+    // limiteRecuperacaoSemTratamento em mestre.js). A fórmula de tempo
+    // (perdidos/total × 30) continua igual — só muda o que entra como
+    // "perdidos": em vez do total de PV perdido, usamos o quanto desse
+    // total o Padrão de Vida cobre. O restante (pvSemRecuperar) fica de
+    // fora do pedido — não é recuperado por esse caminho, só trocando pro
+    // modo "Tratamento médico" acima.
+    const limite = limiteRecuperacaoSemTratamento(d.padraoDeVida);
+    const pvRecuperavel = Math.min(pvPerdidos, limite);
+    const pvSemRecuperar = pvPerdidos - pvRecuperavel;
+    const diasBase = calcularTempoRecuperacaoPV(pvRecuperavel, pvMaximoTotal, infectado);
+    const diasComComa = saiuDoComa ? diasBase * 2 : diasBase;
+    const diasNecessarios = aplicarFatoresRecuperacaoItens(diasComComa, d.fatoresRecuperacaoItens);
+
+    pvRecuperacaoContexto = {
+        modo, pvPerdidos, pvRecuperavel, pvSemRecuperar, pvMaximoTotal,
+        diasNecessarios, diasBase, infectado, saiuDoComa,
+        tratamentoEspecializado: false, emHospital: false
+    };
+    el.recuperacaoPvPainel.style.display = "";
 
     if (pvRecuperavel <= 0) {
         // Padrão de Vida atual não cobre nada sem tratamento médico
-        // especializado (ex.: Miserável, limite 0).
-        el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Seu Padrão de Vida atual não cobre recuperação sem tratamento médico especializado — procure um médico.`;
+        // (ex.: Miserável, limite 0) — só resta trocar pro modo
+        // "Tratamento médico" acima.
+        el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s) de ${pvMaximoTotal}. Seu Padrão de Vida atual não cobre recuperação sem tratamento médico — troque pro modo "Tratamento médico" acima ou procure um médico.`;
         if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "none";
         return;
     }
@@ -2683,9 +2732,9 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
     const padrao = PADROES_DE_VIDA.find(p => p.key === d.padraoDeVida);
     const labelPadrao = padrao ? padrao.label : "seu Padrão de Vida";
     const notaSemRecuperar = pvSemRecuperar > 0
-        ? ` ${pvSemRecuperar} PV vão ficar sem recuperar por esse caminho.`
+        ? ` ${pvSemRecuperar} PV vão ficar sem recuperar por esse caminho — troque pro modo "Tratamento médico" acima pra cobrir o resto.`
         : "";
-    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Seu Padrão de Vida (${labelPadrao}) cobre até ${limite} sem tratamento médico especializado — vai recuperar ${pvRecuperavel} em ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa}.${notaSemRecuperar}`;
+    el.recuperacaoPvStatus.innerText = `${pvPerdidos} PV perdido(s). Seu Padrão de Vida (${labelPadrao}) cobre até ${limite} sem tratamento médico — vai recuperar ${pvRecuperavel} em ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaComa}.${notaSemRecuperar}`;
     if (el.btnSolicitarRecuperacaoPv) el.btnSolicitarRecuperacaoPv.style.display = "";
 }
 
@@ -2696,27 +2745,51 @@ function renderizarRecuperacaoPV(d, pvMaximoTotal) {
 // dados/recuperacaoPV vira ativa de fato (ver confirmarAcaoPendente,
 // tipo "iniciar_recuperacao_pv").
 function configurarRecuperacaoPV() {
+    // Trocar de modo (Padrão de Vida / Tratamento médico) ou marcar/
+    // desmarcar uma das checkboxes precisa recalcular o painel na hora
+    // (novo teto, novo tempo) — reaproveita o último contexto de dados
+    // guardado em ultimoContextoRecuperacaoPV (ver renderizarSaude ~17700).
+    const reRenderizar = () => {
+        if (ultimoContextoRecuperacaoPV) {
+            renderizarRecuperacaoPV(ultimoContextoRecuperacaoPV.d, ultimoContextoRecuperacaoPV.pvMaximoTotal);
+        }
+    };
+    if (el.recuperacaoPvModoPadrao) el.recuperacaoPvModoPadrao.addEventListener("change", reRenderizar);
+    if (el.recuperacaoPvModoTratamento) el.recuperacaoPvModoTratamento.addEventListener("change", reRenderizar);
+    if (el.recuperacaoPvEspecializado) el.recuperacaoPvEspecializado.addEventListener("change", reRenderizar);
+    if (el.recuperacaoPvHospital) el.recuperacaoPvHospital.addEventListener("change", reRenderizar);
+
     if (!el.btnSolicitarRecuperacaoPv) return;
     el.btnSolicitarRecuperacaoPv.addEventListener("click", async () => {
         if (!fichaAtual || !idAtivo() || !pvRecuperacaoContexto) return;
-        const { pvRecuperavel, pvSemRecuperar, diasNecessarios, diasBase, infectado, tratadoEmHospital, saiuDoComa } = pvRecuperacaoContexto;
+        const {
+            modo, pvRecuperavel, pvSemRecuperar, diasNecessarios, diasBase, infectado,
+            tratamentoEspecializado, emHospital, saiuDoComa
+        } = pvRecuperacaoContexto;
         const nomeJogador = fichaAtual?.config?.nomeExibicao || sessao?.nome || fichaAtualId;
         const notaInfeccao = infectado ? " (já inclui +50% por infecção ativa)" : "";
-        const notaHospital = tratadoEmHospital ? " (inclui -1/10 por tratamento em hospital, se ainda valer na hora da aprovação)" : "";
+        const notaEspecializado = tratamentoEspecializado ? " (inclui -1/10 por tratamento especializado)" : "";
+        const notaHospital = emHospital ? " (inclui -1/10 por tratamento em hospital)" : "";
         const notaComa = saiuDoComa ? " (inclui dobro por saída de coma, se ainda valer na hora da aprovação)" : "";
         const notaFatoresItens = (fichaAtual?.dados?.fatoresRecuperacaoItens && Object.keys(fichaAtual.dados.fatoresRecuperacaoItens).length)
             ? " (inclui os fatores de itens médicos usados nos tratamentos, se ainda valerem na hora da aprovação)"
             : "";
+        const notaModo = modo === "tratamento"
+            ? " — pedido via TRATAMENTO MÉDICO (sem o teto do Padrão de Vida)"
+            : "";
         const notaSemRecuperar = pvSemRecuperar > 0
-            ? ` (${pvSemRecuperar} PV fora do pedido — acima do que o Padrão de Vida cobre sem tratamento médico especializado)`
+            ? ` (${pvSemRecuperar} PV fora do pedido — acima do que o Padrão de Vida cobre sem tratamento médico; peça de novo depois no modo "Tratamento médico" pra cobrir o resto)`
             : "";
         try {
             await criarAcaoPendente({
                 tipo: "iniciar_recuperacao_pv",
                 fichaId: fichaAtualId,
                 nomeJogador,
-                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvRecuperavel} PV perdido(s) — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaHospital}${notaComa}.${notaSemRecuperar}`,
-                payload: { pvPerdidos: pvRecuperavel, diasNecessarios: diasBase, infectado }
+                detalhe: `${nomeJogador} pede pra iniciar a recuperação de ${pvRecuperavel} PV perdido(s)${notaModo} — tempo estimado: ${diasNecessarios} dia(s)${notaInfeccao}${notaFatoresItens}${notaEspecializado}${notaHospital}${notaComa}.${notaSemRecuperar}`,
+                payload: {
+                    pvPerdidos: pvRecuperavel, diasNecessarios: diasBase, infectado,
+                    modo, tratamentoEspecializado: !!tratamentoEspecializado, emHospital: !!emHospital
+                }
             });
             toast("Pedido de recuperação de PVs enviado ao Mestre.");
         } catch (err) {
@@ -7729,6 +7802,18 @@ function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
             // Guardar move o item junto pra categoria do recipiente;
             // tirar mantém a categoria atual dele (fica onde estava).
             if (novoContainerId) dados.categoria = categoriaNova;
+            // Guardar dentro de um recipiente desequipa automaticamente —
+            // item guardado não pode continuar contando como "na mão"
+            // (mesmo princípio já aplicado ao mudar de categoria, logo
+            // abaixo). Sem isso, um item que estava equipada:true antes
+            // de ser guardado ficava com essa flag PRESA no registro; se
+            // depois ele fosse tirado do recipiente (dentroDe: null) sem
+            // nunca ter sido reequipado de propósito, voltava a contar
+            // como ocupando mão sozinho — ficando "invisível" (não some
+            // da lista, mas também não aparece destacado como algo que
+            // o jogador conscientemente pegou) e prendendo o indicador
+            // de Mãos livres em 1/2 sem nenhum item óbvio pra soltar.
+            if (novoContainerId) dados.equipada = false;
             await update(ref(db, `${caminhoBase()}/inventario/${id}`), dados);
             toast(novoContainerId ? `${it.nome} guardado em ${nomeContainerNovo} → ${nomeCompartimentoNovo}.` : `${it.nome} tirado do recipiente.`);
         } else {
@@ -18737,10 +18822,6 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
                 <option value="nenhum">Sem item (-2)</option>
             </select>
         </label>
-        <label style="display:block;margin-top:10px;">
-            <input type="checkbox" id="ferida-em-hospital"> Tratamento em hospital
-            <span class="hint" style="display:block;">Se o tratamento tiver sucesso, reduz em 1/10 o tempo da próxima recuperação de PV (ficha inteira, não empilha).</span>
-        </label>
         <label style="display:block;margin-top:10px;">Dificuldade (${config.dificuldadeMin}-${config.dificuldadeMax})
             <input type="number" id="ferida-dificuldade" value="${config.dificuldadeMin}" min="${config.dificuldadeMin}" max="${config.dificuldadeMax}" style="width:100%;">
         </label>
@@ -18795,12 +18876,11 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
         const situacaoItem = campoSituacaoItem.value;
         const dificuldadeEscolhida = Number(campoDificuldade.value) || config.dificuldadeMin;
         const modificadorExtra = Number(campoModificadorExtra.value) || 0;
-        const emHospital = modal.querySelector("#ferida-em-hospital").checked;
         const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
         try {
             const resultado = await tratarFerida(fichaAlvoId, feridaId, {
                 acao, tratadorPericias: fichaAtual.pericias, tratadorNome: nomeTratador,
-                situacaoItem, dificuldadeEscolhida, modificadorExtra, emHospital,
+                situacaoItem, dificuldadeEscolhida, modificadorExtra,
                 sucessoAutomaticoItem: !!(escolhido && escolhido.efeitos.sucessoAutomatico),
                 nomeItemUsado: escolhido ? escolhido.item.nome : ""
             });
@@ -18840,9 +18920,6 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
                     console.error(e);
                 }
             }
-            const notaHospital = resultado.tratamentoHospitalRegistrado
-                ? " (tratamento em hospital registrado — vai descontar 1/10 da próxima recuperação de PV dessa ficha)"
-                : "";
             // Fase 8 do plano de efeitos médicos (Torniquete Tático,
             // limitação registrada como "sem automação" — só um
             // LEMBRETE pro Mestre, nunca dano automático): detecta pelo
@@ -18869,7 +18946,7 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
                     console.error(e);
                 }
             }
-            toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital + notaFatorRecuperacao + notaTorniquete, resultado.sucesso ? undefined : "erro");
+            toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaFatorRecuperacao + notaTorniquete, resultado.sucesso ? undefined : "erro");
             fechar();
         } catch (e) {
             toast(e.message || "Falha ao tratar a ferida.", "erro");
@@ -18883,15 +18960,11 @@ function abrirModalTratarFerida(feridaId, acao, alvo) {
     if (btnGodmode) {
         btnGodmode.addEventListener("click", async () => {
             const nomeTratador = fichaAtual?.dados?.nome || fichaAtualId;
-            const emHospital = modal.querySelector("#ferida-em-hospital").checked;
             try {
                 const resultado = await tratarFerida(fichaAlvoId, feridaId, {
-                    acao, tratadorNome: `${nomeTratador} (Godmode)`, godmode: true, emHospital
+                    acao, tratadorNome: `${nomeTratador} (Godmode)`, godmode: true
                 });
-                const notaHospital = resultado.tratamentoHospitalRegistrado
-                    ? " (tratamento em hospital registrado — vai descontar 1/10 da próxima recuperação de PV dessa ficha)"
-                    : "";
-                toast((tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe) + notaHospital);
+                toast(tratandoOutro ? `${nomeAlvo}: ${resultado.detalhe}` : resultado.detalhe);
                 fechar();
             } catch (e) {
                 toast(e.message || "Falha ao tratar a ferida.", "erro");

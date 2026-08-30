@@ -58,12 +58,6 @@ export function normalizarFicha(raw) {
             // em ficha.js.
             recuperacaoPV: dados.recuperacaoPV || null,
             infeccao: dados.infeccao || null,
-            // Item 3 do plano de saúde/complicações: flag simples de
-            // tratamento em hospital bem-sucedido, ainda não consumido por
-            // uma recuperação de PV aprovada (ver marcarTratamentoHospital
-            // em saude.js e confirmarAcaoPendente "iniciar_recuperacao_pv"
-            // em mestre.js).
-            tratamentoHospital: dados.tratamentoHospital ?? false,
             // Item 6 do plano (Coma): coma.ativo = flag de entrada
             // (confirmarAcaoPendente "confirmar_coma", mestre.js) e
             // saiuDoComaPendente = flag de saída consumida na PRÓXIMA
@@ -842,7 +836,6 @@ export function fichaVaziaPadrao(nomeExibicao) {
             criacaoConcluida: false,
             recuperacaoPV: null,
             infeccao: null,
-            tratamentoHospital: false,
             coma: null,
             saiuDoComaPendente: false,
             desmaiado: false,

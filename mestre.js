@@ -3438,6 +3438,12 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
         const dadosGuardar = { dentroDe: payload.containerIdNovo || null, compartimentoId: payload.containerIdNovo ? (payload.compartimentoIdNovo || null) : null };
         if (payload.containerIdNovo && payload.categoriaNova) dadosGuardar.categoria = payload.categoriaNova;
+        // Mesmo motivo do fluxo direto do Mestre em ficha.js: guardar
+        // dentro de um recipiente precisa desligar "equipada", ou a flag
+        // fica presa no item e volta a ocupar mão sozinha (contando pra
+        // maosDisponiveis) se ele for tirado do recipiente depois sem
+        // ser reequipado de propósito.
+        if (payload.containerIdNovo) dadosGuardar.equipada = false;
         await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)), dadosGuardar);
 
     } else if (tipo === "gastar_dinheiro") {
@@ -3858,40 +3864,51 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         // recuperação fica "ativa" e passa a avançar sozinha a cada
         // Timeskip (ver passarVariosDias acima), até completar.
         //
-        // payload.diasNecessarios chega SEM o desconto de tratamento em
-        // hospital (item 3) nem o dobro por saída de coma (item 6) — só
-        // com o +50% de infecção já embutido, igual sempre foi. As duas
-        // flags são reaplicadas AQUI, em cima do que estiver valendo
-        // NESTE momento (podem ter mudado desde o pedido), pra não
-        // confiar num valor congelado no instante em que o jogador
-        // clicou. Ordem: dobra por coma primeiro, fatores de item da
-        // Fase 7 do plano de efeitos médicos depois (multiplicados
-        // entre si — ver aplicarFatoresRecuperacaoItens em regras.js),
-        // desconto de hospital por último (por cima do valor já
-        // reduzido pelos itens) — as três fontes são consumidas
-        // (zeradas) depois de usadas, não empilham entre recuperações.
+        // payload.diasNecessarios chega SEM dobro por saída de coma
+        // (item 6), sem fatores de item nem sem os descontos de
+        // tratamento especializado/hospital — só com o +50% de infecção
+        // já embutido, igual sempre foi. Coma e fatores de item são
+        // reaplicados AQUI, em cima do que estiver valendo NESTE momento
+        // (podem ter mudado desde o pedido) — mesmo comportamento de
+        // sempre. Tratamento especializado/em hospital, por outro lado,
+        // vêm do PAYLOAD (payload.tratamentoEspecializado/emHospital):
+        // são a escolha do JOGADOR no momento do pedido (feita junto do
+        // modo "Tratamento médico" — ver renderizarRecuperacaoPV em
+        // ficha.js), não mais uma flag persistente da ficha, então não
+        // tem "valendo agora" pra reconferir — é só o que veio marcado.
+        // Ordem: dobra por coma primeiro, fatores de item da Fase 7 do
+        // plano de efeitos médicos depois (multiplicados entre si — ver
+        // aplicarFatoresRecuperacaoItens em regras.js), desconto de
+        // tratamento especializado e depois em hospital por último (por
+        // cima do valor já reduzido pelos itens, um -1/10 por vez) — coma
+        // e fatores de item continuam sendo consumidos (zerados) depois
+        // de usados, não empilham entre recuperações.
         const snapFichaDados = await get(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)));
         const dadosFicha = snapFichaDados.exists() ? snapFichaDados.val() : {};
-        const tratamentoHospitalAtivo = !!dadosFicha.tratamentoHospital;
+        const tratamentoEspecializadoNoPedido = !!payload.tratamentoEspecializado;
+        const emHospitalNoPedido = !!payload.emHospital;
         const saiuDoComaAtivo = !!dadosFicha.saiuDoComaPendente;
         const fatoresRecuperacaoItens = dadosFicha.fatoresRecuperacaoItens || null;
         const diasBase = Number(payload.diasNecessarios) || 0;
         const diasComComa = saiuDoComaAtivo ? diasBase * 2 : diasBase;
         const diasComFatoresItens = aplicarFatoresRecuperacaoItens(diasComComa, fatoresRecuperacaoItens);
-        const diasFinal = aplicarReducaoTratamentoHospital(diasComFatoresItens, tratamentoHospitalAtivo);
+        let diasFinal = diasComFatoresItens;
+        if (tratamentoEspecializadoNoPedido) diasFinal = aplicarReducaoTratamentoHospital(diasFinal, true);
+        if (emHospitalNoPedido) diasFinal = aplicarReducaoTratamentoHospital(diasFinal, true);
         await set(ref(db, caminhoMesa(`fichas/${fichaId}/dados/recuperacaoPV`)), {
             ativa: true,
             pvPerdidosInicial: Number(payload.pvPerdidos) || 0,
             diasNecessarios: diasFinal,
             diasDecorridos: 0,
             infectadoNoPedido: !!payload.infectado,
-            tratamentoHospitalNoPedido: tratamentoHospitalAtivo,
+            modoNoPedido: payload.modo === "tratamento" ? "tratamento" : "padrao_vida",
+            tratamentoEspecializadoNoPedido,
+            emHospitalNoPedido,
             fatoresRecuperacaoItensNoPedido: fatoresRecuperacaoItens && Object.keys(fatoresRecuperacaoItens).length ? fatoresRecuperacaoItens : null,
             veioDoComaEm: saiuDoComaAtivo ? Date.now() : null,
             iniciadoEm: Date.now()
         });
         const limpezaFlags = {};
-        if (tratamentoHospitalAtivo) limpezaFlags.tratamentoHospital = false;
         if (saiuDoComaAtivo) limpezaFlags.saiuDoComaPendente = false;
         if (fatoresRecuperacaoItens && Object.keys(fatoresRecuperacaoItens).length) limpezaFlags.fatoresRecuperacaoItens = null;
         if (Object.keys(limpezaFlags).length) {
