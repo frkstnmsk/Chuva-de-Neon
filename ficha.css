@@ -2868,6 +2868,79 @@ select.select-guardar-dentro {
     .tab-panel { padding: 18px; }
 }
 
+/* =====================================================================
+   OTIMIZAÇÃO MOBILE (celular)
+   Três problemas resolvidos aqui, todos confirmados no CSS acima:
+   1) .categorias-nav e .tabs-nav usavam flex-wrap: wrap — com 4
+      categorias e até 14 abas, isso empilhava várias linhas de botão
+      ANTES do conteúdo da aba aparecer, comendo boa parte da tela.
+      Vira uma faixa única que rola na horizontal (como abas de app).
+   2) .grid-form e .mestre-grid tentavam manter 2+ colunas mesmo em
+      telas de ~360-390px (minmax 140-160px ainda cabe 2 no auto-fit),
+      espremendo label+campo. Vira 1 coluna só, cheia largura.
+   3) A topbar fixa quebrava em 3 linhas empilhadas (nome / barras de
+      vida-energia + equipados / botões Mapa-Sair), ocupando muita
+      altura fixa no topo. Aqui ela fica mais compacta: barras menores,
+      botões mais enxutos, itens equipados dão scroll horizontal
+      próprio em vez de empurrar pra baixo.
+   ===================================================================== */
+@media (max-width: 700px) {
+
+    /* ---- 1) Navegação de categoria + abas: rolagem horizontal ---- */
+    .categorias-nav,
+    .tabs-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding-bottom: 2px;
+    }
+    .categorias-nav::-webkit-scrollbar,
+    .tabs-nav::-webkit-scrollbar { display: none; }
+    .categoria-btn,
+    .tab-btn {
+        flex: 0 0 auto;
+        white-space: nowrap;
+    }
+    .categoria-btn { padding: 7px 12px; font-size: 0.68rem; }
+    .tab-btn { padding: 8px 10px; font-size: 0.72rem; }
+
+    /* ---- 2) Formulários: 1 coluna só, sem espremer campo ---- */
+    .grid-form,
+    .grid-form.grid-3,
+    .grid-form.grid-4 {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+    .campo.largo { grid-column: auto; }
+    .mestre-grid { grid-template-columns: 1fr; }
+
+    /* ---- 3) Topbar mais compacta ---- */
+    .topbar { padding: 10px 14px; gap: 8px; border-radius: 0 0 10px 10px; }
+    .topbar-id h1 { font-size: 1.05rem; }
+    .topbar-vitals { gap: 10px; }
+    .vital-bar-track { width: 90px; }
+    .vital-equipados {
+        max-width: 100%;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .vital-equipados::-webkit-scrollbar { display: none; }
+    .topbar-actions { gap: 8px; }
+    .topbar-actions button { padding: 8px 12px; font-size: 0.7rem; }
+
+    /* Painéis/formulários genéricos: menos respiro lateral pra sobrar
+       espaço útil pro conteúdo em telas estreitas. */
+    .panel { padding: 14px; }
+}
+
+@media (max-width: 420px) {
+    .vital-bar-track { width: 70px; }
+    .topbar-id h1 { font-size: 0.95rem; }
+}
+
 /* ---------- Overlay de Morte (0 PV / 0 Energia) ---------- */
 /* Cobre a tela inteira — enquanto visível, bloqueia qualquer interação
    com o resto da ficha por baixo (ver #overlay-morte em ficha.html e
