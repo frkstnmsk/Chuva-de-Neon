@@ -133,7 +133,7 @@ export function normalizarFicha(raw) {
         levelUpPendente: raw.levelUpPendente || null,
         determinacoes: normalizarDeterminacoes(raw.determinacoes),
         // Índices do array `determinacoes` já validados pelo Mestre —
-        // ver renderizarDeterminacoes/liberarDeterminacao em ficha.js e
+        // ver renderizarDeterminacoes/liberarDeterminacao em abas/determinacoes.js e
         // confirmarAcaoPendente (tipo "validar_determinacao") em
         // mestre.js. Mesma lógica de normalizarDeterminacoes: aceita só
         // array (o Realtime Database já entrega array quando as chaves
@@ -166,7 +166,7 @@ export function normalizarFicha(raw) {
 // Determinações eram um único textarea de texto livre (linhas "1. ...",
 // "2. ...") e viraram uma caixa de texto por slot — a quantidade de
 // slots depende do Nível do personagem (ver maxDeterminacoes em
-// ficha.js: 3 no nível 1, 6 no nível 3, 9 no nível 6, 10 no nível 9).
+// abas/determinacoes.js: 3 no nível 1, 6 no nível 3, 9 no nível 6, 10 no nível 9).
 // Aqui só normalizamos o formato de armazenamento pra um array de
 // strings; fichas já migradas (raw já é array) passam direto, e o
 // texto livre antigo é quebrado por linha, descartando a numeração
