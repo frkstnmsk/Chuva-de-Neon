@@ -384,6 +384,20 @@
             box-shadow: 0 0 20px rgba(163, 230, 53, 0.2);
         }
 
+        /* LISTA DE LINHAS CRIADAS (apagar individualmente — só Mestre) */
+        #listaLinhasCriadas { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+        .linha-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 4px 6px; cursor: pointer;
+            border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 3px;
+            font-size: 0.7rem; color: white;
+        }
+        .linha-item:hover { border-color: var(--neon-blue); background: rgba(255, 255, 255, 0.05); }
+        .linha-cor { width: 18px; height: 0; border-top: 3px solid; flex: none; }
+        .linha-nome { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .linha-item button { padding: 2px 6px; font-size: 0.7rem; box-shadow: none; border-radius: 2px; flex: none; }
+        .linhas-vazio { font-size: 0.65rem; opacity: 0.6; }
+
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--neon-purple); border-radius: 2px; }
@@ -400,6 +414,7 @@
         <div class="section-header">linhas</div>
         <button id="btnModoDesenhoLinha" style="border-color: var(--neon-blue); color: var(--neon-blue); margin-bottom: 5px; width: 100%;"> Desenhar Nova Linha</button>
         <button id="btnLimparTodasLinhas" style="border-color: var(--neon-red); color: var(--neon-red); width: 100%; font-size: 0.65rem; padding: 4px 10px;">Limpar Linhas Criadas</button>
+        <div id="listaLinhasCriadas"></div>
 
         <div class="section-header">filtros</div>
         <div id="filtrosCategorias"></div>
@@ -553,6 +568,21 @@
     // botão "Mapa" da ficha — aberto direto/sem sessão, cai num aviso
     // pra abrir pelo site).
     const MESA_ID = obterMesaIdAtual();
+    // Mesmo critério da ficha (ficha.js): sessão com role === "mestre".
+    const IS_MESTRE = (() => {
+        try { return JSON.parse(localStorage.getItem("cdn_session"))?.role === "mestre"; }
+        catch (e) { return false; }
+    })();
+    // Jogador não vê "Limpar Linhas Criadas" nem a seção "Arquivos"
+    // (backups). Só esconde (display:none) em vez de remover, porque os
+    // handlers mais abaixo fazem document.getElementById(...).onclick = ...
+    // e quebrariam se o elemento não existisse.
+    if (!IS_MESTRE) {
+        const btnLimparLinhas = document.getElementById("btnLimparTodasLinhas");
+        if (btnLimparLinhas) btnLimparLinhas.style.display = "none";
+        const secaoArquivos = document.querySelector(".poi-share");
+        if (secaoArquivos) secaoArquivos.style.display = "none";
+    }
     if (!MESA_ID) {
         alert("Não achei sua sessão de mesa. Abra o mapa pelo botão \"Mapa\" dentro da ficha (site principal), não direto pelo arquivo.");
     }
@@ -961,18 +991,101 @@
         });
     }
 
+    // linha (objeto) -> polyline desenhada no mapa; usado pela lista lateral
+    // (destacar no hover, centralizar no clique).
+    const polylinesPorLinha = new Map();
+
+    function estiloBaseLinha(line) {
+        return { weight: line.tipo === 'tracejado' ? 4 : 6, opacity: 0.75 };
+    }
+
     function renderizarTodasLinhasAmbiente() {
         if (!camadaLinhasAmbiente) return;
         camadaLinhasAmbiente.clearLayers();
+        polylinesPorLinha.clear();
 
         linhasCustomizadas.forEach(line => {
-            L.polyline(line.latlngs, {
+            const poly = L.polyline(line.latlngs, {
                 color: line.cor,
                 weight: line.tipo === 'tracejado' ? 4 : 6,
                 dashArray: line.tipo === 'tracejado' ? '10, 10' : null,
                 opacity: 0.75,
                 lineJoin: 'round'
             }).addTo(camadaLinhasAmbiente).bindTooltip(line.nome, { sticky: true });
+            polylinesPorLinha.set(line, poly);
+        });
+
+        atualizarListaLinhas();
+    }
+
+    // Apaga UMA linha (só o Mestre). Some pra todo mundo na mesa, pois
+    // salvarLinhas() regrava mesas/{mesaId}/mapaLinhas no Firebase.
+    function apagarLinha(line) {
+        if (!IS_MESTRE) return;
+        if (!confirm(`Apagar a linha "${line.nome || "sem nome"}" (pra todo mundo)?`)) return;
+        linhasCustomizadas = linhasCustomizadas.filter(l => (line.id != null ? l.id !== line.id : l !== line));
+        salvarLinhas();
+        renderizarTodasLinhasAmbiente();
+    }
+
+    function atualizarListaLinhas() {
+        const container = document.getElementById("listaLinhasCriadas");
+        if (!container) return;
+        container.innerHTML = "";
+
+        if (!linhasCustomizadas.length) {
+            const vazio = document.createElement("div");
+            vazio.className = "linhas-vazio";
+            vazio.textContent = "Nenhuma linha criada.";
+            container.appendChild(vazio);
+            return;
+        }
+
+        linhasCustomizadas.forEach(line => {
+            const poly = polylinesPorLinha.get(line);
+
+            const item = document.createElement("div");
+            item.className = "linha-item";
+            item.title = "Clique para localizar no mapa";
+
+            const cor = document.createElement("span");
+            cor.className = "linha-cor";
+            cor.style.borderTopColor = line.cor;
+            cor.style.borderTopStyle = line.tipo === "tracejado" ? "dashed" : "solid";
+
+            const nome = document.createElement("span");
+            nome.className = "linha-nome";
+            nome.textContent = line.nome || "(sem nome)";
+
+            item.appendChild(cor);
+            item.appendChild(nome);
+
+            item.addEventListener("mouseenter", () => {
+                if (!poly) return;
+                poly.setStyle({ weight: estiloBaseLinha(line).weight + 4, opacity: 1 });
+                poly.bringToFront();
+            });
+            item.addEventListener("mouseleave", () => {
+                if (poly) poly.setStyle(estiloBaseLinha(line));
+            });
+            item.addEventListener("click", () => {
+                if (poly && map) map.fitBounds(poly.getBounds(), { padding: [40, 40], maxZoom: 2 });
+            });
+
+            if (IS_MESTRE) {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "btn-remover";
+                btn.title = "Apagar só esta linha";
+                btn.textContent = "🗑️";
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    apagarLinha(line);
+                });
+                item.appendChild(btn);
+            }
+
+            container.appendChild(item);
         });
     }
 
