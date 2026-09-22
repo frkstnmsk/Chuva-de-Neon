@@ -68,36 +68,43 @@
 }
 .sync-indicator.offline { color: var(--neon-red); text-shadow: 0 0 8px rgba(239, 68, 68, 0.7); }
 
-/* ---------- Barras de PV/Energia + equipados (topbar, centralizado) ---------- */
+/* ---------- Barras de PV/Energia + equipados (topbar, centralizado) ----------
+   Com o .topbar mais largo (ver 1980px acima), esse bloco ganhou muito
+   mais espaço sobrando — antes tudo (barras + status + itens
+   equipados) ficava espremido bem no centro. Trocado pra
+   space-evenly (espalha os grupos ao longo de toda a largura
+   disponível, em vez de empacotar tudo junto) e cada peça (barra,
+   pill de equipado) ficou maior — ver comentários abaixo. */
 .topbar-vitals {
     display: flex;
     align-items: center;
-    gap: 18px;
+    gap: 32px;
     flex-wrap: wrap;
-    justify-content: center;
-    margin: 0 auto;
+    justify-content: space-evenly;
+    flex: 1 1 auto;
+    margin: 0 20px;
 }
 .vital-bar-group {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
 }
 .vital-bar-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 .vital-bar-label {
-    font-size: 0.7rem;
+    font-size: 0.78rem;
     letter-spacing: 1px;
     color: var(--text-dim);
-    width: 22px;
+    width: 26px;
     flex-shrink: 0;
 }
 .vital-bar-track {
-    width: 130px;
-    height: 10px;
-    border-radius: 6px;
+    width: 210px;
+    height: 14px;
+    border-radius: 8px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.12);
     overflow: hidden;
@@ -105,7 +112,7 @@
 .vital-bar-fill {
     height: 100%;
     width: 100%;
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--neon-lime);
     box-shadow: 0 0 8px rgba(163, 230, 53, 0.6);
     transition: width 0.35s ease, background-color 0.35s ease, box-shadow 0.35s ease;
@@ -119,25 +126,25 @@
     box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
 }
 .vital-bar-numero {
-    font-size: 0.75rem;
+    font-size: 0.85rem;
     color: #fff;
-    min-width: 52px;
+    min-width: 62px;
     text-align: left;
     font-variant-numeric: tabular-nums;
 }
 .vital-equipados {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
-    max-width: 260px;
+    max-width: 480px;
 }
 .vital-equipado-pill {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 0.7rem;
-    padding: 3px 8px;
+    font-size: 0.76rem;
+    padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid var(--neon-purple);
     color: var(--neon-purple);
