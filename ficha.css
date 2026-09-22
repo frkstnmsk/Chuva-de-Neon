@@ -361,7 +361,13 @@
 
 /* Área que contém o(s) slot(s) de painel. Fora do modo split é só uma
    coluna normal (altura de conteúdo); com split ligado (.split-ativo)
-   vira duas metades empilhadas, cada uma com scroll próprio. */
+   vira duas metades, cada uma com scroll próprio. No celular (largura
+   ≤900px, mesmo corte usado em .app-body/.calendario-lateral acima)
+   as duas ficam empilhadas (uma em cima da outra) — não cabe lado a
+   lado numa tela estreita. Em telas largas (PC), a media query logo
+   abaixo troca pra lado a lado: aproveita a largura da tela (que
+   empilhado deixava enorme sobra vazia nas laterais de cada metade) e
+   cada painel usa a altura cheia, em vez de só metade dela. */
 .paineis-area { display: block; }
 .paineis-area.split-ativo {
     display: flex;
@@ -379,6 +385,15 @@
     border-radius: 6px;
 }
 .paineis-area.split-ativo .painel-slot .tabs-nav-bloco { position: sticky; top: 0; z-index: 5; }
+
+/* PC/telas largas: lado a lado em vez de empilhado (ver comentário
+   acima). flex-basis continua 50%, só que agora conta como largura —
+   como a altura do container não muda, cada metade já ocupa 100% da
+   altura disponível (é o eixo cruzado do flex row, esticado por
+   padrão), sem precisar de regra extra pra isso. */
+@media (min-width: 901px) {
+    .paineis-area.split-ativo { flex-direction: row; }
+}
 
 /* Bloco de navegação (categoria + sub-abas) de um slot. */
 .tabs-nav-bloco {
