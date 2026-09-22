@@ -43,7 +43,7 @@ import {
 } from "./dados-manual.js";
 import { normalizarFicha, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-fixhistorico";
 import {
-    listaCategorias, nomeCategoria, criarCategoriaCustom, pesoTotalPorCategoria, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario, listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado, ehContainer, itensDentroDe, listaContainersDisponiveis, TAMANHOS_ITEM, volumeTotalDentroDe, SUBTIPOS_PORTE, itemPodeSerLevadoSolto
+    listaCategorias, nomeCategoria, criarCategoriaCustom, listaSubcategorias, criarSubcategoriaCustom, pesoTotalPorCategoria, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario, listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado, ehContainer, itensDentroDe, listaContainersDisponiveis, TAMANHOS_ITEM, volumeTotalDentroDe, SUBTIPOS_PORTE, itemPodeSerLevadoSolto
 } from "./inventario.js";
 import {
     funcaoDe, calcularPontosAtributoTotais, aplicarAtributosFixosFuncao, aplicarItemPericiaInicialFuncao, opcoesPericiaFuncao, pontosFuncaoDe, LIMITES_CRIACAO, pontosBonusPorDesvantagens, podeAdicionarDesvantagem, MAX_DESVANTAGENS, listaFuncoes
@@ -371,6 +371,8 @@ export const el = {
     resumoCarga: document.getElementById("resumo-carga"),
     resumoMaos: document.getElementById("resumo-maos"),
     inventarioCategoriasNav: document.getElementById("inventario-categorias-nav"),
+    inventarioSubcategoriasNav: document.getElementById("inventario-subcategorias-nav"),
+    btnAddSubcategoria: document.getElementById("btn-add-subcategoria"),
     inventarioListas: document.getElementById("inventario-listas"),
     btnSolicitarItem: document.getElementById("btn-solicitar-item"),
     painelSolicitarItem: document.getElementById("painel-solicitar-item"),
@@ -499,6 +501,8 @@ export const el = {
     modalQuantidadeVolumeTotal: document.getElementById("modal-quantidade-volume-total"),
     modalCampoCategoriaItem: document.getElementById("modal-campo-categoria-item"),
     modalCategoriaItem: document.getElementById("modal-categoria-item"),
+    modalCampoSubcategoriaItem: document.getElementById("modal-campo-subcategoria-item"),
+    modalSubcategoriaItem: document.getElementById("modal-subcategoria-item"),
     modalCampoCategoriaBanco: document.getElementById("modal-campo-categoria-banco"),
     modalCategoriaBanco: document.getElementById("modal-categoria-banco"),
     modalCategoriaBancoDatalist: document.getElementById("modal-categoria-banco-datalist"),
@@ -7084,6 +7088,21 @@ function configurarBotoesAdicionar() {
         estado.categoriaInventarioAtiva = id;
         toast(`Categoria "${nome}" criada.`);
     });
+    // Subcategoria (livre) — só faz sentido dentro de uma categoria que
+    // não seja "levando" (lá a divisão é fixa: Mãos/Equipados); o botão
+    // já fica escondido nesse caso (ver renderizarInventario), esta
+    // checagem é só uma segunda trava de segurança.
+    document.getElementById("btn-add-subcategoria").addEventListener("click", async () => {
+        if (estado.categoriaInventarioAtiva === "levando") return;
+        const nome = prompt("Nome da nova subcategoria:");
+        if (!nome) return;
+        const categoriaId = estado.categoriaInventarioAtiva;
+        const id = criarSubcategoriaCustom(estado.fichaAtual, categoriaId, nome);
+        await update(ref(db, `${caminhoBase()}/subcategoriasInventario/${categoriaId}`), estado.fichaAtual.subcategoriasInventario[categoriaId]);
+        estado.subcategoriaInventarioAtiva = id;
+        toast(`Subcategoria "${nome}" criada.`);
+        renderizarInventario(modificadoresAtuais());
+    });
 }
 
 // =====================================================================
@@ -7621,6 +7640,36 @@ export function ativarPreviewFlutuanteImagem(elemento, src) {
     });
 }
 
+// Popula/mostra o campo "Subcategoria" do modal de item a partir da
+// categoria escolhida no dropdown logo acima (modalCategoriaItem) — só
+// existe fora de "levando" (lá a divisão é fixa/automática: Mãos x
+// Equipados, calculada na hora de renderizar — ver renderizarInventario
+// em abas/inventario.js). Chamada ao abrir o modal (valorInicial = a
+// subcategoria já salva, se estiver editando) e de novo toda vez que o
+// dropdown de categoria muda (valorInicial vazio — trocar de categoria
+// não carrega subcategoria nenhuma junto, cada categoria tem as suas).
+function atualizarCampoSubcategoriaItem(valorInicial = "") {
+    const categoriaSelecionada = el.modalCategoriaItem.value || "levando";
+    const mostrar = categoriaSelecionada !== "levando";
+    el.modalCampoSubcategoriaItem.style.display = mostrar ? "flex" : "none";
+    el.modalSubcategoriaItem.innerHTML = "";
+    if (!mostrar) return;
+
+    const optNenhuma = document.createElement("option");
+    optNenhuma.value = "";
+    optNenhuma.innerText = "Nenhuma";
+    el.modalSubcategoriaItem.appendChild(optNenhuma);
+    listaSubcategorias(estado.fichaAtual, categoriaSelecionada).forEach(sub => {
+        const opt = document.createElement("option");
+        opt.value = sub.id;
+        opt.innerText = sub.nome;
+        el.modalSubcategoriaItem.appendChild(opt);
+    });
+    el.modalSubcategoriaItem.value = [...el.modalSubcategoriaItem.options].some(o => o.value === valorInicial)
+        ? valorInicial
+        : "";
+}
+
 function prepararModalItem(existente, ehBanco) {
     // "chave" (ver plano-veiculos.txt, adendo "chave") só aparece no
     // dropdown se o item que está sendo editado JÁ é uma chave — assim
@@ -7653,6 +7702,11 @@ function prepararModalItem(existente, ehBanco) {
             opt.innerText = cat.nome;
             el.modalCategoriaItem.appendChild(opt);
         });
+        // Reatribuído toda vez que o modal abre (mesmo padrão de
+        // el.modalGuardarDentro.onchange, ver popularSelectGuardarDentro
+        // logo abaixo) — troca de categoria dentro do próprio modal
+        // repopula a lista de subcategorias pra bater com a nova escolha.
+        el.modalCategoriaItem.onchange = () => atualizarCampoSubcategoriaItem("");
     } else {
         el.modalCategoriaBancoDatalist.innerHTML = "";
         categoriasDistintas(estado.itensGlobaisCache, "categoriaBanco").forEach(cat => {
@@ -7683,6 +7737,7 @@ function prepararModalItem(existente, ehBanco) {
         popularSelectTamanho(el.modalTamanho, existente.tamanho);
         if (!ehBanco) {
             el.modalCategoriaItem.value = existente.categoria || "levando";
+            atualizarCampoSubcategoriaItem(existente.subcategoriaId || "");
             popularSelectGuardarDentro(estado.modalContexto ? estado.modalContexto.id : null, existente.dentroDe ? `${existente.dentroDe}::${existente.compartimentoId || "principal"}` : "");
         } else {
             el.modalCategoriaBanco.value = existente.categoriaBanco || "";
@@ -7703,6 +7758,7 @@ function prepararModalItem(existente, ehBanco) {
         popularSelectTamanho(el.modalTamanho, null);
         if (!ehBanco) {
             el.modalCategoriaItem.value = estado.categoriaInventarioAtiva || "levando";
+            atualizarCampoSubcategoriaItem("");
             popularSelectGuardarDentro(null, "");
         } else {
             el.modalCategoriaBanco.value = "";

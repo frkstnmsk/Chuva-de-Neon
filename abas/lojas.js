@@ -274,19 +274,27 @@ function preencherOpcoesSaldo(box) {
 }
 
 // Monta, a partir do molde do Banco, o registro pronto pra gravar no
-// inventário num destino específico (containerId + compartimentoId
-// decididos por decidirDestinoDoItemComprado). Item empilhável
-// (tagTemQuantidadeGeral — regra 3 do plano) vira UMA entrada só com a
-// quantidade TOTAL comprada, mesmo que seja só 1 unidade (nunca herda
-// a quantidade que o molde tinha quando foi cadastrado no Banco) —
-// peso/volume recalculados pelo unitário do molde × quantidade, igual
-// o resto do jogo já faz (ver lerPesoVolumeEQuantidadeDoModal em
-// ficha.js). Item comum (arma, container, projétil, material...) é uma
-// cópia direta do molde, sem tocar em peso/volume/quantidade.
+// inventário no destino decidido por decidirDestinoDoItemComprado —
+// numa mão livre (destino.naMao — prioridade 1, ver inventario.js) ou
+// dentro de um container (containerId + compartimentoId). Item
+// empilhável (tagTemQuantidadeGeral — regra 3 do plano) vira UMA
+// entrada só com a quantidade TOTAL comprada, mesmo que seja só 1
+// unidade (nunca herda a quantidade que o molde tinha quando foi
+// cadastrado no Banco) — peso/volume recalculados pelo unitário do
+// molde × quantidade, igual o resto do jogo já faz (ver
+// lerPesoVolumeEQuantidadeDoModal em ficha.js). Item comum (arma,
+// container, projétil, material...) é uma cópia direta do molde, sem
+// tocar em peso/volume/quantidade.
 function montarRegistroParaDestino(itemBanco, destino) {
     const registro = autopreencherItemDoBanco(itemBanco, "levando");
-    registro.dentroDe = destino.containerId;
-    registro.compartimentoId = destino.compartimentoId;
+    if (destino.naMao) {
+        registro.dentroDe = null;
+        registro.compartimentoId = null;
+        registro.equipada = true;
+    } else {
+        registro.dentroDe = destino.containerId;
+        registro.compartimentoId = destino.compartimentoId;
+    }
     if (tagTemQuantidadeGeral(itemBanco.tag)) {
         const pesoUnitario = Number(itemBanco.pesoUnitario) || 0;
         registro.quantidade = destino.unidades;
@@ -369,8 +377,12 @@ async function entregarItensComprados(itemBanco, quantidadeTotal, decisaoDestino
         estado.fichaAtual.inventario[id] = registro;
         payload[`${caminhoBase()}/inventario/${id}`] = registro;
         if (!decisaoDestino.caixa) {
-            const container = estado.fichaAtual.inventario[destino.containerId];
-            if (container && container.nome) nomesContainers.add(container.nome);
+            if (destino.naMao) {
+                nomesContainers.add("sua mão");
+            } else {
+                const container = estado.fichaAtual.inventario[destino.containerId];
+                if (container && container.nome) nomesContainers.add(container.nome);
+            }
         }
     });
 

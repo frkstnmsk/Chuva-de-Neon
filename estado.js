@@ -75,6 +75,12 @@ export const estado = {
     pvRecuperacaoContexto: null,
     ultimoContextoRecuperacaoPV: null,
     categoriaInventarioAtiva: "levando",
+    // Subcategoria livre selecionada dentro da categoria acima (ver
+    // criarSubcategoriaCustom em inventario.js) — null = "Todos" (sem
+    // filtro extra). Só é relevante fora de "levando" (lá a divisão é
+    // fixa/automática — Mãos/Equipados); resetado pra null sempre que
+    // categoriaInventarioAtiva muda (ver renderizarInventario).
+    subcategoriaInventarioAtiva: null,
     containersInventarioAbertos: new Set(),
     ultimoAvisoCustoVida: {},
     feridasCache: [],

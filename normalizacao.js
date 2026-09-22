@@ -96,6 +96,10 @@ export function normalizarFicha(raw) {
         pericias: normalizarPericias(raw.pericias || {}),
         inventario: normalizarInventario(raw.inventario || {}),
         categoriasInventario: raw.categoriasInventario || {},
+        // Ver subcategoriaId acima (normalizarInventario) — mesmo padrão
+        // de categoriasInventario, só que chaveado por categoria:
+        // { levando: {...} nunca usado, casa: { subId: {nome} }, cat_x: {...} }.
+        subcategoriasInventario: raw.subcategoriasInventario || {},
         gastosExtras: raw.gastosExtras || {},
         vantagens: raw.vantagens || {},
         desvantagens: raw.desvantagens || {},
@@ -609,6 +613,13 @@ export function normalizarInventario(lista) {
             tamanhoMaximoAceito: it.tamanhoMaximoAceito || null,
             quantidade: it.quantidade ?? null,
             categoria: it.categoria || "levando",
+            // Subcategoria livre (criada pelo jogador/Mestre — ver
+            // criarSubcategoriaCustom em inventario.js), só usada fora de
+            // "Levando consigo" (lá a subdivisão é fixa/automática: Mãos x
+            // Equipados, calculada na hora de renderizar, sem precisar de
+            // campo nenhum — ver renderizarInventario). null = sem
+            // subcategoria (cai no filtro "Todos").
+            subcategoriaId: it.subcategoriaId || null,
             // Item guardado dentro de um recipiente (mochila etc. — ver
             // ehContainer/itensDentroDe em inventario.js). Estava faltando
             // aqui — mesmo bug de "campo apagado a cada recarga" que
@@ -864,6 +875,7 @@ export function fichaVaziaPadrao(nomeExibicao) {
         pericias: {},
         inventario: {},
         categoriasInventario: {},
+        subcategoriasInventario: {},
         gastosExtras: {},
         vantagens: {},
         desvantagens: {},
@@ -963,6 +975,7 @@ export function normalizarNpcComoFicha(npcId, raw) {
         pericias,
         inventario: normalizarInventario(npc.inventario || {}),
         categoriasInventario: npc.categoriasInventario || {},
+        subcategoriasInventario: npc.subcategoriasInventario || {},
         gastosExtras: {},
         // vantagens: já são gravadas certinho em npcs/{id}/vantagens pelo
         // modal genérico de Vantagem/Desvantagem (ficha.js: caminhoBase()

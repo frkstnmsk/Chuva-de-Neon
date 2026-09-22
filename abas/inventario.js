@@ -58,6 +58,7 @@ import {
 } from "../mestre.js?v=20260830-npcnivelpv";
 import {
     listaCategorias, nomeCategoria, pesoTotalPorCategoria, calcularCargaAtual,
+    listaSubcategorias, nomeSubcategoria, pesoComFilhos,
     itemPodeUsar, itemPodeEquipar, itemEhEquipavel, carregadorEstaAnexado,
     ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis, itemCabeNoContainer,
     volumeTotalDentroDe, rotuloSubtipoPorte, itemPodeSerLevadoSolto,
@@ -138,7 +139,14 @@ export function renderizarInventario(modificadoresPlanos) {
         btn.type = "button";
         btn.className = "inventario-categoria-btn" + (cat.id === estado.categoriaInventarioAtiva ? " active" : "");
         btn.innerText = cat.nome;
-        btn.addEventListener("click", () => { estado.categoriaInventarioAtiva = cat.id; renderizarInventario(modificadoresPlanos); });
+        btn.addEventListener("click", () => {
+            estado.categoriaInventarioAtiva = cat.id;
+            // Trocar de categoria sempre volta pro "Todos" — cada
+            // categoria tem seu próprio conjunto de subcategorias, não
+            // faz sentido carregar o filtro de uma pra outra.
+            estado.subcategoriaInventarioAtiva = null;
+            renderizarInventario(modificadoresPlanos);
+        });
         chip.appendChild(btn);
         // Categorias fixas ("Levando consigo", "Em casa") não podem ser
         // excluídas — só as customizadas (criadas pelo "+ Nova categoria").
@@ -166,33 +174,116 @@ export function renderizarInventario(modificadoresPlanos) {
     // rede de segurança. Carregador anexado a uma arma some da lista
     // pela mesma lógica de sempre (virou parte da arma).
     const estaDentroDeAlgo = (it) => !!(it.dentroDe && estado.fichaAtual.inventario && estado.fichaAtual.inventario[it.dentroDe]);
+
+    // Subcategorias (livres) — só existem fora de "levando": lá a
+    // divisão já é fixa/automática (Mãos x Equipados, calculada logo
+    // abaixo a partir de itemOcupaMao, sem precisar de campo nenhum
+    // salvo). O botão "+ Nova subcategoria" (configurarBotoesAdicionar,
+    // em ficha.js) some junto com o nav nesse caso.
+    const mostraSubcategorias = estado.categoriaInventarioAtiva !== "levando";
+    el.inventarioSubcategoriasNav.style.display = mostraSubcategorias ? "flex" : "none";
+    el.btnAddSubcategoria.style.display = mostraSubcategorias ? "inline-block" : "none";
+    el.inventarioSubcategoriasNav.innerHTML = "";
+
+    if (mostraSubcategorias) {
+        const subcategorias = listaSubcategorias(estado.fichaAtual, estado.categoriaInventarioAtiva);
+        // Subcategoria ativa não existe mais nesta categoria (excluída,
+        // ou sobrou de quando outra categoria estava selecionada) —
+        // volta pro "Todos" em vez de filtrar por um id morto.
+        if (estado.subcategoriaInventarioAtiva && !subcategorias.some(s => s.id === estado.subcategoriaInventarioAtiva)) {
+            estado.subcategoriaInventarioAtiva = null;
+        }
+
+        const chipTodos = document.createElement("span");
+        chipTodos.className = "inventario-categoria-chip";
+        const btnTodos = document.createElement("button");
+        btnTodos.type = "button";
+        btnTodos.className = "inventario-categoria-btn" + (!estado.subcategoriaInventarioAtiva ? " active" : "");
+        btnTodos.innerText = "Todos";
+        btnTodos.addEventListener("click", () => {
+            estado.subcategoriaInventarioAtiva = null;
+            renderizarInventario(modificadoresPlanos);
+        });
+        chipTodos.appendChild(btnTodos);
+        el.inventarioSubcategoriasNav.appendChild(chipTodos);
+
+        subcategorias.forEach(sub => {
+            const chip = document.createElement("span");
+            chip.className = "inventario-categoria-chip";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "inventario-categoria-btn" + (sub.id === estado.subcategoriaInventarioAtiva ? " active" : "");
+            btn.innerText = sub.nome;
+            btn.addEventListener("click", () => {
+                estado.subcategoriaInventarioAtiva = sub.id;
+                renderizarInventario(modificadoresPlanos);
+            });
+            chip.appendChild(btn);
+            const btnExcluir = document.createElement("button");
+            btnExcluir.type = "button";
+            btnExcluir.className = "inventario-categoria-excluir";
+            btnExcluir.title = `Excluir subcategoria "${sub.nome}"`;
+            btnExcluir.innerText = "×";
+            btnExcluir.addEventListener("click", (e) => {
+                e.stopPropagation();
+                excluirSubcategoriaInventario(estado.categoriaInventarioAtiva, sub.id, sub.nome);
+            });
+            chip.appendChild(btnExcluir);
+            el.inventarioSubcategoriasNav.appendChild(chip);
+        });
+    }
+
     const itensCategoria = itens.filter(([id, it]) =>
         it.categoria === estado.categoriaInventarioAtiva &&
+        (!mostraSubcategorias || !estado.subcategoriaInventarioAtiva || it.subcategoriaId === estado.subcategoriaInventarioAtiva) &&
         !(ehCarregador(it.tag) && carregadorEstaAnexado(estado.fichaAtual, id)) &&
         !estaDentroDeAlgo(it)
     );
-    const pesoCategoria = pesoTotalPorCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva);
 
     el.inventarioListas.innerHTML = "";
-    const bloco = document.createElement("div");
-    bloco.className = "categoria-bloco";
-    const titulo = document.createElement("div");
-    titulo.className = "categoria-bloco-titulo";
-    titulo.innerHTML = `${nomeCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva)} <span class="peso-total">${pesoCategoria.toFixed(1)} kg</span>`;
-    bloco.appendChild(titulo);
 
-    const lista = document.createElement("ul");
-    lista.className = "entity-list";
+    const montarBloco = (tituloTexto, pesoBloco, itensBloco, vazioTexto) => {
+        const bloco = document.createElement("div");
+        bloco.className = "categoria-bloco";
+        const titulo = document.createElement("div");
+        titulo.className = "categoria-bloco-titulo";
+        titulo.innerHTML = `${tituloTexto} <span class="peso-total">${pesoBloco.toFixed(1)} kg</span>`;
+        bloco.appendChild(titulo);
 
-    if (!itensCategoria.length) {
-        lista.innerHTML = `<li class="entity-list-empty" style="cursor:default;">Nenhum item aqui ainda.</li>`;
+        const lista = document.createElement("ul");
+        lista.className = "entity-list";
+        if (!itensBloco.length) {
+            lista.innerHTML = `<li class="entity-list-empty" style="cursor:default;">${vazioTexto}</li>`;
+        } else {
+            itensBloco.forEach(([id, it]) => {
+                lista.appendChild(criarLiItem(id, it, { categorias, modificadoresPlanos, nivel: 0 }));
+            });
+        }
+        bloco.appendChild(lista);
+        return bloco;
+    };
+
+    if (estado.categoriaInventarioAtiva === "levando") {
+        // Subcategorias fixas de "Levando consigo": Mãos (item comum, ou
+        // container bolsa_mao — qualquer coisa que ocupe uma mão pra ser
+        // carregada solta) e Equipados (container vestido — roupa, cinto,
+        // mochila — que não ocupa mão nenhuma). Não é um campo salvo, é
+        // só itemOcupaMao calculado na hora (ver dados-manual.js) — então
+        // nenhum item precisa ser "migrado" pra passar a aparecer certo.
+        const itensMaos = itensCategoria.filter(([, it]) => itemOcupaMao(it.tag, it.subtipoPorte));
+        const itensEquipados = itensCategoria.filter(([, it]) => !itemOcupaMao(it.tag, it.subtipoPorte));
+        const pesoMaos = itensMaos.reduce((acc, [id]) => acc + pesoComFilhos(estado.fichaAtual, id), 0);
+        const pesoEquipados = itensEquipados.reduce((acc, [id]) => acc + pesoComFilhos(estado.fichaAtual, id), 0);
+
+        el.inventarioListas.appendChild(montarBloco("🖐️ Mãos", pesoMaos, itensMaos, "Nenhum item na mão agora."));
+        el.inventarioListas.appendChild(montarBloco("🎽 Equipados", pesoEquipados, itensEquipados, "Nada equipado agora."));
     } else {
-        itensCategoria.forEach(([id, it]) => {
-            lista.appendChild(criarLiItem(id, it, { categorias, modificadoresPlanos, nivel: 0 }));
-        });
+        const pesoCategoria = pesoTotalPorCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva);
+        const tituloTexto = estado.subcategoriaInventarioAtiva
+            ? `${nomeCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva)} › ${nomeSubcategoria(estado.fichaAtual, estado.categoriaInventarioAtiva, estado.subcategoriaInventarioAtiva)}`
+            : nomeCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva);
+        el.inventarioListas.appendChild(montarBloco(tituloTexto, pesoCategoria, itensCategoria, "Nenhum item aqui ainda."));
     }
-    bloco.appendChild(lista);
-    el.inventarioListas.appendChild(bloco);
 }
 
 // Exclui uma categoria customizada de inventário (as fixas "Levando
@@ -213,8 +304,41 @@ async function excluirCategoriaInventario(categoriaId, categoriaNome) {
     if (!estado.fichaAtual.categoriasInventario || !estado.fichaAtual.categoriasInventario[categoriaId]) return;
     delete estado.fichaAtual.categoriasInventario[categoriaId];
     await remove(ref(db, `${caminhoBase()}/categoriasInventario/${categoriaId}`));
-    if (estado.categoriaInventarioAtiva === categoriaId) estado.categoriaInventarioAtiva = "levando";
+    // Limpa junto as subcategorias dessa categoria (sem itens, já que a
+    // trava acima garante isso) — senão ficam órfãs em
+    // subcategoriasInventario, sem categoria nenhuma que as mostre.
+    if (estado.fichaAtual.subcategoriasInventario && estado.fichaAtual.subcategoriasInventario[categoriaId]) {
+        delete estado.fichaAtual.subcategoriasInventario[categoriaId];
+        await remove(ref(db, `${caminhoBase()}/subcategoriasInventario/${categoriaId}`));
+    }
+    if (estado.categoriaInventarioAtiva === categoriaId) {
+        estado.categoriaInventarioAtiva = "levando";
+        estado.subcategoriaInventarioAtiva = null;
+    }
     toast(`Categoria "${categoriaNome}" excluída.`);
+    renderizarInventario(modificadoresAtuais());
+}
+
+// Exclui uma subcategoria (livre, dentro de uma categoria que não seja
+// "levando" — lá a divisão é fixa, não passa por aqui). Mesma trava de
+// excluirCategoriaInventario acima: bloqueia se ainda tiver item
+// usando essa subcategoria, pra não deixar item nenhum com
+// subcategoriaId apontando pro vazio.
+async function excluirSubcategoriaInventario(categoriaId, subcategoriaId, subcategoriaNome) {
+    if (!estado.fichaAtual || !estado.fichaAtualId) return;
+    const temItens = Object.values(estado.fichaAtual.inventario || {}).some(it =>
+        it.categoria === categoriaId && it.subcategoriaId === subcategoriaId
+    );
+    if (temItens) {
+        toast(`Mova ou remova os itens de "${subcategoriaNome}" antes de excluir essa subcategoria.`, "erro");
+        return;
+    }
+    if (!confirm(`Excluir a subcategoria "${subcategoriaNome}"? Essa ação não pode ser desfeita.`)) return;
+    if (!estado.fichaAtual.subcategoriasInventario || !estado.fichaAtual.subcategoriasInventario[categoriaId] || !estado.fichaAtual.subcategoriasInventario[categoriaId][subcategoriaId]) return;
+    delete estado.fichaAtual.subcategoriasInventario[categoriaId][subcategoriaId];
+    await remove(ref(db, `${caminhoBase()}/subcategoriasInventario/${categoriaId}/${subcategoriaId}`));
+    if (estado.subcategoriaInventarioAtiva === subcategoriaId) estado.subcategoriaInventarioAtiva = null;
+    toast(`Subcategoria "${subcategoriaNome}" excluída.`);
     renderizarInventario(modificadoresAtuais());
 }
 
@@ -2642,6 +2766,10 @@ export async function salvarItemDoModal(id) {
         compartimentos,
         quantidade,
         categoria: categoriaFinal,
+        // Subcategoria livre (só existe fora de "levando" — lá o campo
+        // do modal fica escondido, ver atualizarCampoSubcategoriaItem em
+        // ficha.js, e el.modalSubcategoriaItem.value não é usado).
+        subcategoriaId: categoriaFinal !== "levando" ? (el.modalSubcategoriaItem.value || null) : null,
         dentroDe,
         compartimentoId,
         periciaUso,

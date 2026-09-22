@@ -35,11 +35,62 @@ export function criarCategoriaCustom(fichaAtual, nome) {
     return id;
 }
 
+// =====================================================================
+// Subcategorias (livres, criadas pelo jogador/Mestre) — só fazem
+// sentido fora de "Levando consigo": lá a divisão já é fixa e
+// automática (Mãos x Equipados — calculada de itemOcupaMao na hora de
+// renderizar, ver renderizarInventario em abas/inventario.js, sem
+// precisar de dado nenhum salvo). Em qualquer outra categoria ("Em
+// casa" ou customizada), o jogador pode criar quantas quiser, do jeito
+// que fizer sentido pra ele (por local, por urgência, etc.) — mesmo
+// padrão de categoriasInventario/criarCategoriaCustom acima, só que
+// chaveado também pela categoria (fichaAtual.subcategoriasInventario =
+// { <categoriaId>: { <subId>: { nome } } }).
+// =====================================================================
+
+export function listaSubcategorias(fichaAtual, categoriaId) {
+    const todas = (fichaAtual.subcategoriasInventario || {})[categoriaId] || {};
+    return Object.keys(todas).map(id => ({ id, nome: todas[id].nome }));
+}
+
+export function nomeSubcategoria(fichaAtual, categoriaId, subcategoriaId) {
+    if (!subcategoriaId) return "";
+    const achada = listaSubcategorias(fichaAtual, categoriaId).find(s => s.id === subcategoriaId);
+    return achada ? achada.nome : subcategoriaId;
+}
+
+export function criarSubcategoriaCustom(fichaAtual, categoriaId, nome) {
+    const id = "sub_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+    if (!fichaAtual.subcategoriasInventario) fichaAtual.subcategoriasInventario = {};
+    if (!fichaAtual.subcategoriasInventario[categoriaId]) fichaAtual.subcategoriasInventario[categoriaId] = {};
+    fichaAtual.subcategoriasInventario[categoriaId][id] = { nome };
+    return id;
+}
+
 export function pesoTotalPorCategoria(fichaAtual, categoriaId) {
     const itens = Object.values(fichaAtual.inventario || {});
     return itens
         .filter(it => it.categoria === categoriaId)
         .reduce((acc, it) => acc + (Number(it.peso) || 0), 0);
+}
+
+// Peso de um item SOMADO ao de tudo que está guardado dentro dele
+// (recursivo — mochila dentro de mochila, se algum dia existir). Usado
+// pelos blocos "Mãos"/"Equipados" de "Levando consigo" (ver
+// renderizarInventario): pesoTotalPorCategoria acima soma cada item
+// individualmente não importa onde esteja aninhado (serve pro total
+// da categoria/carga), mas pra mostrar "quanto pesa o que está na mão"
+// vs "quanto pesa o que está equipado" precisa somar cada item de
+// TOPO com tudo que carrega dentro, senão o peso do que está guardado
+// numa mochila equipada não apareceria em lugar nenhum dessa conta.
+export function pesoComFilhos(fichaAtual, itemId) {
+    const it = (fichaAtual.inventario || {})[itemId];
+    if (!it) return 0;
+    let total = Number(it.peso) || 0;
+    Object.entries(fichaAtual.inventario || {}).forEach(([id, filho]) => {
+        if (filho.dentroDe === itemId) total += pesoComFilhos(fichaAtual, id);
+    });
+    return total;
 }
 
 // Carga só considera o peso do que está "Levando consigo" — é o que
@@ -508,19 +559,21 @@ export const DENTRO_DA_CAIXA = "__caixa_comprada__";
 const COMPARTIMENTO_DA_CAIXA = "principal";
 
 // Decide (SEM gravar nada) onde a CAIXA de uma compra de várias
-// unidades vai ficar — regra "f" da decisão tomada no plano: primeiro
-// tenta um container do jogador que comporte a caixa (mesma checagem
-// itemCabeNoContainer de qualquer item); se nenhum comportar, tenta mão
-// livre (a caixa é subtipo bolsa_mao — ocupa mão, mas não precisa estar
-// DENTRO de outro container, só precisa ficar equipada, igual qualquer
-// bolsa de mão); se nem isso, devolve null (compra bloqueada).
+// unidades vai ficar — mesma prioridade "mão primeiro" do item único
+// (ver decidirDestinoDoItemComprado): a caixa é subtipo bolsa_mao, ou
+// seja, ocupa mão igual qualquer bolsa de mão; se tiver mão livre, vai
+// pra lá direto (não precisa estar DENTRO de outro container, só
+// ficar equipada). Só cai pra procurar um container do jogador que
+// comporte a caixa (mesma checagem itemCabeNoContainer de qualquer
+// item) quando não sobra mão livre; se nem isso, devolve null (compra
+// bloqueada).
 function decidirDestinoDaCaixa(fichaAtual, tamanhoCaixa, volumeCaixa) {
+    if (maosDisponiveis(fichaAtual) >= 1) return { containerId: null, compartimentoId: null, naMao: true };
     const containers = listaContainersValidosParaCompra(fichaAtual);
     const escolhido = containers.find(c =>
         itemCabeNoContainer(fichaAtual, c.containerId, c.compartimentoId, volumeCaixa, tamanhoCaixa).cabe
     );
     if (escolhido) return { containerId: escolhido.containerId, compartimentoId: escolhido.compartimentoId, naMao: false };
-    if (maosDisponiveis(fichaAtual) >= 1) return { containerId: null, compartimentoId: null, naMao: true };
     return null;
 }
 
@@ -536,10 +589,15 @@ function decidirDestinoDaCaixa(fichaAtual, tamanhoCaixa, volumeCaixa) {
 // inventário (regra 3 do plano): `destinos` tem um único elemento com
 // unidades = qtd e volume = o total das qtd unidades — nunca usa Caixa.
 //
-// Item não empilhável com quantidade 1 vai direto pro primeiro
-// container que comportar (regra da Etapa 8: "compra de 1 unidade
-// continua indo direto ao container, sem Caixa") — `destinos` tem um
-// único elemento e `caixa` fica null.
+// Item não empilhável com quantidade 1 vai PRA MÃO se tiver uma livre
+// (prioridade 1 — mesma regra de "pra onde vai ao equipar", ver
+// itemOcupaMao/maosDisponiveis: item comum sempre ocupa mão; container
+// só ocupa mão se for bolsa_mao; roupa/cinto/mochila NUNCA vão pra mão,
+// pulam direto pra prioridade 2). Só quando não sobra mão livre (ou o
+// item não é do tipo que vai pra mão) é que cai pro container — regra
+// da Etapa 8: "compra de 1 unidade continua indo direto ao container,
+// sem Caixa", agora com a mão testada primeiro. `destinos` tem um
+// único elemento e `caixa` fica null nos dois casos.
 //
 // Item não empilhável com quantidade > 1 (Etapa 8): TODAS as unidades
 // vão para dentro de uma Caixa nova — `destinos` tem um elemento por
@@ -581,6 +639,23 @@ export function decidirDestinoDoItemComprado(fichaAtual, itemBanco, quantidade) 
     }
 
     if (qtd === 1) {
+        const maosNecessarias = Number(itemBanco.maosNecessarias) || 1;
+        const podeIrPraMao = itemOcupaMao(itemBanco.tag, itemBanco.subtipoPorte) &&
+            maosDisponiveis(fichaAtual) >= maosNecessarias;
+        if (podeIrPraMao) {
+            return {
+                ok: true,
+                caixa: null,
+                destinos: [{
+                    containerId: null,
+                    compartimentoId: null,
+                    naMao: true,
+                    unidades: 1,
+                    volume: volumeUnitario
+                }]
+            };
+        }
+
         const containers = listaContainersValidosParaCompra(fichaAtual);
         if (!containers.length) return { ok: false, motivo: "sem_container" };
         const escolhido = containers.find(c =>
@@ -593,6 +668,7 @@ export function decidirDestinoDoItemComprado(fichaAtual, itemBanco, quantidade) 
             destinos: [{
                 containerId: escolhido.containerId,
                 compartimentoId: escolhido.compartimentoId,
+                naMao: false,
                 unidades: 1,
                 volume: volumeUnitario
             }]
