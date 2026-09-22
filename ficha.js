@@ -26,6 +26,7 @@ import { renderizarInventario, criarLiItem, fecharCaixaDepositarDinheiroItem, co
 import { renderizarVeiculos, configurarFatorPrecoMateriaisVeiculo } from "./abas/veiculos.js";
 import { renderizarDarknetENotas, configurarFatorPrecoDarknet } from "./abas/darknet.js";
 import { renderizarCenarios, configurarCenarios, configurarPerseguicaoAtiva, fecharCaixaPegarDinheiroCenario, montarGerenciadorCenario } from "./abas/cenario.js";
+import { renderizarLojas, configurarLojas } from "./abas/lojas.js";
 import { renderizarCombate, renderizarManobrasCombate, configurarCombateAtivo, configurarAvisoTorniquete, renderizarAlertaIniciativaCombate, montarPainelIniciativaJogador, montarGerenciadorCombate } from "./abas/combate.js";
 import { configurarAcoesPendentes, montarPainelAcoesPendentes, renderizarReacaoPendente, abrirAcaoMestre } from "./mestre/acoes-pendentes.js";
 import { configurarPainelMestre, montarPainelXpMultiplo, montarPainelCondicaoMestre, configurarGodmode } from "./mestre/painel-mestre.js";
@@ -239,7 +240,7 @@ const LISTAS_CARACTERISTICA_NARRATIVA = ["vantagens", "desvantagens", "fatosUniv
 const CATEGORIAS_ABAS = [
     { chave: "personagem", abas: ["perfil", "atributos", "pericias", "vant-desv", "especializacoes"] },
     { chave: "recursos", abas: ["inventario", "financas", "receitas", "darknet"] },
-    { chave: "jogo", abas: ["combate", "saude", "veiculos", "cenario"] },
+    { chave: "jogo", abas: ["combate", "saude", "veiculos", "cenario", "lojas"] },
     { chave: "progresso", abas: ["treinamento", "notas"] },
 ];
 function categoriaDaAba(dataTab) {
@@ -815,6 +816,7 @@ async function init() {
     tentarOuAvisar("fator de preço da Dark Net", configurarFatorPrecoDarknet);
     tentarOuAvisar("gerenciador de combate", configurarCombateAtivo);
     tentarOuAvisar("cenários", configurarCenarios);
+    tentarOuAvisar("lojas", configurarLojas);
     tentarOuAvisar("gerenciador de perseguição", configurarPerseguicaoAtiva);
     tentarOuAvisar("modal de alvo", configurarModalSelecionarAlvo);
     tentarOuAvisar("finanças", configurarFinancas);
@@ -1620,6 +1622,7 @@ export function renderizarTudo() {
     renderizarCombate();
     renderizarVeiculos();
     renderizarCenarios();
+    renderizarLojas();
     renderizarVantagensDesvantagens();
     renderizarEspecializacoes();
     renderizarTreinamento();

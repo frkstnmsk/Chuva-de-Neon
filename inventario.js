@@ -5,7 +5,7 @@
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
     ehArma, ehArmaOuExplosivo, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
-    TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe,
+    TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, tagTemQuantidadeGeral,
     SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo, itemOcupaMao
 } from "./dados-manual.js";
 import { calcularCarga } from "./regras.js";
@@ -445,6 +445,214 @@ export function resolverEntradaLevandoConsigo(fichaAtual, item, idItemAtual) {
         return { ok: false, motivo: `não pode ir pra "Levando consigo" agora — sem mãos livres pra segurar; libere uma mão antes.` };
     }
     return { ok: true, equipar: true };
+}
+
+// =====================================================================
+// Compra em Lojas (Etapas 5, 7 e 8 — ver planejamento-lojas.txt): decide
+// se o item comprado tem onde ficar guardado, ANTES de cobrar/gravar
+// qualquer coisa. A mesma função é usada pela Etapa 5 (só calcula, pra
+// mostrar o aviso na caixa de compra) e pelas Etapas 7/8 (decidem de
+// verdade onde o item — ou a Caixa que o guarda — entra) — assim o
+// aviso prévio nunca diverge do que vai acontecer na entrega real.
+// =====================================================================
+
+// Sobe a cadeia de dentroDe a partir de um container: só é válido se,
+// em algum ponto, chegar a um container "equipado" de um subtipo que
+// pode ser levado solto (roupa/cinto/mochila/bolsa_mão) — mesma regra
+// de itemPodeSerLevadoSolto/resolverEntradaLevandoConsigo, olhando só
+// pro lado dos containers. "Em casa" nunca conta (chamado só com
+// containers da categoria "levando" — ver listaContainersValidosParaCompra).
+function containerTemLugarFisicoValido(fichaAtual, containerId, visitados) {
+    if (visitados.has(containerId)) return false; // ciclo — dado corrompido
+    visitados.add(containerId);
+    const it = (fichaAtual.inventario || {})[containerId];
+    if (!it) return false;
+    if (it.dentroDe) return containerTemLugarFisicoValido(fichaAtual, it.dentroDe, visitados);
+    const subtipo = it.subtipoPorte;
+    const subtipoValido = subtipo === "roupa" || subtipo === "cinto" || subtipo === "mochila" || subtipo === "bolsa_mao";
+    return subtipoValido && !!it.equipada;
+}
+
+// Containers válidos pra RECEBER item comprado (regra "a" da decisão
+// tomada no plano de lojas): estar na categoria "levando" E ter lugar
+// físico válido. Devolve uma entrada por COMPARTIMENTO (mesmo padrão
+// de listaContainersDisponiveis), na ordem em que aparecem no
+// inventário — regra "c": o primeiro que comportar vence.
+export function listaContainersValidosParaCompra(fichaAtual) {
+    const out = [];
+    Object.entries(fichaAtual.inventario || {}).forEach(([id, it]) => {
+        if (!ehContainer(it.tag) || it.categoria !== "levando") return;
+        if (!containerTemLugarFisicoValido(fichaAtual, id, new Set())) return;
+        listaCompartimentos(it).forEach(comp => {
+            out.push({ containerId: id, compartimentoId: comp.id, compartimento: comp });
+        });
+    });
+    return out;
+}
+
+// =====================================================================
+// Caixa (Etapa 8 — ver planejamento-lojas.txt): quando a compra gera
+// VÁRIAS unidades SEPARADAS (item não empilhável — tagTemQuantidadeGeral
+// falso — com quantidade > 1), elas não se espalham em containers
+// diferentes do jogador: todas vão dentro de uma Caixa nova, e só a
+// CAIXA precisa de um lugar físico. Item empilhável nunca usa Caixa (já
+// vira uma única entrada — regra 3 do plano) e comprar 1 unidade também
+// não (vai direto pro container, sem Caixa — regra da Etapa 8).
+// =====================================================================
+
+// Sentinel usado no `containerId` dos destinos de uma compra em Caixa —
+// abas/lojas.js troca pelo id de verdade assim que a Caixa é criada no
+// Firebase (só ali um id é gerado). Fica isolado numa constante pra não
+// espalhar esse "valor mágico" pelo código.
+export const DENTRO_DA_CAIXA = "__caixa_comprada__";
+const COMPARTIMENTO_DA_CAIXA = "principal";
+
+// Decide (SEM gravar nada) onde a CAIXA de uma compra de várias
+// unidades vai ficar — regra "f" da decisão tomada no plano: primeiro
+// tenta um container do jogador que comporte a caixa (mesma checagem
+// itemCabeNoContainer de qualquer item); se nenhum comportar, tenta mão
+// livre (a caixa é subtipo bolsa_mao — ocupa mão, mas não precisa estar
+// DENTRO de outro container, só precisa ficar equipada, igual qualquer
+// bolsa de mão); se nem isso, devolve null (compra bloqueada).
+function decidirDestinoDaCaixa(fichaAtual, tamanhoCaixa, volumeCaixa) {
+    const containers = listaContainersValidosParaCompra(fichaAtual);
+    const escolhido = containers.find(c =>
+        itemCabeNoContainer(fichaAtual, c.containerId, c.compartimentoId, volumeCaixa, tamanhoCaixa).cabe
+    );
+    if (escolhido) return { containerId: escolhido.containerId, compartimentoId: escolhido.compartimentoId, naMao: false };
+    if (maosDisponiveis(fichaAtual) >= 1) return { containerId: null, compartimentoId: null, naMao: true };
+    return null;
+}
+
+// Decide (SEM gravar nada) ONDE `quantidade` unidades de um item do
+// Banco/loja vão ficar guardadas, usando os containers válidos do
+// jogador (regra "a" da decisão tomada). `itemBanco` precisa dos
+// campos do molde (tag, volume, volumeUnitario, tamanho — mesmo
+// formato de itensGlobais). Devolve:
+//   { ok: false, motivo: "sem_container" | "sem_espaco" }
+//   { ok: true, destinos: [...], caixa: null | {...} }
+//
+// Item empilhável (tagTemQuantidadeGeral) vira UMA entrada só no
+// inventário (regra 3 do plano): `destinos` tem um único elemento com
+// unidades = qtd e volume = o total das qtd unidades — nunca usa Caixa.
+//
+// Item não empilhável com quantidade 1 vai direto pro primeiro
+// container que comportar (regra da Etapa 8: "compra de 1 unidade
+// continua indo direto ao container, sem Caixa") — `destinos` tem um
+// único elemento e `caixa` fica null.
+//
+// Item não empilhável com quantidade > 1 (Etapa 8): TODAS as unidades
+// vão para dentro de uma Caixa nova — `destinos` tem um elemento por
+// unidade, cada um com containerId = DENTRO_DA_CAIXA (sentinel — quem
+// grava de verdade troca pelo id real da caixa recém-criada), e `caixa`
+// descreve a caixa em si: tamanho/capacidadeVolume calculados a partir
+// do que foi comprado (tamanhoMaximoAceito = maior tamanho entre as
+// unidades — hoje sempre o próprio tamanho do item, já que uma compra é
+// sempre do mesmo item; capacidadeVolume = soma dos volumes
+// comprados), e `destino` é o resultado de decidirDestinoDaCaixa acima
+// (onde a caixa em si vai ficar: outro container, ou na mão).
+//
+// Esta é a ÚNICA função que decide isso — Etapa 5 (aviso prévio, via
+// simularEncaixeCompra abaixo) e Etapas 7/8 (entrega de verdade, em
+// abas/lojas.js) chamam exatamente a mesma, pra nunca divergir.
+export function decidirDestinoDoItemComprado(fichaAtual, itemBanco, quantidade) {
+    const qtd = Math.max(1, Math.floor(Number(quantidade) || 0));
+    const tamanho = itemBanco.tamanho || null;
+    const volumeUnitario = Number(itemBanco.volumeUnitario ?? itemBanco.volume) || 0;
+
+    if (tagTemQuantidadeGeral(itemBanco.tag)) {
+        const containers = listaContainersValidosParaCompra(fichaAtual);
+        if (!containers.length) return { ok: false, motivo: "sem_container" };
+        const volumeTotal = volumeUnitario * qtd;
+        const escolhido = containers.find(c =>
+            itemCabeNoContainer(fichaAtual, c.containerId, c.compartimentoId, volumeTotal, tamanho).cabe
+        );
+        if (!escolhido) return { ok: false, motivo: "sem_espaco" };
+        return {
+            ok: true,
+            caixa: null,
+            destinos: [{
+                containerId: escolhido.containerId,
+                compartimentoId: escolhido.compartimentoId,
+                unidades: qtd,
+                volume: volumeTotal
+            }]
+        };
+    }
+
+    if (qtd === 1) {
+        const containers = listaContainersValidosParaCompra(fichaAtual);
+        if (!containers.length) return { ok: false, motivo: "sem_container" };
+        const escolhido = containers.find(c =>
+            itemCabeNoContainer(fichaAtual, c.containerId, c.compartimentoId, volumeUnitario, tamanho).cabe
+        );
+        if (!escolhido) return { ok: false, motivo: "sem_espaco" };
+        return {
+            ok: true,
+            caixa: null,
+            destinos: [{
+                containerId: escolhido.containerId,
+                compartimentoId: escolhido.compartimentoId,
+                unidades: 1,
+                volume: volumeUnitario
+            }]
+        };
+    }
+
+    // Etapa 8 — várias unidades separadas: tudo vai pra dentro de uma
+    // Caixa nova; só a CAIXA precisa de um lugar físico (regra "f").
+    const capacidadeVolume = volumeUnitario * qtd;
+    // Mesmo item em todas as unidades desta compra, então "o maior
+    // tamanho entre elas" hoje é sempre o próprio tamanho do item —
+    // fica escrito como um cálculo (em vez de só `= tamanho`) só pra
+    // deixar a regra explícita, caso um dia a Caixa passe a aceitar
+    // itens de origens diferentes na mesma compra.
+    const tamanhoMaximoAceito = tamanho;
+    // Tamanho/volume EXTERNO da própria Caixa (pra saber se ELA cabe
+    // dentro de outro container do jogador): aproximação provisória —
+    // a caixa ocupa, por fora, tanto espaço quanto carrega por dentro
+    // (mesmo tamanho/volume que a capacidade interna dela). Ponto em
+    // aberto, igual o resto do plano: se depois a mesa quiser uma
+    // Caixa com tamanho/peso físico próprio (independente do que
+    // carrega), é só mudar estas duas linhas.
+    const tamanhoDaCaixa = tamanhoMaximoAceito;
+    const volumeDaCaixa = capacidadeVolume;
+
+    const destinoCaixa = decidirDestinoDaCaixa(fichaAtual, tamanhoDaCaixa, volumeDaCaixa);
+    if (!destinoCaixa) return { ok: false, motivo: "sem_espaco" };
+
+    const destinos = [];
+    for (let i = 0; i < qtd; i++) {
+        destinos.push({
+            containerId: DENTRO_DA_CAIXA,
+            compartimentoId: COMPARTIMENTO_DA_CAIXA,
+            unidades: 1,
+            volume: volumeUnitario
+        });
+    }
+    return {
+        ok: true,
+        destinos,
+        caixa: {
+            tamanho: tamanhoDaCaixa,
+            volume: volumeDaCaixa,
+            capacidadeVolume,
+            tamanhoMaximoAceito,
+            compartimentoId: COMPARTIMENTO_DA_CAIXA,
+            destino: destinoCaixa
+        }
+    };
+}
+
+// Simula (SEM gravar nada) se `quantidade` unidades cabem — mesma
+// checagem de decidirDestinoDoItemComprado (Etapa 5, usada pela caixa de
+// compra pra mostrar o aviso prévio; já cobre o caso de precisar de uma
+// Caixa — Etapa 8), só que devolvendo apenas { cabe, motivo } em vez dos
+// destinos escolhidos (a tela ainda não precisa saber ONDE vai cair, só
+// SE cabe).
+export function simularEncaixeCompra(fichaAtual, itemBanco, quantidade) {
+    const resultado = decidirDestinoDoItemComprado(fichaAtual, itemBanco, quantidade);
+    return resultado.ok ? { cabe: true, motivo: null } : { cabe: false, motivo: resultado.motivo };
 }
 
 export { TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo };

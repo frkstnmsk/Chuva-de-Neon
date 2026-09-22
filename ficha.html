@@ -255,6 +255,7 @@
                             <button class="tab-btn" data-tab="saude" data-categoria="jogo" type="button">Saúde</button>
                             <button class="tab-btn" data-tab="veiculos" data-categoria="jogo" type="button">Veículos</button>
                             <button class="tab-btn" data-tab="cenario" data-categoria="jogo" type="button">Cenário</button>
+                            <button class="tab-btn" data-tab="lojas" data-categoria="jogo" type="button">Lojas</button>
                             <button class="tab-btn" data-tab="treinamento" data-categoria="progresso" type="button">Treinamento / Estudo</button>
                             <button class="tab-btn" data-tab="notas" data-categoria="progresso" type="button">Determinações / Notas</button>
                         </div>
@@ -611,6 +612,31 @@
                     <div id="cenario-lista"></div>
                 </section>
 
+                <!-- ===================== LOJAS ===================== -->
+                <section class="tab-panel panel" data-tab="lojas">
+                    <div class="section-header">Lojas</div>
+
+                    <div id="lojas-mestre-bloco" style="display:none;">
+                        <p class="hint">Cadastre uma loja e, dentro dela, use "Ver catálogo" para adicionar itens
+                            já existentes no Banco Global. Loja oculta só aparece pra você.</p>
+                        <div class="grid-form grid-4">
+                            <div class="campo largo">
+                                <label for="lojas-novo-nome">Nome da loja</label>
+                                <input type="text" id="lojas-novo-nome" placeholder="Ex.: Mercado do Zé">
+                            </div>
+                            <div class="campo largo">
+                                <label for="lojas-novo-descricao">Descrição</label>
+                                <input type="text" id="lojas-novo-descricao" placeholder="Opcional">
+                            </div>
+                        </div>
+                        <label><input type="checkbox" id="lojas-novo-aceita-virtual"> Aceita dinheiro virtual <span class="hint-inline">deixa cadastrar um preço em dinheiro virtual, além do preço normal, em cada item desta loja — pode mudar isso depois, em "Editar"</span></label>
+                        <button id="lojas-btn-criar" class="btn-lime" type="button">+ Criar loja</button>
+                    </div>
+
+                    <ul class="entity-list" id="lojas-lista"></ul>
+                    <p class="hint" id="lojas-vazio" style="display:none;">Nenhuma loja cadastrada ainda.</p>
+                </section>
+
                 <!-- ===================== VANTAGENS / DESVANTAGENS ===================== -->
                 <section class="tab-panel panel" data-tab="vant-desv">
                     <div class="hint">Vantagens, Desvantagens e Fatos Universais só podem ser adicionados/removidos livremente durante a Criação de Personagem. Depois disso, só o Mestre pode alterá-los.</div>
@@ -705,6 +731,7 @@
                             <button class="tab-btn" data-tab="saude" data-categoria="jogo" type="button">Saúde</button>
                             <button class="tab-btn" data-tab="veiculos" data-categoria="jogo" type="button">Veículos</button>
                             <button class="tab-btn" data-tab="cenario" data-categoria="jogo" type="button">Cenário</button>
+                            <button class="tab-btn" data-tab="lojas" data-categoria="jogo" type="button">Lojas</button>
                             <button class="tab-btn" data-tab="treinamento" data-categoria="progresso" type="button">Treinamento / Estudo</button>
                             <button class="tab-btn" data-tab="notas" data-categoria="progresso" type="button">Determinações / Notas</button>
                         </div>

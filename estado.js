@@ -67,6 +67,9 @@ export const estado = {
     contadorPendentesAnterior: 0,
     cenariosCache: [],
     perseguicaoAtivaCache: { ativo: false, participantes: {} },
+    lojasCache: [],
+    unsubLojas: null,
+    lojasExpandidas: new Set(),
 
     // Específico da ficha atualmente aberta
     pvRecuperacaoContexto: null,

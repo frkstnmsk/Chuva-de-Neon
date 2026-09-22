@@ -616,12 +616,17 @@
     // sobe elas pro Firebase; 2) tem um registro inicial embutido pra
     // essa mesa (SEED_*_POR_MESA) → usa ele. Mesas novas sem nenhum dos
     // dois simplesmente começam vazias, esperando a primeira marcação.
+    // ATENÇÃO: só lê a chave local DESTA mesa (rpg_pois_{mesaId}). As chaves
+    // genéricas antigas ("rpg_pois" / "rpg_linhas_ambiente", de antes de
+    // existirem mesas) NÃO são mais usadas como fallback — elas faziam uma
+    // mesa nova herdar o mapa de outra mesa que já tinha sido aberta no
+    // mesmo navegador.
     async function prepararDadosDaMesa() {
         if (!MESA_ID) return;
         const poisRef = ref(db, caminhoMesa("mapaPois"));
         const snapPois = await get(poisRef);
         if (!snapPois.exists()) {
-            const local = localStorage.getItem(CHAVE_POIS_LOCAL_ANTIGA) || localStorage.getItem("rpg_pois");
+            const local = localStorage.getItem(CHAVE_POIS_LOCAL_ANTIGA);
             if (local) {
                 try { await set(poisRef, JSON.parse(local)); } catch (e) { /* ignora lixo local malformado */ }
             } else if (SEED_POIS_POR_MESA[MESA_ID]) {
@@ -631,7 +636,7 @@
         const linhasRef = ref(db, caminhoMesa("mapaLinhas"));
         const snapLinhas = await get(linhasRef);
         if (!snapLinhas.exists()) {
-            const local = localStorage.getItem(CHAVE_LINHAS_LOCAL_ANTIGA) || localStorage.getItem("rpg_linhas_ambiente");
+            const local = localStorage.getItem(CHAVE_LINHAS_LOCAL_ANTIGA);
             if (local) {
                 try { await set(linhasRef, JSON.parse(local)); } catch (e) { /* ignora lixo local malformado */ }
             } else if (SEED_LINHAS_POR_MESA[MESA_ID]) {

@@ -1349,6 +1349,19 @@ export function subtipoSaldoDoId(saldoId) {
     return partes.length > 1 ? partes[1] : null;
 }
 
+// Um saldo é "dinheiro virtual" quando vem da parte "notas" OU
+// "moedas" de um Eletrônico marcado como carteira digital (ver
+// subtipoSaldoDoId) — o dinheiro digital em si (cripto, saldo de app
+// de banco etc.). Todo o resto (os 3 saldos fixos da ficha, saldo
+// customizado, e dinheiro físico guardado num item com a tag
+// "Dinheiro") é "dinheiro normal". Usado pela aba Lojas pra separar os
+// dois grupos de saldo na hora de pagar numa loja marcada como
+// aceitaDinheiroVirtual (ver lojas.js) — cada forma de pagamento só
+// mostra os saldos do grupo correspondente.
+export function saldoIdEhVirtual(saldoId) {
+    return subtipoSaldoDoId(saldoId) !== null;
+}
+
 // Nome do campo em fichas/{id}/inventario/{itemId}/<campo> onde o
 // VALOR desse saldo específico está gravado — saldoNotas/saldoMoedas
 // pra carteira digital (eletrônico), saldoValor pra tudo o mais
@@ -1385,18 +1398,21 @@ export function arredondarMoeda(valor) {
 // dinheiro físico. Eletrônico marcado como carteira digital entra como
 // DOIS saldos separados (notas e moedas do mesmo item — ver
 // idSaldoDeItem/campoSaldoDoItem); dinheiro físico continua como um só.
+// Cada saldo devolvido também traz `virtual` (ver saldoIdEhVirtual) —
+// true só pra notas/moedas de carteira digital, false pra tudo o mais
+// (fixo, customizado, ou dinheiro físico de item).
 export function todosOsSaldos(fichaAtual) {
     const saldosFicha = Object.entries(fichaAtual.saldos || {}).map(([id, s]) => ({
-        id, nome: s.nome, valor: arredondarMoeda(s.valor), fixo: !!s.fixo, deItem: false
+        id, nome: s.nome, valor: arredondarMoeda(s.valor), fixo: !!s.fixo, deItem: false, virtual: false
     }));
     const saldosItem = [];
     Object.entries(fichaAtual.inventario || {}).forEach(([itemId, it]) => {
         if (!it.ehSaldo) return;
         if (it.tag === "eletronico") {
-            saldosItem.push({ id: idSaldoDeItem(itemId, "notas"), nome: `${it.nome} (notas)`, valor: arredondarMoeda(it.saldoNotas), fixo: false, deItem: true, itemId });
-            saldosItem.push({ id: idSaldoDeItem(itemId, "moedas"), nome: `${it.nome} (moedas)`, valor: arredondarMoeda(it.saldoMoedas), fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId, "notas"), nome: `${it.nome} (notas)`, valor: arredondarMoeda(it.saldoNotas), fixo: false, deItem: true, itemId, virtual: true });
+            saldosItem.push({ id: idSaldoDeItem(itemId, "moedas"), nome: `${it.nome} (moedas)`, valor: arredondarMoeda(it.saldoMoedas), fixo: false, deItem: true, itemId, virtual: true });
         } else {
-            saldosItem.push({ id: idSaldoDeItem(itemId), nome: `${it.nome} (dinheiro físico)`, valor: arredondarMoeda(it.saldoValor), fixo: false, deItem: true, itemId });
+            saldosItem.push({ id: idSaldoDeItem(itemId), nome: `${it.nome} (dinheiro físico)`, valor: arredondarMoeda(it.saldoValor), fixo: false, deItem: true, itemId, virtual: false });
         }
     });
     return [...saldosFicha, ...saldosItem];

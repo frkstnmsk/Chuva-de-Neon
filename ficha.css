@@ -1169,6 +1169,34 @@ input[type="number"].darknet-item-venda-valor {
 @media (hover: hover) {
     .entity-list .entity-thumb { cursor: zoom-in; }
 }
+/* ===================== LOJAS ===================== */
+.loja-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-left: 8px;
+    border: 1px solid currentColor;
+}
+.loja-badge.visivel { color: var(--neon-lime); }
+.loja-badge.oculta { color: var(--neon-red); }
+.loja-badge.virtual { color: var(--neon-blue); }
+.loja-descricao { font-size: 0.75rem; opacity: 0.75; margin-top: 2px; }
+.loja-acoes-mestre { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.loja-acoes-mestre button { font-size: 0.7rem; padding: 4px 10px; }
+.loja-edit-form { display: grid; gap: 8px; margin-top: 8px; }
+.loja-edit-form input[type="text"] { width: 100%; }
+.loja-catalogo { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(255, 255, 255, 0.12); }
+.loja-catalogo-lista { margin-bottom: 10px; }
+.loja-catalogo-lista li { padding: 8px 10px; }
+.loja-catalogo-em-breve { font-size: 0.75rem; opacity: 0.6; margin-top: 8px; font-style: italic; }
+.loja-compra-box { border-top: 1px dashed rgba(255, 255, 255, 0.12); padding-top: 8px; }
+.loja-compra-total { font-size: 0.8rem; font-weight: 600; }
+.loja-compra-aviso { font-size: 0.75rem; color: var(--neon-red); }
+.loja-compra-aviso-espaco { color: var(--neon-lime); opacity: 0.85; }
+
 .entity-list .entity-main {
     display: flex;
     flex-direction: column;
