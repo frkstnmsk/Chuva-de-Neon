@@ -14,7 +14,10 @@
 .loading-screen p { color: var(--text-dim); font-size: 0.85rem; }
 
 .app-shell {
-    max-width: 1320px;
+    /* 1320px × 1,5 — ver .topbar abaixo, que precisa ficar com o MESMO
+       valor (ela é centralizada e alinhada por cima do app-shell; se um
+       mudar sem o outro, a barra de PV/Energia desalinha da ficha). */
+    max-width: 1980px;
     margin: 0 auto;
     padding: 20px;
     padding-top: calc(var(--topbar-h, 90px) + 20px);
@@ -34,7 +37,8 @@
     left: 50%;
     transform: translateX(-50%);
     width: 100%;
-    max-width: 1320px;
+    /* Mesmo valor de .app-shell acima — não mudar um sem o outro. */
+    max-width: 1980px;
     z-index: 4000;
     border-radius: 0 0 14px 14px;
     display: flex;
