@@ -59,6 +59,17 @@ export function listaAlvosModificador(pericias = []) {
         ...ATRIBUTOS_SECUNDARIOS.map(a => ({ value: `secundario:${a.key}`, label: a.label })),
         { value: "recurso:pv", label: "PV (máximo)" },
         { value: "recurso:energia", label: "Energia (máxima)" },
+        // Diferente de "PV (máximo)" acima (que É um modificador comum,
+        // somado o tempo todo que a fonte estiver ativa): este é tratado
+        // à parte, como uma AÇÃO instantânea — só existe pra item
+        // consumível (tag "droga"). Ao consumir, cura o valor cadastrado
+        // uma vez só (via curarAlvo, mesma função de qualquer cura) e
+        // não entra em efeitosDrogas junto com o resto dos modificadores
+        // do item — não faz sentido "curar X PV" durar 4h feito um bônus
+        // (ver consumirDroga em ficha.js). Fora de um item consumível
+        // (perícia, vantagem, item comum...) fica sem efeito nenhum,
+        // porque nada mais lê esse alvo.
+        { value: "curar_pv", label: "Recuperar PV (imediato, ao consumir)" },
         { value: "carga_extra", label: "Capacidade de carga (bônus em kg)" },
         { value: "dano", label: "Dano causado (geral)" },
         { value: "defesa", label: "Defesa / redução de dano" },

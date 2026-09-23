@@ -802,4 +802,3 @@ function abrirFormularioEdicao(li, loja) {
         }
     });
 }
-

@@ -6614,6 +6614,11 @@ export async function despacharEfeitosQuimicos(alvoTipo, alvoId, efeitos, nomeIt
 // descrição, de onde a duração é lida) na hora de cadastrar o item (ver
 // configurarAutocompleteItemBanco), continuando 100% editável depois —
 // inclusive pra drogas homebrew que nem estão no catálogo.
+// EXCEÇÃO: um modificador com alvo "curar_pv" (opção "Recuperar PV
+// (imediato, ao consumir)" na lista de alvos, regras.js) não vira um
+// efeito temporário feito os demais — é retirado da lista e curado na
+// hora, uma vez só, via curarAlvo (mesma função de qualquer cura na
+// mesa). Ver passo 1.6 abaixo.
 // Item consumível de verdade: reduz 1 unidade (ou remove, se só tinha 1).
 export async function consumirDroga(itemId) {
     if (!idAtivo()) return;
@@ -6625,8 +6630,18 @@ export async function consumirDroga(itemId) {
     }
     const diaAtual = estado.calendarioAtual.diaIndice;
     let modificadoresDoItem = (item.modificadores || []).filter(m => m && m.alvo && Number(m.valor));
+    // "Recuperar PV" (alvo "curar_pv", ver listaAlvosModificador em
+    // regras.js) não é um bônus/penalidade que dura um tempo feito o
+    // resto — é uma cura instantânea, aplicada uma vez só no momento do
+    // consumo (ver passo 1.6 abaixo). Por isso sai da lista ANTES dela
+    // virar o efeito temporário gravado em efeitosDrogas no passo 2.
+    const modificadoresCura = modificadoresDoItem.filter(m => m.alvo === "curar_pv");
+    modificadoresDoItem = modificadoresDoItem.filter(m => m.alvo !== "curar_pv");
+    const valorCurarPv = modificadoresCura.reduce((acc, m) => acc + (Number(m.valor) || 0), 0);
 
     const atualizacoes = {};
+    const alvoTipo = estado.modoNpc ? "npc" : "ficha";
+    const alvoIdAtual = idAtivo();
 
     // 1) Cura a abstinência do vício correspondente, se existir.
     const idDesvantagem = encontrarDesvantagemVicioPara(item.nome);
@@ -6645,13 +6660,26 @@ export async function consumirDroga(itemId) {
     let notasQuimico = [];
     const efeitosQuimicosItem = (item.quimico && Array.isArray(item.quimico.efeitos)) ? item.quimico.efeitos : [];
     if (efeitosQuimicosItem.length) {
-        const alvoTipo = estado.modoNpc ? "npc" : "ficha";
-        const alvoIdAtual = idAtivo();
         const resultadoQuimico = await despacharEfeitosQuimicos(alvoTipo, alvoIdAtual, efeitosQuimicosItem, item.nome);
         if (resultadoQuimico.modificadoresExtras.length) {
             modificadoresDoItem = [...modificadoresDoItem, ...resultadoQuimico.modificadoresExtras];
         }
         notasQuimico = resultadoQuimico.notas;
+    }
+
+    // 1.6) Cura instantânea de "Recuperar PV" (ver acima) — mesma
+    // função de qualquer outra cura na mesa (curarAlvo, mestre.js),
+    // já usada por usarEquipamentoMedico pra "restaura_pv" nos itens
+    // de equipamento médico. Falha na cura não impede o resto do
+    // consumo (item ainda é gasto, abstinência ainda cura etc.).
+    let notaCura = "";
+    if (valorCurarPv > 0) {
+        try {
+            const resultadoCura = await curarAlvo(alvoTipo, alvoIdAtual, valorCurarPv);
+            notaCura = `+${resultadoCura.curaAplicada} PV`;
+        } catch (e) {
+            notaCura = "não foi possível restaurar PV";
+        }
     }
 
     // 2) Registra o efeito ativo — direto dos modificadores editáveis do
@@ -6693,6 +6721,7 @@ export async function consumirDroga(itemId) {
         await update(ref(db), atualizacoes);
         const partesAviso = [];
         if (idDesvantagem) partesAviso.push("abstinência zerada");
+        if (notaCura) partesAviso.push(notaCura);
         if (notaDuracao) partesAviso.push(notaDuracao);
         toast(`${item.nome} consumido${partesAviso.length ? " — " + partesAviso.join(", ") : ""}.`);
         // Avisos do despachante de efeitos químicos (dano imediato já
