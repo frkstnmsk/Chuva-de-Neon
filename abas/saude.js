@@ -1267,11 +1267,21 @@ export function configurarAvisoCustoVida() {
         const total = await pagarCustoSemanal(estado.fichaAtualId, estado.fichaAtual, saldoId, pendenteId);
         toast(`Pago CN$ ${total} (${saldo.nome}).`);
         el.modalCustoVida.classList.remove("active");
-        // Não precisa chamar avaliarAvisoCustoVida aqui na mão: o
-        // listener da ficha (onValue, linha ~774) vai ecoar esse
-        // pagamento (custoVidaPagos/{pendenteId} recém-marcado) e disparar
-        // avaliarAvisoCustoVida de novo sozinho — se sobrar mais algum
-        // pendente na fila (ex.: Timeskip que atravessou 2+ Domingos), o
-        // modal reabre automaticamente pro próximo.
+        // Marca localmente já pago (otimista) e reavalia na hora, em vez
+        // de esperar o eco do listener em tempo real da ficha (onValue,
+        // ficha.js) pra saber se sobrou mais algum pendente na fila
+        // (Timeskip que atravessou 2+ Domingos gera vários de uma vez).
+        // Sem isso, o próximo aviso só aparecia depois que o Firebase
+        // ecoasse a escrita de volta — na prática, rápido o bastante na
+        // maioria das vezes, mas dependente da rede — dando a impressão
+        // de estar "travado" até o jogador atualizar a página. Quando o
+        // eco de verdade chegar, ele só confirma o que já está aqui, sem
+        // efeito nenhum a mais.
+        if (pendenteId) {
+            if (!estado.fichaAtual.dados) estado.fichaAtual.dados = {};
+            if (!estado.fichaAtual.dados.custoVidaPagos) estado.fichaAtual.dados.custoVidaPagos = {};
+            estado.fichaAtual.dados.custoVidaPagos[pendenteId] = true;
+        }
+        avaliarAvisoCustoVida();
     });
 }

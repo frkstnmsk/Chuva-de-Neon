@@ -3263,25 +3263,37 @@ export async function descartarPopupTreinamento(popupId) {
 // Timeskip atravessou 2 Domingos, essa mesma função é chamada 2 vezes
 // (uma por pendente), e o próximo aviso só reaparece pro jogador depois
 // que este for confirmado (ver avaliarAvisoCustoVida em ficha.js).
+//
+// Grava tudo (débito do saldo/item + custoVidaPagos/{pendenteId}) numa
+// ÚNICA chamada de update (multi-path, um só nó por vez em
+// `fichas/{fichaId}`) em vez de duas chamadas separadas. Antes, duas
+// escritas sequenciais faziam o listener em tempo real da ficha
+// (ficha.js) ecoar DUAS vezes: na primeira (só o saldo debitado, ainda
+// sem custoVidaPagos marcado), avaliarAvisoCustoVida via o MESMO
+// pendente como "ainda não pago" e reabria o modal dele de novo — só na
+// segunda escrita (custoVidaPagos) é que o pendente sumia de verdade.
+// Com uma escrita só, o eco chega com o estado final já consistente,
+// então o próximo pendente da fila (se houver — Timeskip que atravessou
+// vários Domingos) aparece de primeira, sem precisar de mais de um
+// clique nem de atualizar a página.
 export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId, pendenteId) {
     const custoBase = custoSemanalPadraoDeVida(fichaAtual.dados.padraoDeVida);
     const extras = Object.values(fichaAtual.gastosExtras || {}).reduce((acc, g) => acc + (Number(g.valor) || 0), 0);
     const total = custoBase + extras;
-    const atualizacoesDados = { ultimoPagamentoCustoVida: Date.now() };
-    if (pendenteId) atualizacoesDados[`custoVidaPagos/${pendenteId}`] = true;
+    const atualizacoes = { "dados/ultimoPagamentoCustoVida": Date.now() };
+    if (pendenteId) atualizacoes[`dados/custoVidaPagos/${pendenteId}`] = true;
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
         const campo = campoSaldoDoItem(saldoId);
         const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || {};
         const atual = Number(item[campo]) || 0;
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - total });
-        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
-        return total;
+        atualizacoes[`inventario/${itemId}/${campo}`] = atual - total;
+    } else {
+        const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
+        const atual = Number(saldo.valor) || 0;
+        atualizacoes[`saldos/${saldoId}/valor`] = atual - total;
     }
-    const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
-    const atual = Number(saldo.valor) || 0;
-    await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - total });
-    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}`)), atualizacoes);
     return total;
 }
 
