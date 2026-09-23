@@ -35,7 +35,7 @@ import {
     deveTestarSangramentoProfundo, horasTotaisCalendario,
 } from "../regras.js";
 import {
-    PERICIAS_ARMA_BRANCA, PERICIAS_APARAR, TIPOS_DANO, CALIBRES, todosOsSaldos,
+    PERICIAS_ARMA_BRANCA, PERICIAS_APARAR, TIPOS_DANO, CALIBRES, todosOsSaldos, saldoIdEhVirtual,
 } from "../dados-manual.js";
 import { registrarRolagem } from "../calendario.js";
 import {
@@ -45,6 +45,7 @@ import {
 } from "../mestre.js?v=20260830-npcnivelpv";
 import { montarGerenciadorCombate } from "../abas/combate.js";
 import { renderizarDeterminacoes } from "../abas/determinacoes.js";
+import { renderizarPedidosDarDinheiroVirtual } from "../abas/financas.js";
 
 export function renderizarReacaoPendente(r) {
     const penalidadeFB = Number(r.penalidadeEsquivaForcaBruta) || 0;
@@ -207,6 +208,15 @@ export function configurarAcoesPendentes() {
         if (estado.fichaAtual && document.getElementById("determinacoes-lista")) {
             renderizarDeterminacoes();
         }
+
+        // Mesma ideia, pra caixa de "dinheiro virtual esperando sua
+        // escolha" na aba Finanças (ver renderizarPedidosDarDinheiroVirtual,
+        // abas/financas.js) — precisa reagir em tempo real tanto a um
+        // pedido novo chegando quanto ao Mestre rejeitar um que já tinha
+        // escolha feita, sem depender do jogador reabrir a aba.
+        if (estado.fichaAtual) {
+            renderizarPedidosDarDinheiroVirtual();
+        }
     });
 }
 
@@ -336,6 +346,24 @@ export function montarPainelAcoesPendentes(corpo) {
             card.appendChild(selectSaldoDestino);
         }
 
+        // "dar_dinheiro" (abas/financas.js) com origem em dinheiro VIRTUAL
+        // (notas/moedas de carteira digital — ver saldoIdEhVirtual) não
+        // tem o Mestre escolhendo por ninguém: quem escolhe é o PRÓPRIO
+        // jogador que vai receber, numa caixa que aparece na aba Finanças
+        // dele (ver renderizarPedidosDarDinheiroVirtual, abas/financas.js).
+        // Enquanto ele não escolher (payload.saldoDestinoId ainda vazio),
+        // o Mestre só vê um aviso aqui e o Confirmar fica bloqueado — não
+        // tem como aprovar um destino que ainda não existe.
+        const ehDarDinheiroVirtualSemEscolha = acao.tipo === "dar_dinheiro"
+            && saldoIdEhVirtual(acao.payload && acao.payload.saldoOrigemId)
+            && !(acao.payload && acao.payload.saldoDestinoId);
+        if (ehDarDinheiroVirtualSemEscolha) {
+            const avisoEspera = document.createElement("p");
+            avisoEspera.className = "hint";
+            avisoEspera.innerText = `Aguardando ${acao.payload.fichaDestinoNome || "quem recebe"} escolher em qual carteira quer receber.`;
+            card.appendChild(avisoEspera);
+        }
+
         const botoes = document.createElement("div");
         botoes.className = "pendente-botoes";
         const btnConfirmar = document.createElement("button");
@@ -344,6 +372,7 @@ export function montarPainelAcoesPendentes(corpo) {
             btnConfirmar.disabled = true;
             selectSaldoDestino.addEventListener("change", () => { btnConfirmar.disabled = !selectSaldoDestino.value; });
         }
+        if (ehDarDinheiroVirtualSemEscolha) btnConfirmar.disabled = true;
         btnConfirmar.addEventListener("click", async () => {
             if (selectSaldoDestino && !selectSaldoDestino.value) { toast("Escolha em qual saldo o dinheiro vai cair.", "erro"); return; }
             try {

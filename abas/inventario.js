@@ -599,6 +599,7 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
             ${(ehFogo && temCamaraExtraItem) ? `<button type="button" class="btn-carregar-camara-item btn-ghost" ${(itemPodeUsar(it) && !camaraCarregadaItem) ? "" : "disabled"} title="Carregar 1 projétil direto na câmara, do estoque em 'Levando consigo'">Bala na agulha</button>` : ""}
             ${ehCarregador(it.tag) ? `<button type="button" class="btn-carregar-item btn-blue" ${itemPodeUsar(it) ? "" : "disabled"} title="Carregar projéteis do mesmo calibre que estiverem no inventário">Carregar</button>` : ""}
             ${(!estado.isMestre && it.categoria === "levando") ? `<button type="button" class="btn-dar-item btn-ghost">Dar item</button>` : ""}
+            ${(!estado.isMestre && it.categoria === "levando" && cenarioAtualDoPersonagem()) ? `<button type="button" class="btn-deixar-item-cenario btn-ghost">🎬 Deixar no cenário</button>` : ""}
             ${(!estado.isMestre && it.tag === "dinheiro" && it.categoria === "levando") ? `<button type="button" class="btn-adicionar-saldo-item btn-lime">Adicionar ao saldo</button>` : ""}
             <select class="select-guardar-dentro"></select>
             <select class="select-transferir"></select>
@@ -893,6 +894,30 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
         btnDarItem.addEventListener("click", (e) => {
             e.stopPropagation();
             abrirModalDarItem(id, it);
+        });
+    }
+
+    // "Deixar no cenário" — pede pro Mestre soltar este item no cenário
+    // em que o personagem está agora (mesma fila de aprovação de "Dar
+    // item" acima, só que o destino é o cenário atual em vez de outra
+    // ficha — ver "deixar_item_cenario" em criarAcaoPendente/
+    // confirmarAcaoPendente, mestre.js). Some sozinho se o personagem
+    // não estiver em nenhum cenário no momento (cenarioAtualDoPersonagem).
+    const btnDeixarItemCenario = li.querySelector(".btn-deixar-item-cenario");
+    if (btnDeixarItemCenario) {
+        btnDeixarItemCenario.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const cenario = cenarioAtualDoPersonagem();
+            if (!cenario) { toast("Você não está em nenhum cenário no momento.", "erro"); return; }
+            const nomeJogador = estado.fichaAtual?.config?.nomeExibicao || estado.sessao?.nome || estado.fichaAtualId;
+            await criarAcaoPendente({
+                tipo: "deixar_item_cenario",
+                fichaId: estado.fichaAtualId,
+                nomeJogador,
+                detalhe: `${nomeJogador} quer deixar "${it.nome}" no cenário "${cenario.titulo || "sem título"}".`,
+                payload: { itemId: id, itemNome: it.nome, cenarioId: cenario.id }
+            });
+            toast("Pedido pra deixar o item no cenário enviado ao Mestre.");
         });
     }
 

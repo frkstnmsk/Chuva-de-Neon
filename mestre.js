@@ -22,7 +22,7 @@ import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } f
 import { avancarDiasTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js?v=20260822-fixhistorico";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado, arredondarMoeda } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado, arredondarMoeda, saldoIdEhVirtual } from "./dados-manual.js";
 import { itemCabeNoContainer, itemPodeSerLevadoSolto, resolverEntradaLevandoConsigo } from "./inventario.js";
 import { criarFerida, resolverFimSangramentoNatural } from "./saude.js";
 import { buscarItemBancoPorId, autopreencherItemDoBanco } from "./itens-globais.js";
@@ -3299,7 +3299,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro" | "instalar_implante" | "remover_implante" | "solicitar_item" | "solicitar_dinheiro"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_dinheiro" | "dar_item" | "pegar_item_cenario" | "deixar_item_cenario" | "deixar_dinheiro_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro" | "instalar_implante" | "remover_implante" | "solicitar_item" | "solicitar_dinheiro"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -3516,6 +3516,39 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valor);
         await creditarSaldoFicha(fichaId, payload.saldoDestinoId, valor);
 
+    } else if (tipo === "dar_dinheiro") {
+        // Mesma ideia de "mover_dinheiro" acima, só que atravessando pra
+        // OUTRA ficha (payload.fichaDestinoId) em vez de mover entre
+        // saldos da mesma — dar dinheiro direto sem precisar virar item
+        // físico e passar pelo fluxo de "dar_item" primeiro.
+        //
+        // Dinheiro FÍSICO (saldo normal ou "dinheiro físico" de item) cai
+        // direto no saldo fixo "bolso" de quem recebe (todo personagem
+        // tem, ver saldos padrão em normalizacao.js) — faz sentido físico
+        // (é uma entrega na mão) e não precisa perguntar nada.
+        //
+        // Dinheiro VIRTUAL (notas/moedas de uma carteira digital — ver
+        // saldoIdEhVirtual/subtipoSaldoDoId em dados-manual.js) não tem
+        // pra onde cair sozinho: quem recebe pode ter mais de uma
+        // carteira digital (ou nenhuma). Por isso quem escolhe não é o
+        // Mestre nem quem dá — é o PRÓPRIO jogador que vai receber, numa
+        // caixa que aparece pra ele na aba Finanças (ver
+        // renderizarPedidosDarDinheiroVirtual/escolherDestinoDarDinheiro,
+        // abas/financas.js), que grava a escolha em payload.saldoDestinoId
+        // antes do pedido sequer aparecer liberado pro Mestre confirmar
+        // (ver ehDarDinheiroVirtualSemEscolha, mestre/acoes-pendentes.js,
+        // que trava o botão Confirmar até essa escolha existir).
+        const valorDar = Number(payload.valor || 0);
+        await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valorDar);
+        if (saldoIdEhVirtual(payload.saldoOrigemId)) {
+            if (!payload.saldoDestinoId) {
+                throw new Error("Ainda esperando quem recebe escolher em qual carteira quer o dinheiro virtual.");
+            }
+            await creditarSaldoFicha(payload.fichaDestinoId, payload.saldoDestinoId, valorDar);
+        } else {
+            await creditarSaldoFicha(payload.fichaDestinoId, "bolso", valorDar);
+        }
+
     } else if (tipo === "dar_item") {
         const snapItem = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         if (snapItem.exists()) {
@@ -3580,6 +3613,82 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
         await set(novaRefItemCenario, { ...itemPosPegarCenario, equipada: resultadoEntradaCenario.equipar });
         await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
+
+    } else if (tipo === "deixar_item_cenario") {
+        // Deixar um item do próprio inventário solto no cenário (inverso
+        // de "pegar_item_cenario" acima) — o jogador abre mão do item,
+        // que passa a ficar "sem dono" no cenário, disponível pra
+        // qualquer participante pegar depois (inclusive ele mesmo, se
+        // mudar de ideia). Revalida que o item ainda está na ficha (pode
+        // ter sido dado, gasto ou removido enquanto o pedido esperava
+        // aprovação) e que o cenário ainda existe.
+        const snapItemDeixar = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
+        if (!snapItemDeixar.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" não está mais no inventário.`);
+        }
+        const snapCenarioDeixar = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}`)));
+        if (!snapCenarioDeixar.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: o cenário não existe mais.`);
+        }
+        const itemDeixar = snapItemDeixar.val();
+        // Se o item era um recipiente com coisas guardadas dentro, solta
+        // os filhos (dentroDe = null) em vez de deixá-los presos
+        // apontando pra um item que não está mais no inventário — mesmo
+        // critério de "remover_item" acima.
+        const snapFilhosDeixar = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
+        if (snapFilhosDeixar.exists()) {
+            const inventarioAtualDeixar = snapFilhosDeixar.val();
+            const atualizacoesFilhosDeixar = {};
+            Object.entries(inventarioAtualDeixar).forEach(([itId, it]) => {
+                if (it && it.dentroDe === payload.itemId) atualizacoesFilhosDeixar[`${itId}/dentroDe`] = null;
+            });
+            if (Object.keys(atualizacoesFilhosDeixar).length) {
+                await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)), atualizacoesFilhosDeixar);
+            }
+        }
+        // Item solto no cenário nunca fica "equipado" nem dentro de um
+        // container que só existe no inventário de origem — mesma trava
+        // usada por dar_item/pegar_item_cenario, só que aqui não precisa
+        // de resolverEntradaLevandoConsigo (não tem "mão" de ninguém
+        // envolvida: o item só fica largado, sem dono).
+        await adicionarItemCenario(payload.cenarioId, { ...itemDeixar, dentroDe: null, compartimentoId: null, equipada: false });
+        await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
+
+    } else if (tipo === "deixar_dinheiro_cenario") {
+        // Deixar um valor de um saldo próprio solto no cenário (inverso
+        // de "pegar_dinheiro_cenario" acima) — vira um novo saldo "sem
+        // dono" dentro do cenário (cenarios/{id}/dinheiro), disponível
+        // pra qualquer participante pegar depois. Revalida o saldo de
+        // origem (pode ter mudado desde que o pedido foi criado) e que o
+        // cenário ainda existe, antes de debitar/criar.
+        const valorDeixar = Number(payload.valor) || 0;
+        if (valorDeixar <= 0) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error("Pedido cancelado: valor inválido.");
+        }
+        let saldoAtualDeixar;
+        if (ehIdSaldoDeItem(payload.saldoOrigemId)) {
+            const itemId = idItemDoSaldo(payload.saldoOrigemId);
+            const campo = campoSaldoDoItem(payload.saldoOrigemId);
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
+            saldoAtualDeixar = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        } else {
+            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${payload.saldoOrigemId}/valor`)));
+            saldoAtualDeixar = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
+        }
+        if (valorDeixar > saldoAtualDeixar) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: o saldo já não tem mais ${valorDeixar} disponível (sobrou ${saldoAtualDeixar}).`);
+        }
+        const snapCenarioDeixarDinheiro = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}`)));
+        if (!snapCenarioDeixarDinheiro.exists()) {
+            await rejeitarAcaoPendente(acao.id);
+            throw new Error(`Pedido cancelado: o cenário não existe mais.`);
+        }
+        await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valorDeixar);
+        await adicionarDinheiroCenario(payload.cenarioId, { nome: `Deixado por ${acao.nomeJogador || "alguém"}`, valor: valorDeixar });
 
     } else if (tipo === "melhorar_veiculo_terceiro" || tipo === "reparar_veiculo_terceiro") {
         // Reparo/Melhoria de veículo do OUTRO jogador, feito por quem
