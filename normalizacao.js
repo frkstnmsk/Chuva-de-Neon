@@ -976,6 +976,21 @@ export function normalizarNpcComoFicha(npcId, raw) {
         inventario: normalizarInventario(npc.inventario || {}),
         categoriasInventario: npc.categoriasInventario || {},
         subcategoriasInventario: npc.subcategoriasInventario || {},
+        // Efeito ativo de droga consumida (ver consumirDroga em ficha.js
+        // e calcularModificadoresDrogasAtivas em regras.js) — gravado
+        // certinho em npcs/{id}/efeitosDrogas pela mesma consumirDroga
+        // (caminhoBase() já é NPC-aware), mas essa leitura aqui estava
+        // faltando: sem ela, o dado existe no Firebase mas nunca chega
+        // no cálculo de modificadores enquanto atuando como o NPC — a
+        // droga era consumida, o item sumia do inventário, só o EFEITO
+        // que nunca aparecia. Mesmo bug de "campo esquecido na leitura"
+        // que vantagens (comentário abaixo) e desvantagens já tiveram.
+        efeitosDrogas: npc.efeitosDrogas || {},
+        // Mesmo caso — efeito temporário de equipamento médico
+        // ("efeito_temporario_modificador", ver usarEquipamentoMedico em
+        // ficha.js), gravado à parte de efeitosDrogas mas lido junto por
+        // calcularModificadoresDrogasAtivas (regras.js). Mesmo buraco.
+        efeitosItens: npc.efeitosItens || {},
         gastosExtras: {},
         // vantagens: já são gravadas certinho em npcs/{id}/vantagens pelo
         // modal genérico de Vantagem/Desvantagem (ficha.js: caminhoBase()
@@ -985,7 +1000,12 @@ export function normalizarNpcComoFicha(npcId, raw) {
         // Vantagem cadastrada num NPC nunca entrava em coletarModificadores
         // nem aparecia na aba "Vantagens / Desvantagens" ao atuar como ele.
         vantagens: npc.vantagens || {},
-        desvantagens: {},
+        // Mesmo caso de vantagens acima — estava fixo em {} aqui embaixo
+        // (só vantagens tinha sido corrigido). Sem isso, uma Desvantagem
+        // de Vício cadastrada no NPC nunca era encontrada por
+        // encontrarDesvantagemVicioPara (consumirDroga não zerava a
+        // abstinência dele) nem entrava em calcularModificadoresAbstinencia.
+        desvantagens: npc.desvantagens || {},
         // Os deltas de override entram como uma "especialização" oculta
         // — é a fonte de modificadores estruturados mais neutra que já
         // existe (coletarModificadores, em regras.js, soma todas elas

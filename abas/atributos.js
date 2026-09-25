@@ -32,7 +32,8 @@ import {
     horasTotaisCalendario, calcularAbstinenciaVicio, feridaEstaFechada,
     calcularTempoRecuperacaoPV, aplicarReducaoTratamentoHospital, aplicarFatoresRecuperacaoItens,
 } from "../regras.js";
-import { PADROES_DE_VIDA, limiteRecuperacaoSemTratamento, criarAcaoPendente } from "../mestre.js?v=20260830-npcnivelpv";
+import { PADROES_DE_VIDA, limiteRecuperacaoSemTratamento, criarAcaoPendente, aplicarTickSangramentoNpc } from "../mestre.js?v=20260830-npcnivelpv";
+import { aplicarTickSangramento } from "../saude.js";
 
 // ---------------------------------------------------------------------
 // ATRIBUTOS
@@ -65,7 +66,24 @@ export function renderizarAtributos(modificadoresPlanos) {
         const baseAttr = Number(d[attr.key]) || 0;
         const ajustesAttr = modificadoresQueAfetam(`atributo:${attr.key}`, modificadoresPlanos);
         const totalAttr = baseAttr + ajustesAttr.reduce((acc, m) => acc + m.valor, 0);
-        input.closest(".attr-card").title = textoDetalhamento(attr.label, baseAttr, "Base (valor cadastrado)", ajustesAttr, totalAttr);
+        const cardAttr = input.closest(".attr-card");
+        cardAttr.title = textoDetalhamento(attr.label, baseAttr, "Base (valor cadastrado)", ajustesAttr, totalAttr);
+        // Valor efetivo (base + modificadores) visível no próprio card:
+        // é ele que entra na rolagem, na escala de dano, na dificuldade
+        // de defesa e nas fórmulas dos secundários/PV/Energia. Só
+        // aparece quando há algum modificador ativo no atributo.
+        let efetivoEl = cardAttr.querySelector(".attr-efetivo");
+        if (!efetivoEl) {
+            efetivoEl = document.createElement("span");
+            efetivoEl.className = "attr-efetivo";
+            const acoesAttr = cardAttr.querySelector(".attr-acoes");
+            if (acoesAttr) acoesAttr.insertBefore(efetivoEl, acoesAttr.firstChild);
+            else cardAttr.appendChild(efetivoEl);
+        }
+        const somaAjustesAttr = totalAttr - baseAttr;
+        efetivoEl.style.display = somaAjustesAttr ? "" : "none";
+        efetivoEl.classList.toggle("negativo", somaAjustesAttr < 0);
+        efetivoEl.innerText = somaAjustesAttr ? `efetivo ${totalAttr} (${somaAjustesAttr > 0 ? "+" : ""}${somaAjustesAttr})` : "";
     });
 
     // Recursos (PV, Energia) — máximo calculado, atual editável por qualquer um.
@@ -100,7 +118,7 @@ export function renderizarAtributos(modificadoresPlanos) {
         const temOverride = override !== null && override !== undefined && override !== "";
         if (temOverride) ajustesRecurso.push({ valor: total - (Math.round(infoRecurso.base) + ajustesRecurso.reduce((a, m) => a + m.valor, 0)), origem: "Override manual do Mestre (Godmode)" });
         const cardRecurso = document.querySelector(`[data-recurso="${rec.key}"]`);
-        if (cardRecurso) cardRecurso.title = textoDetalhamento(rec.label, infoRecurso.base, "Base (fórmula do manual)", ajustesRecurso, total);
+        if (cardRecurso) cardRecurso.title = textoDetalhamento(rec.label, infoRecurso.base, "Base (fórmula do manual, com os atributos primários já modificados)", ajustesRecurso, total);
         if (maxLabel) {
             maxLabel.innerText = total;
             maxLabel.style.display = godmodeRecursos ? "none" : "";
@@ -170,7 +188,7 @@ export function renderizarAtributos(modificadoresPlanos) {
         const cardSecundario = document.querySelector(`[data-attr-secundario="${attr.key}"]`);
         if (cardSecundario) {
             const infoSec = derivados.secundarios[attr.key];
-            cardSecundario.title = textoDetalhamento(attr.label, infoSec.base, "Base (fórmula do manual)", infoSec.ajustes, infoSec.total);
+            cardSecundario.title = textoDetalhamento(attr.label, infoSec.base, "Base (fórmula do manual, com os atributos primários já modificados)", infoSec.ajustes, infoSec.total);
         }
     });
 
@@ -235,6 +253,62 @@ export function renderizarBarrasVitaisTopo(pvAtual, pvMax, estadoSaude, energiaA
 // carrossel troca de entrada a cada 1s (ver configurarStatusTopoCarrossel
 // mais abaixo). Quando não há nenhum status ativo, a caixinha some.
 // ---------------------------------------------------------------------
+// Sangramentos que NÃO estão sob o tick automático de um combate e por
+// isso dependem do Mestre clicar no 🩸 do topo pra andar (ver
+// aplicarSangramentoForaDeCombate, mestre.js):
+// - ficha: feridas "sangramento" ainda abertas e com tick sobrando, exceto
+//   as vinculadas a um status de combate ativo (essas o combate já
+//   resolve sozinho a cada turno — clicar aqui contaria o tic em dobro);
+// - NPC: entradas de npcs/{id}/sangramentos.
+// Cada item: { id, ticks, dano }.
+function coletarSangramentosPersistentes() {
+    if (estado.modoNpc) {
+        const brutos = (estado.npcRawAtual && estado.npcRawAtual.sangramentos) || {};
+        return Object.entries(brutos)
+            .filter(([, s]) => s && (Number(s.turnosRestantes) || 0) > 0)
+            .map(([id, s]) => ({ id, ticks: Number(s.turnosRestantes) || 0, dano: Number(s.danoPorTurno) || 0 }));
+    }
+    const participantes = (estado.combateAtivoCache && estado.combateAtivoCache.participantes) || {};
+    const vinculadas = new Set();
+    Object.values(participantes).forEach(p => {
+        Object.values((p && p.statusAtivos) || {}).forEach(s => {
+            if (s && s.tipo === "sangramento" && s.feridaId && (Number(s.turnosRestantes) || 0) > 0) vinculadas.add(s.feridaId);
+        });
+    });
+    return (estado.feridasCache || [])
+        .filter(f => f && f.tipo === "sangramento" && f.estado === "aberta" && (Number(f.turnosRestantes) || 0) > 0 && !vinculadas.has(f.id))
+        .map(f => ({ id: f.id, ticks: Number(f.turnosRestantes) || 0, dano: Number(f.danoPorTurno) || 0 }));
+}
+
+// Aplica o próximo tic de TODOS os sangramentos avulsos do personagem
+// aberto na tela (só o Mestre). Mesma conta do botão "🩸 Sangrando" da
+// aba Saúde (aplicarTickSangramento, saude.js), só que num clique único
+// no topo e cobrindo também NPC.
+async function aplicarProximoTickSangramentoTopo() {
+    if (!estado.isMestre) return;
+    const itens = coletarSangramentosPersistentes();
+    if (!itens.length) return;
+    let danoTotal = 0;
+    let encerrados = 0;
+    let faltam = 0;
+    try {
+        for (const item of itens) {
+            const r = estado.modoNpc
+                ? await aplicarTickSangramentoNpc(estado.npcAtualId, item.id)
+                : await aplicarTickSangramento(estado.fichaAtualId, item.id, "Mestre");
+            danoTotal += Number(r.dano) || 0;
+            if (r.encerrado) encerrados++;
+            else faltam = Math.max(faltam, Number(r.turnosRestantes) || 0);
+        }
+        const fim = encerrados ? ` ${encerrados === 1 ? "Um sangramento parou" : `${encerrados} sangramentos pararam`}.` : "";
+        const resta = faltam ? ` Faltam ${faltam} tic(s).` : "";
+        toast(`Tic de sangramento aplicado: ${danoTotal} de dano.${resta}${fim}`);
+    } catch (err) {
+        console.error(err);
+        toast(err.message || "Falha ao aplicar o tic de sangramento.", "erro");
+    }
+}
+
 function coletarStatusAtivosTopo() {
     const lista = [];
     if (!estado.fichaAtual) return lista;
@@ -285,6 +359,25 @@ function coletarStatusAtivosTopo() {
     // gravada em estado.fichaAtual.dados.infeccao (ver aplicarInfeccao/mestre.js).
     if (estado.fichaAtual.dados && estado.fichaAtual.dados.infeccao && estado.fichaAtual.dados.infeccao.ativo) {
         lista.push({ icone: "🦠", texto: "Infectado", titulo: "Tempo de repouso necessário +50% até tratamento médico" });
+    }
+
+    // Sangramento avulso (fora de combate, ou ferida ainda não vinculada
+    // a um status de combate) — pro Mestre, o próprio item vira o botão
+    // que aplica o próximo tic (ver configurarStatusTopoCarrossel).
+    const sangramentosAvulsos = coletarSangramentosPersistentes();
+    if (sangramentosAvulsos.length) {
+        const danoTotalTic = sangramentosAvulsos.reduce((soma, s) => soma + s.dano, 0);
+        const texto = sangramentosAvulsos.length === 1
+            ? `Sangramento (${sangramentosAvulsos[0].ticks})`
+            : `Sangramento ×${sangramentosAvulsos.length} (${sangramentosAvulsos.map(s => s.ticks).join(", ")})`;
+        lista.push({
+            icone: "🩸",
+            texto,
+            titulo: estado.isMestre
+                ? `Clique para aplicar o próximo tic: ${danoTotalTic} de dano fixo`
+                : `Sangrando — ${danoTotalTic} de dano fixo a cada tic (o Mestre aplica)`,
+            tickSangramento: !!estado.isMestre
+        });
     }
 
     // Status só existentes durante combate (ver estado.combateAtivoCache) —
@@ -351,6 +444,7 @@ export function renderizarStatusTopoAtual() {
     }
     const atual = statusTopoLista[statusTopoIndice] || statusTopoLista[0];
     el.vitalStatusCarrossel.style.display = "flex";
+    el.vitalStatusCarrossel.classList.toggle("clicavel", !!atual.tickSangramento);
     el.vitalStatusCarrossel.title = atual.titulo || atual.texto;
     el.vitalStatusIcone.innerText = atual.icone;
     el.vitalStatusTexto.innerText = atual.texto;
@@ -362,11 +456,44 @@ export function renderizarStatusTopoAtual() {
 // vez só na inicialização da página.
 export function configurarStatusTopoCarrossel() {
     if (!el.vitalStatusCarrossel) return;
+    // Pausa da rotação: enquanto o mouse está em cima, e por alguns
+    // segundos depois de um toque/clique — senão o item trocava bem na
+    // hora de clicar no 🩸 (principalmente no celular, onde não há hover).
+    let mouseEmCima = false;
+    let pausadoAte = 0;
+    el.vitalStatusCarrossel.addEventListener("mouseenter", () => { mouseEmCima = true; });
+    el.vitalStatusCarrossel.addEventListener("mouseleave", () => { mouseEmCima = false; });
+
     setInterval(() => {
         if (!statusTopoLista.length) return;
+        if (mouseEmCima || Date.now() < pausadoAte) return;
         statusTopoIndice = (statusTopoIndice + 1) % statusTopoLista.length;
         renderizarStatusTopoAtual();
     }, 1000);
+
+    // Clique (só Mestre) no 🩸 Sangramento: aplica o próximo tic. Se o
+    // item exibido na hora for outro status, pula pro sangramento e
+    // segura a rotação pra o próximo clique cair nele.
+    let aplicandoTick = false;
+    el.vitalStatusCarrossel.addEventListener("click", async () => {
+        if (!estado.isMestre || aplicandoTick) return;
+        const indiceSangramento = statusTopoLista.findIndex(s => s.tickSangramento);
+        if (indiceSangramento < 0) return;
+        if (!statusTopoLista[statusTopoIndice] || !statusTopoLista[statusTopoIndice].tickSangramento) {
+            statusTopoIndice = indiceSangramento;
+            pausadoAte = Date.now() + 5000;
+            renderizarStatusTopoAtual();
+            toast("Clique de novo no 🩸 Sangramento para aplicar o tic.");
+            return;
+        }
+        pausadoAte = Date.now() + 3000;
+        aplicandoTick = true;
+        try {
+            await aplicarProximoTickSangramentoTopo();
+        } finally {
+            aplicandoTick = false;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------

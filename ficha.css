@@ -172,6 +172,13 @@
     max-width: 240px;
     animation: vital-status-pulso 2.4s ease-in-out infinite;
 }
+/* Item clicável (Mestre): 🩸 Sangramento aplica o próximo tic */
+.vital-status-carrossel.clicavel {
+    cursor: pointer;
+}
+.vital-status-carrossel.clicavel:hover {
+    background: rgba(239, 68, 68, 0.25);
+}
 .vital-status-icone {
     font-size: 0.95rem;
     flex-shrink: 0;
@@ -3450,4 +3457,14 @@ select.select-guardar-dentro {
 .saude-silhueta-popover.seta-direita .saude-silhueta-popover-seta {
     right: -8px;
     border-left-color: var(--neon-purple);
+}
+
+/* Valor efetivo (base + modificadores) do atributo primário */
+.attr-efetivo {
+    font-size: 0.68rem;
+    color: var(--neon-lime);
+    white-space: nowrap;
+}
+.attr-efetivo.negativo {
+    color: var(--neon-red);
 }

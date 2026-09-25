@@ -8,7 +8,7 @@ import {
     TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, tagTemQuantidadeGeral,
     SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo, itemOcupaMao
 } from "./dados-manual.js";
-import { calcularCarga } from "./regras.js";
+import { calcularCarga, atributoPrimarioEfetivo } from "./regras.js";
 
 const CATEGORIAS_FIXAS = [
     { id: "levando", nome: "Levando consigo", fixa: true },
@@ -98,7 +98,7 @@ export function pesoComFilhos(fichaAtual, itemId) {
 // Modificadores do alvo "carga_extra" (vantagens, especializações, etc)
 // somam ao limite base calculado pela Constituição.
 export function calcularCargaAtual(fichaAtual, modificadoresPlanos = []) {
-    const constituicao = Number(fichaAtual.dados.constituicao) || 0;
+    const constituicao = atributoPrimarioEfetivo(fichaAtual.dados, "constituicao", modificadoresPlanos);
     const pesoLevando = pesoTotalPorCategoria(fichaAtual, "levando");
     const base = calcularCarga(constituicao, pesoLevando);
     const bonusExtra = modificadoresPlanos

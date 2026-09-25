@@ -502,14 +502,30 @@ export function modificadoresQueAfetam(alvo, modificadoresPlanos) {
     return modificadoresPlanos.filter(m => m.alvo === alvo);
 }
 
+// Valor EFETIVO de um atributo primário: o valor cadastrado na ficha +
+// todos os modificadores estruturados que miram `atributo:X` (vantagem,
+// item, droga, abstinência...). Um modificador em um atributo primário
+// vale pro atributo inteiro — rolagem, escala de dano, dificuldade de
+// defesa, carga e os secundários/recursos que a fórmula do manual
+// calcula a partir dele —, então tudo que precisa "do valor do
+// atributo" deve passar por aqui em vez de ler dados[chave] cru.
+export function atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificadoresPlanos) {
+    const base = Number(dadosPrimarios && dadosPrimarios[atributoChave]) || 0;
+    return base + somaModificadoresPara(`atributo:${atributoChave}`, modificadoresPlanos || []);
+}
+
 // ---------------------------------------------------------------------
 // Calcula o pacote completo de derivados (secundários + recursos),
 // já considerando todos os modificadores. Retorna também o "breakdown"
 // (base + lista de ajustes) pra exibir no tooltip/expansível.
 // ---------------------------------------------------------------------
 export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
+    // Atributos primários JÁ com os modificadores `atributo:X` — as
+    // fórmulas de secundários (Velocidade, Agilidade, Percepção, Massa
+    // Corpórea, Força de Vontade) e de recursos (PV, Energia) partem
+    // do valor efetivo, não do cadastrado.
     const d = {};
-    for (const a of ATRIBUTOS_PRIMARIOS) d[a.key] = Number(dadosPrimarios[a.key]) || 0;
+    for (const a of ATRIBUTOS_PRIMARIOS) d[a.key] = atributoPrimarioEfetivo(dadosPrimarios, a.key, modificadoresPlanos);
 
     const resultado = { secundarios: {}, recursos: {} };
 
@@ -1204,9 +1220,7 @@ export function calcularDificuldadeDefesaJogador(dadosPrimarios, atributoChave, 
         const sec = derivados.secundarios[atributoChave];
         return base10 + (sec ? sec.total : 0);
     }
-    const base = Number(dadosPrimarios[atributoChave]) || 0;
-    const ajustes = modificadoresQueAfetam(`atributo:${atributoChave}`, modificadoresPlanos).reduce((acc, m) => acc + m.valor, 0);
-    return base10 + base + ajustes;
+    return base10 + atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificadoresPlanos);
 }
 
 // Dano total de uma arma (base + escala, se corpo a corpo): usado pelo

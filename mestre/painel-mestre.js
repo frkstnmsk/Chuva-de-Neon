@@ -19,7 +19,7 @@
 import { estado, definirLimpezaPainelMestre } from "../estado.js";
 import {
     el, escapeHtml, toast, renderizarTudo,
-    nomeDeFicha, participanteIdPorAlvo,
+    nomeDeFicha, participanteIdPorAlvo, combateComIniciativaAtivo,
 } from "../ficha.js?v=20260830-npcnivelpv";
 import { LOCAIS_MIRA } from "../dados-manual.js";
 import { registrarRolagem } from "../calendario.js";
@@ -33,7 +33,7 @@ import {
     definirAgarrado, soltarAgarrado,
     definirOssosQuebrados, curarOssosQuebrados,
     aplicarSangramento, aplicarInfeccao, curarInfeccao,
-    registrarFeridasDeSangramento,
+    registrarFeridasDeSangramento, aplicarSangramentoForaDeCombate, removerSangramentosNpc,
 } from "../mestre.js?v=20260830-npcnivelpv";
 import { montarGerenciadorCombate } from "../abas/combate.js";
 import { montarGerenciadorCenario } from "../abas/cenario.js";
@@ -216,10 +216,20 @@ const CONDICOES_MESTRE = [
     { key: "infeccao", label: "Infecção" }
 ];
 
+// Envolve um campo numa <label> com legenda visível — os campos de
+// "Causar condição" já vêm preenchidos, então o placeholder some e não
+// dá pra saber o que cada número significa.
+function campoComLegenda(legenda, campo) {
+    const label = document.createElement("label");
+    label.innerText = legenda;
+    label.appendChild(campo);
+    return label;
+}
+
 export function montarPainelCondicaoMestre(corpo) {
     const aviso = document.createElement("p");
     aviso.className = "hint";
-    aviso.innerText = "Escolha o personagem (jogador OU NPC) e a condição. Se ele ainda não estiver no Gerenciador de Combate, é adicionado automaticamente pra poder receber a condição.";
+    aviso.innerText = "Escolha o personagem (jogador OU NPC) e a condição. Se ele ainda não estiver no Gerenciador de Combate, é adicionado automaticamente pra poder receber a condição. Exceção: Sangramento fora de combate (sem iniciativa rolada) não entra no Gerenciador — fica no próprio personagem e você aplica cada tic clicando no 🩸 ao lado da barra de vida.";
     corpo.appendChild(aviso);
 
     const linhaAlvo = document.createElement("div");
@@ -267,14 +277,18 @@ export function montarPainelCondicaoMestre(corpo) {
         opt.innerText = l.label;
         selectLocalSangramento.appendChild(opt);
     });
-    camposSangramento.append(inputDanoSangramento, inputTurnosSangramento, selectLocalSangramento);
+    camposSangramento.append(
+        campoComLegenda("Dano por turno", inputDanoSangramento),
+        campoComLegenda("Nº de turnos", inputTurnosSangramento),
+        campoComLegenda("Local do ferimento", selectLocalSangramento)
+    );
 
     const camposImobilizado = document.createElement("div");
     camposImobilizado.className = "modal-field";
     camposImobilizado.style.display = "none";
     const inputDificuldadeEscape = document.createElement("input");
     inputDificuldadeEscape.type = "number"; inputDificuldadeEscape.placeholder = "Dificuldade pra escapar (teste de Destreza)"; inputDificuldadeEscape.value = 15;
-    camposImobilizado.appendChild(inputDificuldadeEscape);
+    camposImobilizado.appendChild(campoComLegenda("Dificuldade pra escapar (teste de Destreza)", inputDificuldadeEscape));
 
     const camposFratura = document.createElement("div");
     camposFratura.className = "modal-field";
@@ -286,7 +300,7 @@ export function montarPainelCondicaoMestre(corpo) {
     const chkMembroInferior = document.createElement("input");
     chkMembroInferior.type = "checkbox";
     labelMembroInferior.append(chkMembroInferior, document.createTextNode(" É perna (impede correr; as duas quebradas = só se arrasta)"));
-    camposFratura.append(inputPontosPenalidade, labelMembroInferior);
+    camposFratura.append(campoComLegenda("Pontos de penalidade em ações físicas", inputPontosPenalidade), labelMembroInferior);
 
     const camposInfeccao = document.createElement("div");
     camposInfeccao.className = "modal-field";
@@ -333,6 +347,26 @@ export function montarPainelCondicaoMestre(corpo) {
         const condicao = selectCondicao.value;
         if (!condicao) { toast("Escolha uma condição.", "erro"); return; }
 
+        // Sangramento fora de combate (nenhuma iniciativa rolada): não
+        // cria participante nem status no Gerenciador de Combate — esse
+        // nó só é processado a cada troca de turno e é apagado quando o
+        // combate termina, então o sangramento nunca andaria. Fica
+        // gravado no próprio personagem (ver aplicarSangramentoForaDeCombate,
+        // mestre.js) e o Mestre aplica cada tic clicando no 🩸 ao lado
+        // da barra de vida (ver abas/atributos.js). Com a iniciativa
+        // rolada segue o fluxo de sempre logo abaixo (tick automático
+        // por turno).
+        if (condicao === "sangramento" && !combateComIniciativaAtivo()) {
+            const dano = Number(inputDanoSangramento.value) || 0;
+            const turnos = Number(inputTurnosSangramento.value) || 0;
+            if (dano <= 0 || turnos <= 0) { toast("Informe o dano por turno e o número de turnos.", "erro"); return; }
+            await aplicarSangramentoForaDeCombate(alvo.tipo, alvo.refId, dano, turnos, "Causado manualmente pelo Mestre", selectLocalSangramento.value);
+            const detalheFora = `Mestre causou a condição "Sangramento" em ${alvo.nome}.`;
+            await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: 0, detalhe: detalheFora });
+            toast(`${detalheFora} Abra a ficha dele e clique no 🩸 ao lado da barra de vida pra aplicar cada tic.`);
+            return;
+        }
+
         const { id: pid, criadoAgora } = await obterOuCriarParticipanteMestre(alvo.tipo, alvo.refId, alvo.nome);
         const labelCondicao = CONDICOES_MESTRE.find(c => c.key === condicao)?.label || condicao;
 
@@ -376,6 +410,17 @@ export function montarPainelCondicaoMestre(corpo) {
         if (!alvo) { toast("Escolha um jogador ou um NPC.", "erro"); return; }
         const condicao = selectCondicao.value;
         if (!condicao) { toast("Escolha uma condição.", "erro"); return; }
+        // NPC não tem aba Saúde (onde o jogador estanca/sutura), então
+        // esse é o único jeito de parar um sangramento de NPC antes do
+        // contador acabar sozinho.
+        if (condicao === "sangramento" && alvo.tipo === "npc") {
+            await removerSangramentosNpc(alvo.refId, participanteIdPorAlvo(alvo.tipo, alvo.refId));
+            const detalheNpc = `Mestre removeu a condição "Sangramento" de ${alvo.nome}.`;
+            await registrarRolagem({ quem: "Mestre", modificador: 0, resultado: 0, detalhe: detalheNpc });
+            toast(detalheNpc);
+            return;
+        }
+        if (condicao === "sangramento") { toast("Sangramento de jogador se trata pela aba Saúde da ficha (Estancar Sangramento / Suturar).", "erro"); return; }
         if (!CONDICOES_COM_REMOCAO.has(condicao)) { toast("Essa condição não tem remoção direta por aqui.", "erro"); return; }
 
         const pid = participanteIdPorAlvo(alvo.tipo, alvo.refId);

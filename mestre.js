@@ -22,7 +22,7 @@ import { registrarRolagem, passarUmDia, avancarNDias, dispararAvisoCustoVida } f
 import { avancarDiasTreinamento } from "./treinamento.js";
 import { calcularSecundariosNpc } from "./npc-detalhado.js";
 import { normalizarFicha } from "./normalizacao.js?v=20260822-fixhistorico";
-import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado, arredondarMoeda, saldoIdEhVirtual } from "./dados-manual.js";
+import { PERICIAS_ARMA_BRANCA, ehDanoPerfurante, ehDanoCortante, ehDanoContundente, bonusCobraKaiIniciativa, ehIdSaldoDeItem, idItemDoSaldo, campoSaldoDoItem, ehContainer, diferencaClasseCalibreVsColete, bairroPerseguicao, sortearLocalDetalhado, arredondarMoeda } from "./dados-manual.js";
 import { itemCabeNoContainer, itemPodeSerLevadoSolto, resolverEntradaLevandoConsigo } from "./inventario.js";
 import { criarFerida, resolverFimSangramentoNatural } from "./saude.js";
 import { buscarItemBancoPorId, autopreencherItemDoBanco } from "./itens-globais.js";
@@ -645,6 +645,76 @@ export async function cancelarStatusSangramentoPorFerida(fichaId, feridaId) {
         }
     }
     return cancelado;
+}
+
+// Sangramento causado FORA de combate (painel "Causar condição" do
+// Mestre, sem iniciativa rolada). Não cria participante nem status em
+// combateAtivo — esse nó é apagado por encerrarCombate e só é
+// processado a cada troca de turno, então não serve pra uma cena sem
+// combate. O sangramento fica gravado no próprio personagem e o Mestre
+// aplica cada tic clicando no 🩸 ao lado da barra de vida (ver
+// aplicarTickSangramento em saude.js pra ficha e
+// aplicarTickSangramentoNpc logo abaixo pra NPC):
+// - ficha: mesma dupla de feridas do sangramento em combate (Sangramento
+//   com danoPorTurno/turnosRestantes + Corte), só que sem statusId —
+//   registrarFeridasDeSangramento já ignora o vínculo quando não há status.
+// - NPC (sem sistema de feridas): entrada em npcs/{id}/sangramentos/{chave},
+//   com o mesmo par danoPorTurno/turnosRestantes.
+export async function aplicarSangramentoForaDeCombate(alvoTipo, alvoId, danoPorTurno, turnos, origem, local) {
+    if (!alvoId) return;
+    if (alvoTipo === "ficha") {
+        await registrarFeridasDeSangramento(true, null, alvoId, local, origem, {
+            sangramento: { danoPorTurno, turnos, statusId: null }
+        });
+        return;
+    }
+    const novaRef = push(ref(db, caminhoMesa(`npcs/${alvoId}/sangramentos`)));
+    await set(novaRef, {
+        danoPorTurno,
+        turnosRestantes: turnos,
+        origem: origem || "",
+        local: local || null,
+        criadoEm: Date.now()
+    });
+}
+
+// Um tic de um sangramento de NPC gravado por
+// aplicarSangramentoForaDeCombate: aplica o dano fixo (mesmo aplicarDano
+// do tick em combate, sem tipo de dano) e desconta 1 do contador; ao
+// zerar, a entrada é removida.
+export async function aplicarTickSangramentoNpc(npcId, chave) {
+    const caminho = ref(db, caminhoMesa(`npcs/${npcId}/sangramentos/${chave}`));
+    const snap = await get(caminho);
+    if (!snap.exists()) throw new Error("Esse sangramento não existe mais.");
+    const sangramento = snap.val();
+    const ticksAtuais = Number(sangramento.turnosRestantes) || 0;
+    if (ticksAtuais <= 0) {
+        await remove(caminho);
+        throw new Error("Esse sangramento não tinha mais ticks — foi removido.");
+    }
+    const dano = Number(sangramento.danoPorTurno) || 0;
+    const resultado = dano > 0 ? await aplicarDano("npc", npcId, dano, null) : null;
+    const restante = ticksAtuais - 1;
+    if (restante <= 0) await remove(caminho);
+    else await update(caminho, { turnosRestantes: restante });
+    return { dano, turnosRestantes: Math.max(restante, 0), encerrado: restante <= 0, nomeAlvo: resultado ? resultado.nomeAlvo : null, novoPv: resultado ? resultado.novoPv : null };
+}
+
+// Tira TODOS os sangramentos de um NPC — os gravados fora de combate
+// (npcs/{id}/sangramentos) e, se ele estiver num combate, os status de
+// sangramento por turno do participante. NPC não tem aba Saúde (onde o
+// jogador estanca/sutura), então "Remover condição" do painel do Mestre
+// é o único jeito de parar um sangramento de NPC antes de acabar.
+export async function removerSangramentosNpc(npcId, participanteId) {
+    await remove(ref(db, caminhoMesa(`npcs/${npcId}/sangramentos`)));
+    if (!participanteId) return;
+    const snap = await get(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos`)));
+    if (!snap.exists()) return;
+    for (const [chave, status] of Object.entries(snap.val())) {
+        if (status && status.tipo === "sangramento") {
+            await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/statusAtivos/${chave}`)));
+        }
+    }
 }
 
 // Novo tipo "dano_continuo" (Parte 5.2 — Tóxico/Inflamável residual).
@@ -3263,37 +3333,25 @@ export async function descartarPopupTreinamento(popupId) {
 // Timeskip atravessou 2 Domingos, essa mesma função é chamada 2 vezes
 // (uma por pendente), e o próximo aviso só reaparece pro jogador depois
 // que este for confirmado (ver avaliarAvisoCustoVida em ficha.js).
-//
-// Grava tudo (débito do saldo/item + custoVidaPagos/{pendenteId}) numa
-// ÚNICA chamada de update (multi-path, um só nó por vez em
-// `fichas/{fichaId}`) em vez de duas chamadas separadas. Antes, duas
-// escritas sequenciais faziam o listener em tempo real da ficha
-// (ficha.js) ecoar DUAS vezes: na primeira (só o saldo debitado, ainda
-// sem custoVidaPagos marcado), avaliarAvisoCustoVida via o MESMO
-// pendente como "ainda não pago" e reabria o modal dele de novo — só na
-// segunda escrita (custoVidaPagos) é que o pendente sumia de verdade.
-// Com uma escrita só, o eco chega com o estado final já consistente,
-// então o próximo pendente da fila (se houver — Timeskip que atravessou
-// vários Domingos) aparece de primeira, sem precisar de mais de um
-// clique nem de atualizar a página.
 export async function pagarCustoSemanal(fichaId, fichaAtual, saldoId, pendenteId) {
     const custoBase = custoSemanalPadraoDeVida(fichaAtual.dados.padraoDeVida);
     const extras = Object.values(fichaAtual.gastosExtras || {}).reduce((acc, g) => acc + (Number(g.valor) || 0), 0);
     const total = custoBase + extras;
-    const atualizacoes = { "dados/ultimoPagamentoCustoVida": Date.now() };
-    if (pendenteId) atualizacoes[`dados/custoVidaPagos/${pendenteId}`] = true;
+    const atualizacoesDados = { ultimoPagamentoCustoVida: Date.now() };
+    if (pendenteId) atualizacoesDados[`custoVidaPagos/${pendenteId}`] = true;
     if (ehIdSaldoDeItem(saldoId)) {
         const itemId = idItemDoSaldo(saldoId);
         const campo = campoSaldoDoItem(saldoId);
         const item = (fichaAtual.inventario && fichaAtual.inventario[itemId]) || {};
         const atual = Number(item[campo]) || 0;
-        atualizacoes[`inventario/${itemId}/${campo}`] = atual - total;
-    } else {
-        const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
-        const atual = Number(saldo.valor) || 0;
-        atualizacoes[`saldos/${saldoId}/valor`] = atual - total;
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}`)), { [campo]: atual - total });
+        await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
+        return total;
     }
-    await update(ref(db, caminhoMesa(`fichas/${fichaId}`)), atualizacoes);
+    const saldo = (fichaAtual.saldos && fichaAtual.saldos[saldoId]) || { valor: 0 };
+    const atual = Number(saldo.valor) || 0;
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${saldoId}`)), { valor: atual - total });
+    await update(ref(db, caminhoMesa(`fichas/${fichaId}/dados`)), atualizacoesDados);
     return total;
 }
 
@@ -3311,7 +3369,7 @@ export function ouvirAcoesPendentes(callback) {
     });
 }
 
-// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_dinheiro" | "dar_item" | "pegar_item_cenario" | "deixar_item_cenario" | "deixar_dinheiro_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro" | "instalar_implante" | "remover_implante" | "solicitar_item" | "solicitar_dinheiro"
+// tipo: "remover_item" | "mover_item" | "guardar_item" | "gastar_dinheiro" | "mover_dinheiro" | "dar_item" | "pegar_item_cenario" | "melhorar_veiculo_terceiro" | "reparar_veiculo_terceiro" | "instalar_implante" | "remover_implante" | "solicitar_item" | "solicitar_dinheiro"
 export async function criarAcaoPendente({ tipo, fichaId, nomeJogador, detalhe, payload }) {
     const novaRef = push(ref(db, caminhoMesa("acoesPendentes")));
     await set(novaRef, { tipo, fichaId, nomeJogador: nomeJogador || fichaId, detalhe: detalhe || "", payload: payload || {}, criadoEm: Date.now() });
@@ -3528,39 +3586,6 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valor);
         await creditarSaldoFicha(fichaId, payload.saldoDestinoId, valor);
 
-    } else if (tipo === "dar_dinheiro") {
-        // Mesma ideia de "mover_dinheiro" acima, só que atravessando pra
-        // OUTRA ficha (payload.fichaDestinoId) em vez de mover entre
-        // saldos da mesma — dar dinheiro direto sem precisar virar item
-        // físico e passar pelo fluxo de "dar_item" primeiro.
-        //
-        // Dinheiro FÍSICO (saldo normal ou "dinheiro físico" de item) cai
-        // direto no saldo fixo "bolso" de quem recebe (todo personagem
-        // tem, ver saldos padrão em normalizacao.js) — faz sentido físico
-        // (é uma entrega na mão) e não precisa perguntar nada.
-        //
-        // Dinheiro VIRTUAL (notas/moedas de uma carteira digital — ver
-        // saldoIdEhVirtual/subtipoSaldoDoId em dados-manual.js) não tem
-        // pra onde cair sozinho: quem recebe pode ter mais de uma
-        // carteira digital (ou nenhuma). Por isso quem escolhe não é o
-        // Mestre nem quem dá — é o PRÓPRIO jogador que vai receber, numa
-        // caixa que aparece pra ele na aba Finanças (ver
-        // renderizarPedidosDarDinheiroVirtual/escolherDestinoDarDinheiro,
-        // abas/financas.js), que grava a escolha em payload.saldoDestinoId
-        // antes do pedido sequer aparecer liberado pro Mestre confirmar
-        // (ver ehDarDinheiroVirtualSemEscolha, mestre/acoes-pendentes.js,
-        // que trava o botão Confirmar até essa escolha existir).
-        const valorDar = Number(payload.valor || 0);
-        await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valorDar);
-        if (saldoIdEhVirtual(payload.saldoOrigemId)) {
-            if (!payload.saldoDestinoId) {
-                throw new Error("Ainda esperando quem recebe escolher em qual carteira quer o dinheiro virtual.");
-            }
-            await creditarSaldoFicha(payload.fichaDestinoId, payload.saldoDestinoId, valorDar);
-        } else {
-            await creditarSaldoFicha(payload.fichaDestinoId, "bolso", valorDar);
-        }
-
     } else if (tipo === "dar_item") {
         const snapItem = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
         if (snapItem.exists()) {
@@ -3625,82 +3650,6 @@ export async function confirmarAcaoPendente(acao, extras = {}) {
         }
         await set(novaRefItemCenario, { ...itemPosPegarCenario, equipada: resultadoEntradaCenario.equipar });
         await remove(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}/itens/${payload.itemId}`)));
-
-    } else if (tipo === "deixar_item_cenario") {
-        // Deixar um item do próprio inventário solto no cenário (inverso
-        // de "pegar_item_cenario" acima) — o jogador abre mão do item,
-        // que passa a ficar "sem dono" no cenário, disponível pra
-        // qualquer participante pegar depois (inclusive ele mesmo, se
-        // mudar de ideia). Revalida que o item ainda está na ficha (pode
-        // ter sido dado, gasto ou removido enquanto o pedido esperava
-        // aprovação) e que o cenário ainda existe.
-        const snapItemDeixar = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
-        if (!snapItemDeixar.exists()) {
-            await rejeitarAcaoPendente(acao.id);
-            throw new Error(`Pedido cancelado: "${payload.itemNome || "item"}" não está mais no inventário.`);
-        }
-        const snapCenarioDeixar = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}`)));
-        if (!snapCenarioDeixar.exists()) {
-            await rejeitarAcaoPendente(acao.id);
-            throw new Error(`Pedido cancelado: o cenário não existe mais.`);
-        }
-        const itemDeixar = snapItemDeixar.val();
-        // Se o item era um recipiente com coisas guardadas dentro, solta
-        // os filhos (dentroDe = null) em vez de deixá-los presos
-        // apontando pra um item que não está mais no inventário — mesmo
-        // critério de "remover_item" acima.
-        const snapFilhosDeixar = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)));
-        if (snapFilhosDeixar.exists()) {
-            const inventarioAtualDeixar = snapFilhosDeixar.val();
-            const atualizacoesFilhosDeixar = {};
-            Object.entries(inventarioAtualDeixar).forEach(([itId, it]) => {
-                if (it && it.dentroDe === payload.itemId) atualizacoesFilhosDeixar[`${itId}/dentroDe`] = null;
-            });
-            if (Object.keys(atualizacoesFilhosDeixar).length) {
-                await update(ref(db, caminhoMesa(`fichas/${fichaId}/inventario`)), atualizacoesFilhosDeixar);
-            }
-        }
-        // Item solto no cenário nunca fica "equipado" nem dentro de um
-        // container que só existe no inventário de origem — mesma trava
-        // usada por dar_item/pegar_item_cenario, só que aqui não precisa
-        // de resolverEntradaLevandoConsigo (não tem "mão" de ninguém
-        // envolvida: o item só fica largado, sem dono).
-        await adicionarItemCenario(payload.cenarioId, { ...itemDeixar, dentroDe: null, compartimentoId: null, equipada: false });
-        await remove(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${payload.itemId}`)));
-
-    } else if (tipo === "deixar_dinheiro_cenario") {
-        // Deixar um valor de um saldo próprio solto no cenário (inverso
-        // de "pegar_dinheiro_cenario" acima) — vira um novo saldo "sem
-        // dono" dentro do cenário (cenarios/{id}/dinheiro), disponível
-        // pra qualquer participante pegar depois. Revalida o saldo de
-        // origem (pode ter mudado desde que o pedido foi criado) e que o
-        // cenário ainda existe, antes de debitar/criar.
-        const valorDeixar = Number(payload.valor) || 0;
-        if (valorDeixar <= 0) {
-            await rejeitarAcaoPendente(acao.id);
-            throw new Error("Pedido cancelado: valor inválido.");
-        }
-        let saldoAtualDeixar;
-        if (ehIdSaldoDeItem(payload.saldoOrigemId)) {
-            const itemId = idItemDoSaldo(payload.saldoOrigemId);
-            const campo = campoSaldoDoItem(payload.saldoOrigemId);
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/inventario/${itemId}/${campo}`)));
-            saldoAtualDeixar = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        } else {
-            const snap = await get(ref(db, caminhoMesa(`fichas/${fichaId}/saldos/${payload.saldoOrigemId}/valor`)));
-            saldoAtualDeixar = snap.exists() && snap.val() !== null ? Number(snap.val()) : 0;
-        }
-        if (valorDeixar > saldoAtualDeixar) {
-            await rejeitarAcaoPendente(acao.id);
-            throw new Error(`Pedido cancelado: o saldo já não tem mais ${valorDeixar} disponível (sobrou ${saldoAtualDeixar}).`);
-        }
-        const snapCenarioDeixarDinheiro = await get(ref(db, caminhoMesa(`cenarios/${payload.cenarioId}`)));
-        if (!snapCenarioDeixarDinheiro.exists()) {
-            await rejeitarAcaoPendente(acao.id);
-            throw new Error(`Pedido cancelado: o cenário não existe mais.`);
-        }
-        await debitarSaldoFicha(fichaId, payload.saldoOrigemId, valorDeixar);
-        await adicionarDinheiroCenario(payload.cenarioId, { nome: `Deixado por ${acao.nomeJogador || "alguém"}`, valor: valorDeixar });
 
     } else if (tipo === "melhorar_veiculo_terceiro" || tipo === "reparar_veiculo_terceiro") {
         // Reparo/Melhoria de veículo do OUTRO jogador, feito por quem

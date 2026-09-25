@@ -55,7 +55,7 @@ import {
 } from "../ficha.js?v=20260830-npcnivelpv";
 import { montarPainelAcoesPendentes } from "../mestre/acoes-pendentes.js";
 import { montarFormularioNpcDetalhado } from "../mestre/npcs.js";
-import { calcularDanoDesarmado, calcularTotalPericia } from "../regras.js";
+import { atributoPrimarioEfetivo, calcularDanoDesarmado, calcularTotalPericia, somaModificadoresPara } from "../regras.js";
 import {
     TIPOS_DANO, ESCALAS_ARMA, MANOBRAS_COMBATE, MANOBRA_ARREMESSAR_CQC,
     MANOBRA_IMOBILIZAR_CQC, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU,
@@ -316,7 +316,14 @@ export function renderizarManobrasCombate() {
                         modificador = calcularTotalPericia(entradaJJ[1], estado.fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia("Jiu Jitsu")).total;
                     } else {
                         const atributo = nomeBase === "Força" ? "forca" : "destreza";
-                        modificador = (Number(estado.fichaAtual.dados[atributo]) || 0) + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
+                        // Mesmo buraco do botão 🎲 de atributo primário (ver
+                        // montarGridsEstaticas em ficha.js): Força/Destreza
+                        // aqui são o atributo cru, então precisam do ajuste
+                        // geral "atributo:X" também — sem isso, droga ativa
+                        // ou vantagem que mexe em Força/Destreza não
+                        // influenciava esse Imobilizar de jeito nenhum.
+                        const ajusteAtributo = somaModificadoresPara(`atributo:${atributo}`, modificadoresPlanos);
+                        modificador = (Number(estado.fichaAtual.dados[atributo]) || 0) + ajusteAtributo + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica");
                     }
                     abrirModalSelecionarAlvoImobilizarJJ(nomeBase, modificador, nivelJJLista);
                     return;
@@ -473,7 +480,7 @@ export function renderizarManobrasCombate() {
                         abrirModalSelecionarAlvo(itemDesarmado, modificadoresPlanos);
                     } else {
                         const modificador = semPericia ? (-1 + penalidadeTestesAtual() + penalidadeEnergiaPara("fisica")) : calcularTotalPericia(entrada[1], estado.fichaAtual.dados, modificadoresPlanos, penalidadeTestesAtual() + penalidadeEnergiaParaPericia(nomePericia)).total;
-                        const forcaAtual = Number(estado.fichaAtual.dados.forca) || 0;
+                        const forcaAtual = atributoPrimarioEfetivo(estado.fichaAtual.dados, "forca", modificadoresPlanos);
                         const danoCalc = calcularDanoDesarmado(forcaAtual, especificidade.escalaMult, especificidade);
                         const dadoTexto = danoCalc.dadoMultiplicador > 1
                             ? `1d${danoCalc.faces}×${danoCalc.dadoMultiplicador}: ${danoCalc.dado}×${danoCalc.dadoMultiplicador}=${danoCalc.dadoTotal}`

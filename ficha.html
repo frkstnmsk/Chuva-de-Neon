@@ -336,8 +336,6 @@
                     <div class="grid-form grid-4" id="financas-saldos-grid"></div>
                     <button id="btn-add-saldo" class="btn-ghost" type="button">+ Criar novo saldo</button>
 
-                    <div id="financas-dar-dinheiro-pendentes" style="display:none;"></div>
-
                     <div id="financas-gastar-bloco" style="display:none;">
                         <div class="section-header">Gastar dinheiro <span class="hint-inline">pedido precisa de aprovação do Mestre</span></div>
                         <div class="grid-form grid-4">
@@ -386,41 +384,6 @@
                             </div>
                         </div>
                         <button id="financas-mover-btn" class="btn-red" type="button">Solicitar movimentação ao Mestre</button>
-                    </div>
-
-                    <div id="financas-dar-bloco" style="display:none;">
-                        <div class="section-header">Dar dinheiro a outro personagem <span class="hint-inline">pedido precisa de aprovação do Mestre</span></div>
-                        <div class="grid-form grid-4">
-                            <div class="campo">
-                                <label for="financas-dar-origem">De onde sai</label>
-                                <select id="financas-dar-origem"></select>
-                            </div>
-                            <div class="campo">
-                                <label for="financas-dar-destino-ficha">Pra quem</label>
-                                <select id="financas-dar-destino-ficha"></select>
-                            </div>
-                            <div class="campo">
-                                <label for="financas-dar-valor">Valor</label>
-                                <input type="number" id="financas-dar-valor" min="0" value="0">
-                            </div>
-                        </div>
-                        <button id="financas-dar-btn" class="btn-lime" type="button" title="O valor cai direto no saldo 'No bolso' de quem recebe — sem precisar virar item físico primeiro">Dar dinheiro</button>
-                    </div>
-
-                    <div id="financas-deixar-cenario-bloco" style="display:none;">
-                        <div class="section-header">Deixar dinheiro no cenário <span class="hint-inline">pedido precisa de aprovação do Mestre</span></div>
-                        <p class="hint" id="financas-deixar-cenario-hint" style="display:none;">Você não está em nenhum cenário no momento.</p>
-                        <div class="grid-form grid-4" id="financas-deixar-cenario-campos">
-                            <div class="campo">
-                                <label for="financas-deixar-cenario-origem">De onde sai</label>
-                                <select id="financas-deixar-cenario-origem"></select>
-                            </div>
-                            <div class="campo">
-                                <label for="financas-deixar-cenario-valor">Valor</label>
-                                <input type="number" id="financas-deixar-cenario-valor" min="0" value="0">
-                            </div>
-                        </div>
-                        <button id="financas-deixar-cenario-btn" class="btn-lime" type="button" title="O valor fica largado no cenário atual — qualquer participante pode pegar depois">🎬 Deixar no cenário</button>
                     </div>
 
                     <div class="section-header">Padrão de vida <span class="hint-inline">custo semanal cobrado todo Domingo</span></div>

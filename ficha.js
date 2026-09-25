@@ -36,7 +36,7 @@ import {
     renderizarSaude, renderizarSilhuetaSaude, configurarSilhuetaSaude, renderizarPopoverSilhueta, renderizarEstadoSaude, renderizarComaBadge, renderizarDesmaioBadge, renderizarEstadoEnergia, renderizarImplantes, configurarSaude, abrirModalTratarFerida, configurarAvisoCustoVida
 } from "./abas/saude.js";
 import {
-    ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS, listaAlvosModificador, rotuloAlvo, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA, coletarModificadores, calcularDerivados, calcularTotalPericia, modificadoresOcasionaisDaPericia, modificadoresOcasionaisDoAlvo, rolarD20, calcularDificuldadeDefesaJogador, calcularDanoTotalArma, MAX_ATRIBUTO_JOGO, calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada, calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO, calcularAbstinenciaVicio, extrairDuracaoHorasDaDescricao, horasTotaisCalendario, calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel, TRATAMENTOS_FERIDA, feridaAceitaSutura, dificuldadeUpgradeVeiculo, custoUpgradeVeiculo, custoReparoVeiculo, precoVeiculoComFator, veiculoTemKitFerramentasSuficiente, zerarDeterioracoesDoAtributoVeiculo, atributoEfetivoVeiculo, aplicarDanoVeiculo, pvMaxVeiculo, veiculoAtendeRequisitosManobra, resolverEfeitoManobra, pontosPorResultadoTesteFuga, slotsAcessoriosLivres, podeInstalarAcessorio, efeitoOleoVeiculo, efeitoCospePregoVeiculo, itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, dificuldadeItemDarknet, tomadaSlotsOcupados, TIPOS_FERIDA
+    ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS, atributoPrimarioEfetivo, listaAlvosModificador, rotuloAlvo, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA, coletarModificadores, calcularDerivados, calcularTotalPericia, modificadoresOcasionaisDaPericia, modificadoresOcasionaisDoAlvo, rolarD20, calcularDificuldadeDefesaJogador, calcularDanoTotalArma, MAX_ATRIBUTO_JOGO, calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada, calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO, calcularAbstinenciaVicio, extrairDuracaoHorasDaDescricao, horasTotaisCalendario, calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel, TRATAMENTOS_FERIDA, feridaAceitaSutura, dificuldadeUpgradeVeiculo, custoUpgradeVeiculo, custoReparoVeiculo, precoVeiculoComFator, veiculoTemKitFerramentasSuficiente, zerarDeterioracoesDoAtributoVeiculo, atributoEfetivoVeiculo, aplicarDanoVeiculo, pvMaxVeiculo, veiculoAtendeRequisitosManobra, resolverEfeitoManobra, pontosPorResultadoTesteFuga, slotsAcessoriosLivres, podeInstalarAcessorio, efeitoOleoVeiculo, efeitoCospePregoVeiculo, itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, dificuldadeItemDarknet, tomadaSlotsOcupados, TIPOS_FERIDA
 } from "./regras.js";
 import {
     PERICIAS_MANUAL, CATEGORIAS_PERICIA, buscarPericiaPorNome, TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehExplosivo, ehArmaOuExplosivo, ehDroga, ehProdutoQuimico, MODULOS_DETONACAO, ehProjetil, tagTemNivel, tagPermiteLimiteRolagemPorNivel, rotuloTag, tagExigePericiaUso, tagTemPericiaUso, ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral, ehTagQuePodeSerSaldo, todosOsSaldos, CLASSES_PROTECAO, ehArmaDeFogo, tagExigeClasseProtecao, calibresPorClasse, rotuloCalibre, calibreSugereDilacera, tagUsaCalibreEspecifico, ehCalibreEscopeta, tagExigeCapacidadeCarregador, tagExigeQuantidadeProjetil, tagPodeReduzirDano, LOCAIS_PROTECAO, tagExigeLocalProtegido, ALCANCES_ARMA_FOGO, PADROES_RECUO, bonusEsquivaBoxe, atendeRequisitoPericia, atendeRequisitoCriarReceita, PERICIAS_APARAR, LOCAIS_MIRA, difModLocalMira, labelLocalFerida, MANOBRA_ARREMESSAR_CQC, MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC, danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU, danoQuebrarOssosJiuJitsu, MATERIAIS_CRIACAO, qualidadesDoMaterial, ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO, CATALOGO_DROGAS, rotuloAtributoVeiculo, ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo, PERICIAS_MECANICO_VEICULO, MANOBRAS_VEICULO, buscarManobraVeiculo, bairroPerseguicao, tabelaPontuacaoFugaCadastrada, bairroTemDificuldadeRotaFuga, CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo, calcularDificuldadeQuimico, EFEITOS_MATERIAL_QUIMICO, resolverNivelMaterial, NOME_MATERIAL_VEICULO_TRANSPORTE, resolverTipoEntregaQuimico, rotuloSubtipoImplante, subtipoContaComoImplante, PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA, TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip, ZONAS_SILHUETA, CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO
@@ -362,18 +362,6 @@ export const el = {
     financasMoverDestino: document.getElementById("financas-mover-destino"),
     financasMoverValor: document.getElementById("financas-mover-valor"),
     financasMoverBtn: document.getElementById("financas-mover-btn"),
-    financasDarBloco: document.getElementById("financas-dar-bloco"),
-    financasDarOrigem: document.getElementById("financas-dar-origem"),
-    financasDarDestinoFicha: document.getElementById("financas-dar-destino-ficha"),
-    financasDarValor: document.getElementById("financas-dar-valor"),
-    financasDarBtn: document.getElementById("financas-dar-btn"),
-    financasDeixarCenarioBloco: document.getElementById("financas-deixar-cenario-bloco"),
-    financasDeixarCenarioHint: document.getElementById("financas-deixar-cenario-hint"),
-    financasDeixarCenarioCampos: document.getElementById("financas-deixar-cenario-campos"),
-    financasDeixarCenarioOrigem: document.getElementById("financas-deixar-cenario-origem"),
-    financasDeixarCenarioValor: document.getElementById("financas-deixar-cenario-valor"),
-    financasDeixarCenarioBtn: document.getElementById("financas-deixar-cenario-btn"),
-    financasDarDinheiroPendentes: document.getElementById("financas-dar-dinheiro-pendentes"),
     financasSolicitarBloco: document.getElementById("financas-solicitar-bloco"),
     financasSolicitarDestino: document.getElementById("financas-solicitar-destino"),
     financasSolicitarValor: document.getElementById("financas-solicitar-valor"),
@@ -1324,8 +1312,16 @@ function montarGridsEstaticas() {
         `;
         card.querySelector(`[data-rolar-attr="${attr.key}"]`).addEventListener("click", async () => {
             if (!estado.fichaAtual) { toast("Nenhuma ficha carregada ainda.", "erro"); return; }
-            const valor = Number(estado.fichaAtual.dados[attr.key]) || 0;
-            await rolarComPossibilidadeDeOcasionais(attr.label, `atributo:${attr.key}`, valor);
+            const base = Number(estado.fichaAtual.dados[attr.key]) || 0;
+            // Faltava isto: diferente do secundário (Velocidade etc., logo
+            // abaixo) e da perícia (calcularTotalPericia), a rolagem de
+            // atributo primário usava só o valor cru da ficha — nenhum
+            // modificador "geral" (droga ativa, abstinência, vantagem
+            // "atributo:X" etc.) nunca entrava aqui, só os Ocasionais que o
+            // próprio jogador liga na hora (modal logo abaixo, ver
+            // rolarComPossibilidadeDeOcasionais). Agora soma os dois.
+            const ajuste = somaModificadoresPara(`atributo:${attr.key}`, modificadoresAtuais());
+            await rolarComPossibilidadeDeOcasionais(attr.label, `atributo:${attr.key}`, base + ajuste);
         });
         el.gridAtributosPrimarios.appendChild(card);
     });
@@ -4363,7 +4359,7 @@ export async function resolverAgarrar(nomePericia, modificador, participante) {
             if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
-            dificuldade = 10 + (Number(fichaAlvo.dados.forca) || 0);
+            dificuldade = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "forca", coletarModificadores(fichaAlvo), 10);
         } else {
             const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
             if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
@@ -4532,7 +4528,7 @@ export async function resolverDerrubar(nomePericia, modificador, participante, u
             if (!snap.exists()) { toast("Ficha do alvo não encontrada (pode ter sido removida).", "erro"); return; }
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
-            dificuldade = 10 + (Number(fichaAlvo.dados.constituicao) || 0);
+            dificuldade = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", coletarModificadores(fichaAlvo), 10);
         } else {
             const snap = await get(ref(db, caminhoMesa(`npcs/${participante.refId}`)));
             if (!snap.exists()) { toast("NPC alvo não encontrado (pode ter sido removido).", "erro"); return; }
@@ -4573,7 +4569,7 @@ export async function resolverDerrubar(nomePericia, modificador, participante, u
     let notaBonusCQC = "";
     if (usarBonusCQCDano) {
         try {
-            const destrezaAtacante = Number(estado.fichaAtual.dados.destreza) || 0;
+            const destrezaAtacante = atributoPrimarioEfetivo(estado.fichaAtual.dados, "destreza", modificadoresAtuais());
             const danoBonus = calcularDanoTotalArma({ danoBase: 0, escalaMult: 1 }, destrezaAtacante);
             const resultadoDanoBonus = await aplicarDano(participante.tipo, participante.refId, danoBonus, "contusao", null);
             notaBonusCQC = ` CQC nível 2 (avançou pra derrubar): +${danoBonus} de dano contundente extra — ${resultadoDanoBonus.reducao} (redução) = ${resultadoDanoBonus.danoFinal} aplicado, PV restante: ${resultadoDanoBonus.novoPv}.`;
@@ -4741,7 +4737,7 @@ async function calcularMelhorForcaOuJiuJitsuAlvo(alvoTipo, alvoRefId) {
         const pvAtual = (fichaAlvo.dados.pvAtual !== null && fichaAlvo.dados.pvAtual !== undefined) ? Number(fichaAlvo.dados.pvAtual) : pvMax;
         const temTolerancia = temPericiaTreinada(fichaAlvo.pericias, "Tolerância");
         const estadoSaude = calcularEstadoSaude(pvAtual, pvMax, temTolerancia, false);
-        const forcaAlvo = Number(fichaAlvo.dados.forca) || 0;
+        const forcaAlvo = atributoPrimarioEfetivo(fichaAlvo.dados, "forca", modificadoresPlanos);
         const jjAlvo = modificadorDePericiaComPenalidade("Jiu Jitsu", fichaAlvo.dados, fichaAlvo.pericias, modificadoresPlanos, estadoSaude.penalidadeTestes);
         return Math.max(forcaAlvo, jjAlvo);
     }
@@ -4869,7 +4865,7 @@ export async function resolverQuebrarOssosJiuJitsu(nivelJJ, participante, membro
     const info = danoQuebrarOssosJiuJitsu(nivelJJ);
     if (!info) { toast("Jiu Jitsu nível 4+ é necessário pra Quebrar ossos.", "erro"); return; }
 
-    const destrezaAtacante = Number(estado.fichaAtual.dados.destreza) || 0;
+    const destrezaAtacante = atributoPrimarioEfetivo(estado.fichaAtual.dados, "destreza", modificadoresAtuais());
     const dano = calcularDanoTotalArma({ danoBase: 0, escalaMult: info.escalaMult }, destrezaAtacante);
 
     let resultadoDano, nomeAlvo;
@@ -4990,7 +4986,7 @@ async function resolverArremessar(nomePericia, modificadorBase, alvoId, bonusPor
     const nomeAtacante = estado.fichaAtual?.config?.nomeExibicao || estado.sessao?.nome || "Jogador";
     const meuPid = estado.modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
     const modificadorAtaque = modificadorBase + bonusPorAlvoExtra;
-    const forcaAtacante = Number(estado.fichaAtual.dados.forca) || 0;
+    const forcaAtacante = atributoPrimarioEfetivo(estado.fichaAtual.dados, "forca", modificadoresAtuais());
     const danoArremesso = calcularDanoTotalArma({ danoBase: 0, escalaMult: 2 }, forcaAtacante); // escala C = 2x Força
     const tipoDanoKey = "contusao"; // arremessa o alvo, não uma arma — dano de impacto
 
