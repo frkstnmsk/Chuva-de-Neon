@@ -151,6 +151,7 @@
         <div class="painel-info-topo-botoes">
             <button id="btn-abrir-combate" class="btn-red" type="button" style="display:none;">Gerenciador de Combate</button>
             <button id="btn-abrir-cenario" class="btn-red" type="button" style="display:none;">Gerenciador de Cenário</button>
+            <button id="btn-flashbang" class="btn-red" type="button" style="display:none;" title="Dispara o efeito de flashbang na tela de todo mundo logado (jogadores e você)">💥 Flashbang</button>
         </div>
     </div>
 
@@ -1577,6 +1578,17 @@
      ficha.js, então essa é a única forma de "destravar" a ficha sem
      mexer direto no Firebase). -->
 <button type="button" id="btn-reviver-godmode" class="btn-red godmode-revive-btn" style="display:none;" title="Zera mortoDeVez e devolve 1 PV/Energia">💀 Reviver (Godmode)</button>
+
+<!-- Efeito de tela do botão Flashbang do Mestre (ver dispararFlashbang/
+     ouvirFlashbang em mestre.js e configurarFlashbang em ficha.js):
+     mensagem "FLASHBANG" por meio segundo, depois tela toda branca por
+     3 segundos, então some sozinho — sem clique, sem botão de fechar,
+     igual o efeito real. Cobre a tela inteira de propósito (mesma ideia
+     do overlay de morte acima), pra ninguém conseguir ver/mexer em nada
+     por baixo enquanto dura. -->
+<div id="flashbang-overlay" class="flashbang-overlay" style="display:none;">
+    <span id="flashbang-mensagem" class="flashbang-mensagem">FLASHBANG</span>
+</div>
 
 <!-- Easter egg: botão invisível no canto inferior esquerdo. Ao clicar,
      mostra um overlay de tela cheia sem nenhum botão de fechar — só dá

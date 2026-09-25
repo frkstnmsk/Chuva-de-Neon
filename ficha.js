@@ -55,7 +55,7 @@ import {
     garantirCalendarioInicial, diasSemana, climas, registrarRolagem
 } from "./calendario.js";
 import {
-    PADROES_DE_VIDA, custoSemanalTotal, ouvirTodasAsFichas, darXp, ouvirXpHistorico, ouvirFatorPrecoDarknet, aplicarDano, causarDanoVeiculo, testarSangramentoProfundo, ouvirNpcs, criarAcaoPendente, confirmarAcaoPendente, iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, consumirAcaoExtraCQC, participantesElegiveisCQCIniciativa, adicionarEsquivaExtra, consumirContraAtaquePendente, definirAgarrado, definirDerrubado, levantarDerrubado, definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado, definirAlcanceLimitado, soltarAlcanceLimitado, definirDesacordado, definirOssosQuebrados, aplicarSangramento, aplicarInfeccao, reverterComaGodmode, acordarDesmaioGodmode, adicionarItemCenario, adicionarVeiculoCenario, editarVeiculoCenario, aparecerVeiculoNoCenario, removerVeiculoDoCenario, adicionarExplosivoCenario, adicionarQuimicoCenario, liberarQuimicoCenario, curarAlvo, aplicarDanoContinuoQuimico, aplicarPenalidadeTemporizada, aplicarDesmaioTemporizado, aplicarTesteAtrasado, aplicarPerdaAcaoTemporizada, registrarPontosPerseguicao, registrarTentativaRotaFugaPerseguicao
+    PADROES_DE_VIDA, custoSemanalTotal, ouvirTodasAsFichas, darXp, ouvirXpHistorico, ouvirFatorPrecoDarknet, aplicarDano, causarDanoVeiculo, testarSangramentoProfundo, ouvirNpcs, criarAcaoPendente, confirmarAcaoPendente, iniciarIniciativaCombate, avancarTurnoCombate, consumirAcaoCombate, consumirAcaoExtraCQC, participantesElegiveisCQCIniciativa, adicionarEsquivaExtra, consumirContraAtaquePendente, definirAgarrado, definirDerrubado, levantarDerrubado, definirImobilizado, soltarImobilizado, marcarDispararAvancarUsado, definirAlcanceLimitado, soltarAlcanceLimitado, definirDesacordado, definirOssosQuebrados, aplicarSangramento, aplicarInfeccao, reverterComaGodmode, acordarDesmaioGodmode, adicionarItemCenario, adicionarVeiculoCenario, editarVeiculoCenario, aparecerVeiculoNoCenario, removerVeiculoDoCenario, adicionarExplosivoCenario, adicionarQuimicoCenario, liberarQuimicoCenario, curarAlvo, aplicarDanoContinuoQuimico, aplicarPenalidadeTemporizada, aplicarDesmaioTemporizado, aplicarTesteAtrasado, aplicarPerdaAcaoTemporizada, registrarPontosPerseguicao, registrarTentativaRotaFugaPerseguicao, dispararFlashbang, ouvirFlashbang
 } from "./mestre.js?v=20260830-npcnivelpv";
 import {
     criarFerida, ouvirFeridas, tratarFerida, removerFerida, aplicarTickSangramento
@@ -288,6 +288,9 @@ export const el = {
     drawerPendentesCorpo: document.getElementById("drawer-pendentes-corpo"),
     drawerPendentesFechar: document.getElementById("drawer-pendentes-fechar"),
     btnAbrirCombate: document.getElementById("btn-abrir-combate"),
+    btnFlashbang: document.getElementById("btn-flashbang"),
+    flashbangOverlay: document.getElementById("flashbang-overlay"),
+    flashbangMensagem: document.getElementById("flashbang-mensagem"),
     modalCombateMestre: document.getElementById("modal-combate-mestre"),
     combateMestreCorpo: document.getElementById("combate-mestre-corpo"),
     combateMestreFechar: document.getElementById("combate-mestre-fechar"),
@@ -764,6 +767,7 @@ async function init() {
         el.btnPendentesLateral.style.display = "flex";
         el.btnAbrirCombate.style.display = "inline-block";
         if (el.btnAbrirCenario) el.btnAbrirCenario.style.display = "inline-block";
+        if (el.btnFlashbang) el.btnFlashbang.style.display = "inline-block";
         el.calendarioEdicaoMestre.style.display = "block";
         ouvirListaDeFichas();
         ouvirListaDeNpcsParaAtuar();
@@ -815,6 +819,7 @@ async function init() {
     tentarOuAvisar("popup de treinamento", configurarPopupTreinamento);
     tentarOuAvisar("checkbox esteroide", configurarCheckboxEsteroides);
     tentarOuAvisar("aviso de torniquete", configurarAvisoTorniquete);
+    tentarOuAvisar("flashbang", configurarFlashbang);
     tentarOuAvisar("godmode", configurarGodmode);
     tentarOuAvisar("fator de preço de materiais (veículos)", configurarFatorPrecoMateriaisVeiculo);
     tentarOuAvisar("fator de preço da Dark Net", configurarFatorPrecoDarknet);
@@ -1089,6 +1094,62 @@ function dispararEfeitoDano() {
 // re-renderização com estado parcial. Sempre usar em par com retornarSync().
 export function pausarSync() { estado._pausarListener++; }
 export function retornarSync() { if (estado._pausarListener > 0) estado._pausarListener--; }
+
+// ---------------------------------------------------------------------
+// Flashbang: botão do Mestre (canto superior, ao lado de Gerenciador de
+// Combate/Cenário) dispara dispararFlashbang() — só grava um timestamp
+// no Firebase (mestre.js). Todo mundo logado nessa mesa, jogador ou
+// Mestre, está ouvindo esse mesmo valor via ouvirFlashbang() e roda a
+// sequência visual sozinho, ao mesmo tempo (cada cliente só depende do
+// próprio relógio, não de um "aviso" central): mensagem "FLASHBANG" por
+// meio segundo, tela toda branca por 3 segundos, some sozinho. Não tem
+// jeito de fechar antes — é pra simular o efeito de verdade.
+function configurarFlashbang() {
+    if (el.btnFlashbang) {
+        el.btnFlashbang.addEventListener("click", async () => {
+            el.btnFlashbang.disabled = true;
+            try {
+                await dispararFlashbang();
+            } catch (err) {
+                console.error(err);
+                toast("Falha ao disparar o flashbang.", "erro");
+            } finally {
+                el.btnFlashbang.disabled = false;
+            }
+        });
+    }
+    if (!el.flashbangOverlay || !el.flashbangMensagem) return;
+    // onValue chama o callback IMEDIATAMENTE com o valor já gravado ao
+    // assinar (comportamento do Firebase) — sem essa trava, todo mundo
+    // que abrisse/desse reload na ficha veria o flashbang de novo, com
+    // o timestamp antigo do último disparo. Só depois da primeira
+    // chamada (que só registra, não dispara) é que um timestamp NOVO
+    // realmente aciona o efeito.
+    let primeiraChamada = true;
+    let ultimoTimestampVisto = 0;
+    ouvirFlashbang((timestamp) => {
+        if (primeiraChamada) {
+            primeiraChamada = false;
+            ultimoTimestampVisto = timestamp;
+            return;
+        }
+        if (!timestamp || timestamp === ultimoTimestampVisto) return;
+        ultimoTimestampVisto = timestamp;
+
+        el.flashbangMensagem.style.display = "flex";
+        el.flashbangOverlay.classList.remove("flashbang-tela-branca");
+        el.flashbangOverlay.style.display = "flex";
+        setTimeout(() => {
+            el.flashbangMensagem.style.display = "none";
+            el.flashbangOverlay.classList.add("flashbang-tela-branca");
+        }, 500);
+        setTimeout(() => {
+            el.flashbangOverlay.style.display = "none";
+            el.flashbangOverlay.classList.remove("flashbang-tela-branca");
+        }, 500 + 3000);
+    });
+}
+
 
 // =====================================================================
 // MONTAGEM ESTÁTICA (uma vez, no load)

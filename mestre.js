@@ -3202,6 +3202,27 @@ export async function descartarAvisoTorniquete(avisoId) {
 }
 
 // ---------------------------------------------------------------------
+// Flashbang: botão do Mestre que dispara o efeito de tela em TODOS os
+// clientes logados nessa mesa (jogadores e o próprio Mestre) ao mesmo
+// tempo — grava só um timestamp; quem está ouvindo (ver
+// configurarFlashbang em ficha.js) decide sozinho a sequência visual
+// (mensagem "FLASHBANG" por meio segundo, tela branca por 3 segundos).
+// `set` (não `update`/lista) de propósito: não precisa de histórico, só
+// do último disparo — e cada clique sobrescreve o anterior, então dois
+// cliques seguidos ainda disparam duas vezes (timestamps diferentes).
+export async function dispararFlashbang() {
+    await set(ref(db, caminhoMesa("flashbang")), { timestamp: Date.now() });
+}
+
+export function ouvirFlashbang(callback) {
+    return onValue(ref(db, caminhoMesa("flashbang")), (snap) => {
+        if (!snap.exists()) return;
+        const valor = snap.val();
+        callback(Number(valor.timestamp) || 0);
+    });
+}
+
+// ---------------------------------------------------------------------
 // Passar o Dia — avança o calendário, dispara aviso de Domingo, e
 // dispara o popup de treinamento pra cada ficha com treino ativo.
 // ---------------------------------------------------------------------
