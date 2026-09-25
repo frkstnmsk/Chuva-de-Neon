@@ -64,6 +64,12 @@ export function renderizarAtributos(modificadoresPlanos) {
         // específicos (ex: dificuldade de defesa) — o hover deixa isso
         // visível mesmo sem mudar o valor exibido no campo.
         const baseAttr = Number(d[attr.key]) || 0;
+        // Modificador em `atributo:X` vale pro atributo inteiro — inclusive
+        // Constituição, que afeta rolagem, carga, dificuldade de defesa
+        // etc. normalmente. A única exceção dela é PV/Energia (sempre
+        // Constituição crua) e o teste de Sangramento (ver
+        // atributoPrimarioEfetivo em regras.js) — nenhuma das duas é
+        // exibida neste card.
         const ajustesAttr = modificadoresQueAfetam(`atributo:${attr.key}`, modificadoresPlanos);
         const totalAttr = baseAttr + ajustesAttr.reduce((acc, m) => acc + m.valor, 0);
         const cardAttr = input.closest(".attr-card");
@@ -118,7 +124,7 @@ export function renderizarAtributos(modificadoresPlanos) {
         const temOverride = override !== null && override !== undefined && override !== "";
         if (temOverride) ajustesRecurso.push({ valor: total - (Math.round(infoRecurso.base) + ajustesRecurso.reduce((a, m) => a + m.valor, 0)), origem: "Override manual do Mestre (Godmode)" });
         const cardRecurso = document.querySelector(`[data-recurso="${rec.key}"]`);
-        if (cardRecurso) cardRecurso.title = textoDetalhamento(rec.label, infoRecurso.base, "Base (fórmula do manual, com os atributos primários já modificados)", ajustesRecurso, total);
+        if (cardRecurso) cardRecurso.title = textoDetalhamento(rec.label, infoRecurso.base, "Base (fórmula do manual — Constituição sempre crua, sem modificadores)", ajustesRecurso, total);
         if (maxLabel) {
             maxLabel.innerText = total;
             maxLabel.style.display = godmodeRecursos ? "none" : "";
@@ -188,7 +194,7 @@ export function renderizarAtributos(modificadoresPlanos) {
         const cardSecundario = document.querySelector(`[data-attr-secundario="${attr.key}"]`);
         if (cardSecundario) {
             const infoSec = derivados.secundarios[attr.key];
-            cardSecundario.title = textoDetalhamento(attr.label, infoSec.base, "Base (fórmula do manual, com os atributos primários já modificados)", infoSec.ajustes, infoSec.total);
+            cardSecundario.title = textoDetalhamento(attr.label, infoSec.base, "Base (fórmula do manual, com os atributos primários já modificados)", infoSec.ajustes, infoSec.total); // PV/Energia (recurso, não secundário) são a única exceção — ver acima
         }
     });
 

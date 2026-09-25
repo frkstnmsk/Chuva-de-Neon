@@ -1312,16 +1312,17 @@ function montarGridsEstaticas() {
         `;
         card.querySelector(`[data-rolar-attr="${attr.key}"]`).addEventListener("click", async () => {
             if (!estado.fichaAtual) { toast("Nenhuma ficha carregada ainda.", "erro"); return; }
-            const base = Number(estado.fichaAtual.dados[attr.key]) || 0;
             // Faltava isto: diferente do secundário (Velocidade etc., logo
             // abaixo) e da perícia (calcularTotalPericia), a rolagem de
             // atributo primário usava só o valor cru da ficha — nenhum
             // modificador "geral" (droga ativa, abstinência, vantagem
             // "atributo:X" etc.) nunca entrava aqui, só os Ocasionais que o
             // próprio jogador liga na hora (modal logo abaixo, ver
-            // rolarComPossibilidadeDeOcasionais). Agora soma os dois.
-            const ajuste = somaModificadoresPara(`atributo:${attr.key}`, modificadoresAtuais());
-            await rolarComPossibilidadeDeOcasionais(attr.label, `atributo:${attr.key}`, base + ajuste);
+            // rolarComPossibilidadeDeOcasionais). Agora soma os dois — vale
+            // pra Constituição também (a exceção dela é só PV/Energia e o
+            // teste de Sangramento, ver atributoPrimarioEfetivo em regras.js).
+            const totalAttr = atributoPrimarioEfetivo(estado.fichaAtual.dados, attr.key, modificadoresAtuais());
+            await rolarComPossibilidadeDeOcasionais(attr.label, `atributo:${attr.key}`, totalAttr);
         });
         el.gridAtributosPrimarios.appendChild(card);
     });
@@ -10335,18 +10336,29 @@ export function participanteIdPorAlvo(tipo, refId) {
 // (tipo, refId) — mesmo cálculo já usado em resolverArremessar acima,
 // extraído aqui pra reaproveitar na ferramenta genérica "Causar dano"
 // do Mestre (Dilaceração por explosão, item 7 do plano).
-export async function buscarConstituicaoAlvo(tipo, refId) {
+// `somenteBruta` (default false): quando true, devolve a Constituição
+// SEMPRE crua, ignorando qualquer modificador "atributo:constituicao" —
+// usado pelo teste de Sangramento (que é uma das duas exceções onde
+// Constituição não é afetada, junto com PV/Energia; ver
+// atributoPrimarioEfetivo em regras.js). Sem esse parâmetro, devolve o
+// valor efetivo (base + modificadores), usado por qualquer outro teste
+// de Constituição (ex.: Adaptação de implante).
+export async function buscarConstituicaoAlvo(tipo, refId, somenteBruta = false) {
     try {
         if (tipo === "ficha") {
             const snap = await get(ref(db, caminhoMesa(`fichas/${refId}`)));
             if (!snap.exists()) return 0;
             const fichaAlvo = normalizarFicha(snap.val());
+            if (somenteBruta) return Number(fichaAlvo.dados.constituicao) || 0;
             const modsAlvo = coletarModificadores(fichaAlvo);
             return calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
         }
         const snap = await get(ref(db, caminhoMesa(`npcs/${refId}`)));
         if (!snap.exists()) return 0;
         const npc = snap.val();
+        if (somenteBruta) {
+            return npc.modoDetalhado ? (Number(npc.atributosPrimarios?.constituicao) || 0) : (Number(npc.constituicao) || 0);
+        }
         if (npc.modoDetalhado && npc.atributosPrimarios) {
             const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
             return calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);

@@ -470,7 +470,10 @@ export function abrirAcaoMestre(acao, prefill = null) {
                     notaDilaceracao = " 🩸 DILACEROU!";
                     const pid = participanteIdPorAlvo(tipo, id);
                     if (pid && combateComIniciativaAtivo() && deveTestarSangramentoProfundo(dilacerou, resultado.danoFinal, resultado.pvMaximo)) {
-                        const constituicaoAlvo = await buscarConstituicaoAlvo(tipo, id);
+                        // Sangramento (profundo) é uma das exceções: sempre
+                        // Constituição crua, sem modificadores (ver
+                        // buscarConstituicaoAlvo em ficha.js).
+                        const constituicaoAlvo = await buscarConstituicaoAlvo(tipo, id, true);
                         const resultadoSangramentoProfundo = await testarSangramentoProfundo(pid, constituicaoAlvo, resultado.danoFinal);
                         if (resultadoSangramentoProfundo) notaDilaceracao += ` ${resultadoSangramentoProfundo.detalhe}`;
                     }

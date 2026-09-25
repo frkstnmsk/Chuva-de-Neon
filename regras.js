@@ -509,6 +509,22 @@ export function modificadoresQueAfetam(alvo, modificadoresPlanos) {
 // defesa, carga e os secundários/recursos que a fórmula do manual
 // calcula a partir dele —, então tudo que precisa "do valor do
 // atributo" deve passar por aqui em vez de ler dados[chave] cru.
+// Valor EFETIVO de um atributo primário: o valor cadastrado na ficha +
+// todos os modificadores estruturados que miram `atributo:X` (vantagem,
+// item, droga, abstinência...). Um modificador em um atributo primário
+// vale pro atributo inteiro — rolagem, escala de dano, dificuldade de
+// defesa, carga e os secundários/recursos que a fórmula do manual
+// calcula a partir dele —, então tudo que precisa "do valor do
+// atributo" deve passar por aqui em vez de ler dados[chave] cru.
+//
+// Exceção: PV e Energia usam a Constituição sempre CRUA (ver o `dPv`
+// separado logo abaixo, em calcularDerivados) — assim como o teste de
+// Sangramento (mestre.js: testarSangramento/testarSangramentoProfundo,
+// sempre chamado com a Constituição bruta do alvo). Fora esses dois
+// casos (PV/Energia e o teste de Sangramento), um debuff em Constituição
+// afeta normalmente: Velocidade, Massa Corpórea, Força de Vontade,
+// carga, dificuldade de defesa (Derrubar, Arremessar) e qualquer outro
+// teste que use o atributo.
 export function atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificadoresPlanos) {
     const base = Number(dadosPrimarios && dadosPrimarios[atributoChave]) || 0;
     return base + somaModificadoresPara(`atributo:${atributoChave}`, modificadoresPlanos || []);
@@ -522,10 +538,16 @@ export function atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificad
 export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
     // Atributos primários JÁ com os modificadores `atributo:X` — as
     // fórmulas de secundários (Velocidade, Agilidade, Percepção, Massa
-    // Corpórea, Força de Vontade) e de recursos (PV, Energia) partem
-    // do valor efetivo, não do cadastrado.
+    // Corpórea, Força de Vontade) partem do valor efetivo, não do
+    // cadastrado.
     const d = {};
     for (const a of ATRIBUTOS_PRIMARIOS) d[a.key] = atributoPrimarioEfetivo(dadosPrimarios, a.key, modificadoresPlanos);
+
+    // PV/Energia são a exceção: usam Constituição sempre CRUA (ver
+    // comentário em atributoPrimarioEfetivo acima) — só essa chave
+    // difere de `d`, porque as duas fórmulas de RECURSOS só usam
+    // Constituição mesmo.
+    const dPv = { ...d, constituicao: Number(dadosPrimarios.constituicao) || 0 };
 
     const resultado = { secundarios: {}, recursos: {} };
 
@@ -548,7 +570,7 @@ export function calcularDerivados(dadosPrimarios, modificadoresPlanos) {
     }
 
     for (const rec of RECURSOS) {
-        const base = rec.formula(d);
+        const base = rec.formula(dPv);
         const ajustes = modificadoresQueAfetam(`recurso:${rec.key}`, modificadoresPlanos);
         const somaAjustes = ajustes.reduce((acc, m) => acc + m.valor, 0);
         resultado.recursos[rec.key] = {

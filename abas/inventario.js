@@ -1411,11 +1411,12 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
             const modsAlvo = coletarModificadores(fichaAlvo);
-            // Constituição é atributo primário (não um secundário
-            // calculado) — reaproveita calcularDificuldadeDefesaJogador
-            // com base 0 só pra somar valor bruto + modificadores
-            // estruturados ("atributo:constituicao").
-            constituicaoAlvo = calcularDificuldadeDefesaJogador(fichaAlvo.dados, "constituicao", modsAlvo, 0);
+            // Constituição SEMPRE crua aqui — este valor só alimenta o
+            // teste de Sangramento logo abaixo (testarSangramento/
+            // testarSangramentoProfundo), uma das duas exceções onde
+            // Constituição não é afetada por modificador nenhum (a outra
+            // é PV/Energia — ver atributoPrimarioEfetivo em regras.js).
+            constituicaoAlvo = Number(fichaAlvo.dados.constituicao) || 0;
             if (ehFogo) {
                 const percepcaoAtacante = calcularDerivados(estado.fichaAtual.dados, modificadoresPlanosAtacante).secundarios.percepcao.total;
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
@@ -1451,15 +1452,21 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
             // não mudava essa dificuldade até isso acontecer). NPC "rápido"
             // (sem atributosPrimarios) continua usando os campos soltos, que
             // são a única fonte que ele tem.
-            let agilidadeAlvoNpc, constituicaoAlvoNpc;
+            let agilidadeAlvoNpc, constituicaoAlvoNpc, constituicaoAlvoNpcEfetiva;
             if (npc.modoDetalhado && npc.atributosPrimarios) {
                 const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
                 const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
                 agilidadeAlvoNpc = secundariosNpcAlvo.secundarios.agilidade.valor;
-                constituicaoAlvoNpc = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
+                // Mesma exceção acima: Constituição crua pro teste de Sangramento.
+                constituicaoAlvoNpc = Number(npc.atributosPrimarios?.constituicao) || 0;
+                // Já a dificuldade de DEFESA (logo abaixo) usa a Constituição
+                // EFETIVA — essa não é exceção, um debuff nela dificulta a
+                // defesa normalmente.
+                constituicaoAlvoNpcEfetiva = calcularDificuldadeDefesaJogador(npc.atributosPrimarios, "constituicao", modsNpcAlvo, 0);
             } else {
                 agilidadeAlvoNpc = Number(npc.agilidade) || 0;
                 constituicaoAlvoNpc = Number(npc.constituicao) || 0;
+                constituicaoAlvoNpcEfetiva = constituicaoAlvoNpc;
             }
             constituicaoAlvo = constituicaoAlvoNpc;
             if (ehFogo) {
@@ -1467,7 +1474,7 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
                 dificuldade = calcularDificuldadeArmaFogo(armaConfig.dificuldadeAcerto, percepcaoAtacante);
             } else {
                 const atributoDefesaChave = atributoDefesaPorPericia(nomePericia);
-                const valorAtributo = atributoDefesaChave === "constituicao" ? constituicaoAlvoNpc : agilidadeAlvoNpc;
+                const valorAtributo = atributoDefesaChave === "constituicao" ? constituicaoAlvoNpcEfetiva : agilidadeAlvoNpc;
                 const baseDif = baseDificuldadeAtaque(it.nome, nomePericia);
                 dificuldade = baseDif + valorAtributo;
                 // Arte marcial vs. Briga de Rua (manual pg. 22) — só NPC
