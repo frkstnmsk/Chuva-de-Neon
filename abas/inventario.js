@@ -104,8 +104,17 @@ export function renderizarInventario(modificadoresPlanos) {
     // Isso é o que causava a página inteira pular pra cima só de clicar num
     // item pra abrir o popup de detalhes. Guarda a posição aqui e restaura
     // no fim da função pra não deixar isso acontecer.
+    //
+    // O scrollTo sozinho (ver mais abaixo) não bastava na prática: ele só
+    // CORRIGE o scroll depois do colapso já ter acontecido, e em telas
+    // touch (o colapso acontece bem no meio de um gesto de rolagem) o
+    // navegador às vezes ignora essa correção. A trava de altura abaixo
+    // ataca a causa em vez do sintoma — impede o colapso de acontecer,
+    // então não sobra nada pra "restaurar" depois.
     const scrollXAntes = window.scrollX;
     const scrollYAntes = window.scrollY;
+    const alturaListaAntes = el.inventarioListas.getBoundingClientRect().height;
+    if (alturaListaAntes > 0) el.inventarioListas.style.minHeight = `${alturaListaAntes}px`;
 
     // Popup flutuante de item (ver abrirItemPopup/criarLiItem): reseta a
     // marca de "foi recriado neste ciclo" — se o item que estava com o
@@ -308,6 +317,12 @@ export function renderizarInventario(modificadoresPlanos) {
     if (itemPopupAbertoId !== null && !itemPopupFoiRenderizadoNesteCiclo) {
         fecharItemPopup();
     }
+
+    // Libera a trava de altura (ver início da função) — a lista já foi
+    // reconstruída com conteúdo de verdade, então remover o mínimo aqui
+    // não colapsa nada; é só pra não deixar um mínimo "grudado" caso a
+    // categoria mude pra uma com menos itens.
+    el.inventarioListas.style.minHeight = "";
 
     // Restaura a posição de scroll salva no topo da função (ver
     // comentário lá em cima) — sem isso, reconstruir a lista some com o
@@ -1055,10 +1070,21 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
             // Clicou de novo no item que já está com o popup aberto — fecha.
             fecharItemPopup();
         } else {
+            // Abre o popup direto (sem passar por renderizarInventario) —
+            // chipsDetalhesHtml/descricaoHtml/btnEditarHtml já foram
+            // calculados aqui em cima nesta mesma criarLiItem, então não
+            // precisa reconstruir a lista inteira só pra mostrar a
+            // caixinha de um item. Isso também é o que resolve de vez o
+            // bug de "a página volta pro topo ao clicar num item": sem
+            // recriar a lista, não tem innerHTML="" nenhum, então não
+            // tem colapso de altura pra causar o pulo de scroll — em
+            // celular esse colapso durante um toque era mais visível e
+            // mais difícil de disfarçar só restaurando o scroll depois.
             itemPopupAbertoId = id;
             itemPopupPosicao = { x: e.clientX, y: e.clientY };
+            itemPopupFoiRenderizadoNesteCiclo = true;
+            abrirItemPopup(id, it, { chipsDetalhesHtml, descricaoHtml, btnEditarHtml });
         }
-        renderizarInventario(modificadoresPlanos);
     });
 
     // Prévia flutuante da imagem em tamanho maior, seguindo o mouse

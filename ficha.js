@@ -22,7 +22,7 @@ import {
 } from "./abas/receitas.js";
 import { renderizarDeterminacoes, configurarRolagemDeterminacoes } from "./abas/determinacoes.js";
 import { renderizarPericias, configurarBuscaPericia, configurarModalSelecionarAlvo, prepararModalPericia } from "./abas/pericias.js";
-import { renderizarInventario, criarLiItem, fecharCaixaDepositarDinheiroItem, configurarDarItem, configurarSolicitarItem, resolverAtaque, salvarItemDoModal, atualizarCamposPorTag } from "./abas/inventario.js?v=20260926-difacertarocasional";
+import { renderizarInventario, criarLiItem, fecharCaixaDepositarDinheiroItem, configurarDarItem, configurarSolicitarItem, resolverAtaque, salvarItemDoModal, atualizarCamposPorTag } from "./abas/inventario.js?v=20260926c-popupdireto";
 import { renderizarVeiculos, configurarFatorPrecoMateriaisVeiculo } from "./abas/veiculos.js";
 import { renderizarDarknetENotas, configurarFatorPrecoDarknet } from "./abas/darknet.js";
 import { renderizarCenarios, configurarCenarios, configurarPerseguicaoAtiva, fecharCaixaPegarDinheiroCenario, montarGerenciadorCenario } from "./abas/cenario.js";
