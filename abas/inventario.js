@@ -311,8 +311,12 @@ export function renderizarInventario(modificadoresPlanos) {
 
     // Restaura a posição de scroll salva no topo da função (ver
     // comentário lá em cima) — sem isso, reconstruir a lista some com o
-    // scroll do usuário e a página pula pro topo.
+    // scroll do usuário e a página pula pro topo. Restaura de novo no
+    // próximo frame como reforço, caso algum ajuste de layout que rode
+    // logo em seguida (ex: recálculo de espaço da topbar) desfaça a
+    // restauração síncrona.
     window.scrollTo(scrollXAntes, scrollYAntes);
+    requestAnimationFrame(() => window.scrollTo(scrollXAntes, scrollYAntes));
 }
 
 // Exclui uma categoria customizada de inventário (as fixas "Levando

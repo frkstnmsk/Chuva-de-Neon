@@ -3508,8 +3508,8 @@ select.select-guardar-dentro {
     max-height: min(360px, calc(100vh - 16px));
     overflow-y: auto;
     overflow-x: hidden;
-    background: #111318;
-    border: 1px solid rgba(255,255,255,0.14);
+    background: #1a1d24;
+    border: 1px solid rgba(255,255,255,0.22);
     border-radius: 8px;
     box-shadow: 0 8px 28px rgba(0,0,0,0.5);
     padding: 10px 12px 12px;
@@ -3521,7 +3521,9 @@ select.select-guardar-dentro {
    lá em cima NUNCA se aplicavam aqui dentro: os chips (peso, volume,
    descrição etc.) ficavam sem flex-wrap e sem o visual de "pílula",
    saindo tudo grudado/lado a lado de forma bagunçada. Repete aqui as
-   mesmas regras, escopadas pra popup. */
+   mesmas regras, escopadas pra popup, com um pouco mais de contraste
+   que a versão do card (fundo mais claro aqui exige isso pra a
+   bordinha do chip continuar visível). */
 .item-popup-flutuante .entity-detalhes-chips {
     display: flex;
     flex-wrap: wrap;
@@ -3534,8 +3536,8 @@ select.select-guardar-dentro {
     max-width: 100%;
     padding: 3px 10px;
     border-radius: 10px;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.09);
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.22);
     font-family: var(--font-mono);
     white-space: normal;
     overflow-wrap: break-word;
@@ -3572,7 +3574,7 @@ select.select-guardar-dentro {
 .item-popup-flutuante .entity-descricao-texto {
     margin: 6px 0 0;
     padding-top: 6px;
-    border-top: 1px dashed rgba(255,255,255,0.12);
+    border-top: 1px dashed rgba(255,255,255,0.22);
     font-family: var(--font-body);
     font-size: 0.8rem;
     font-style: italic;
