@@ -3504,14 +3504,16 @@ select.select-guardar-dentro {
 .item-popup-flutuante {
     position: fixed;
     z-index: 6000;
-    max-width: min(320px, calc(100vw - 16px));
+    width: min(320px, calc(100vw - 16px));
     max-height: min(360px, calc(100vh - 16px));
     overflow-y: auto;
+    overflow-x: hidden;
     background: #111318;
     border: 1px solid rgba(255,255,255,0.14);
     border-radius: 8px;
     box-shadow: 0 8px 28px rgba(0,0,0,0.5);
     padding: 10px 12px 12px;
+    box-sizing: border-box;
 }
 /* A popup fica fora de .entity-list (é criada direto no document.body —
    ver abrirItemPopup em abas/inventario.js), então as regras
@@ -3525,18 +3527,22 @@ select.select-guardar-dentro {
     flex-wrap: wrap;
     gap: 6px 8px;
     padding-top: 2px;
+    max-width: 100%;
 }
 .item-popup-flutuante .chip-detalhe {
     display: inline-block;
+    max-width: 100%;
     padding: 3px 10px;
     border-radius: 10px;
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.09);
     font-family: var(--font-mono);
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
     font-size: 0.75rem;
     line-height: 1.5;
     color: var(--text-dim);
-    white-space: nowrap;
 }
 .item-popup-cabecalho {
     display: flex;
@@ -3573,6 +3579,8 @@ select.select-guardar-dentro {
     line-height: 1.45;
     color: rgba(255,255,255,0.62);
     white-space: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 .item-popup-flutuante .btn-editar-item-expandido {
     display: block;
