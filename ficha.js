@@ -22,7 +22,7 @@ import {
 } from "./abas/receitas.js";
 import { renderizarDeterminacoes, configurarRolagemDeterminacoes } from "./abas/determinacoes.js";
 import { renderizarPericias, configurarBuscaPericia, configurarModalSelecionarAlvo, prepararModalPericia } from "./abas/pericias.js";
-import { renderizarInventario, criarLiItem, fecharCaixaDepositarDinheiroItem, configurarDarItem, configurarSolicitarItem, resolverAtaque, salvarItemDoModal, atualizarCamposPorTag } from "./abas/inventario.js?v=20260925-popupitem";
+import { renderizarInventario, criarLiItem, fecharCaixaDepositarDinheiroItem, configurarDarItem, configurarSolicitarItem, resolverAtaque, salvarItemDoModal, atualizarCamposPorTag } from "./abas/inventario.js?v=20260926-difacertarocasional";
 import { renderizarVeiculos, configurarFatorPrecoMateriaisVeiculo } from "./abas/veiculos.js";
 import { renderizarDarknetENotas, configurarFatorPrecoDarknet } from "./abas/darknet.js";
 import { renderizarCenarios, configurarCenarios, configurarPerseguicaoAtiva, fecharCaixaPegarDinheiroCenario, montarGerenciadorCenario } from "./abas/cenario.js";
@@ -405,6 +405,7 @@ export const el = {
     implantesPendentesMestre: document.getElementById("implantes-pendentes-mestre"),
     mestreComaPainel: document.getElementById("mestre-coma-painel"),
     mestreDesmaioPainel: document.getElementById("mestre-desmaio-painel"),
+    mestreInfeccaoPainel: document.getElementById("mestre-infeccao-painel"),
     btnTratarOutroJogador: document.getElementById("btn-tratar-outro-jogador"),
     btnMestreAplicarFerida: document.getElementById("btn-mestre-aplicar-ferida"),
     modalCampoTipoVeiculo: document.getElementById("modal-campo-tipo-veiculo"),
@@ -2853,6 +2854,56 @@ export function lerDeltaOcasionais(container, ocasionais) {
     return delta;
 }
 
+// ---------------------------------------------------------------------
+// Variante de htmlCheckboxesOcasionais/lerDeltaOcasionais acima, só que
+// pro alvo "dificuldade:acertar" (geral + por perícia — ver
+// listaAlvosModificador em regras.js) em vez de um bônus de rolagem: o
+// rótulo mostra "dificuldade -X" (mesma convenção de pericias.js/
+// abrirModalSelecionarAlvo) em vez de "+X em {perícia}", já que o valor
+// desconta da DIFICULDADE do golpe, não soma no d20. Classe CSS própria
+// (".ocasional-dificuldade-check") pra não colidir com o par acima
+// quando os dois grupos aparecem juntos na mesma tela.
+// ---------------------------------------------------------------------
+export function htmlCheckboxesOcasionaisDificuldade(ocasionais) {
+    if (!ocasionais.length) return "";
+    return `
+        <div class="pericia-ocasionais" style="margin-top:10px;">
+            ${ocasionais.map((o, idx) => `
+                <label class="checkbox-inline" style="margin-top:4px;">
+                    <input type="checkbox" class="ocasional-dificuldade-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                    ${escapeHtml(o.origem)} (dificuldade ${o.valor >= 0 ? "-" : "+"}${Math.abs(o.valor)})
+                </label>
+            `).join("")}
+        </div>
+    `;
+}
+
+export function lerDeltaOcasionaisDificuldade(container, ocasionais) {
+    let delta = 0;
+    if (!container) return delta;
+    container.querySelectorAll(".ocasional-dificuldade-check").forEach(chk => {
+        const o = ocasionais[Number(chk.dataset.idx)];
+        if (!o) return;
+        if (chk.checked !== o.ativo) {
+            delta += (chk.checked ? o.valor : -o.valor);
+            alternarModificadorOcasional(o, chk.checked);
+        }
+    });
+    return delta;
+}
+
+// Junta os dois alvos possíveis de "Dificuldade: Acertar" (geral +
+// específico da perícia do golpe) numa lista só — mesma combinação
+// montada em abrirModalSelecionarAlvo, reaproveitada aqui pelos fluxos
+// que NÃO passam por aquele modal (Contra-ataque do Aparar, Disparar e
+// Avançar do CQC nível 4 — ver mais abaixo).
+function ocasionaisDificuldadeAcertarDoGolpe(nomePericia) {
+    return [
+        ...modificadoresOcasionaisDoAlvo(estado.fichaAtual, "dificuldade:acertar"),
+        ...modificadoresOcasionaisDoAlvo(estado.fichaAtual, `dificuldade:acertar:pericia:${nomePericia}`)
+    ];
+}
+
 // Anexa os checkboxes de Ocasião Especial da perícia usada numa manobra
 // de combate (Agarrar, Desarmar, Derrubar, Delimitar, Retomar,
 // Imobilizar, Imobilizar Jiu Jitsu) dentro de el.alvoCampoExtra — SOMA
@@ -3007,6 +3058,58 @@ function abrirModalDeltaOcasionais(nomeAlvo, ocasionais) {
         modal.querySelector(".combate-fechar").addEventListener("click", fechar);
         modal.querySelector("#btn-confirmar-ocasionais-rolagem").addEventListener("click", () => {
             const delta = lerDeltaOcasionais(modal.querySelector("#ocasionais-rolagem-lista"), ocasionais);
+            modal.remove();
+            resolve({ confirmado: true, delta });
+        });
+        document.body.appendChild(modal);
+    });
+}
+
+// ---------------------------------------------------------------------
+// Mesma ideia de abrirModalDeltaOcasionais acima, só que pro par de
+// alvos "dificuldade:acertar" (geral + por perícia — ver
+// ocasionaisDificuldadeAcertarDoGolpe) em vez de rolagem: usado pelo
+// Contra-ataque do Aparar, que dispara o golpe sozinho (sem passar pelo
+// modal de seleção de alvo de abrirModalSelecionarAlvo) mas ainda
+// precisa oferecer o checkbox quando o jogador tiver algum modificador
+// desses cadastrado como Ocasião Especial. Sem nenhum ocasional pro
+// alvo, resolve direto (Promise já resolvida), sem abrir modal nenhum —
+// não muda o comportamento de sempre pra quem não usa essa mecânica.
+//
+// Atenção (limite conhecido): o Contra-ataque já foi CONSUMIDO (ver
+// consumirContraAtaquePendente, chamado antes desta função) no momento
+// em que este modal abre — cancelar aqui (botão × ou clique fora) perde
+// o uso do contra-ataque mesmo assim, igual perderia se o jogador
+// simplesmente decidisse não atacar depois de já ter sido avisado que
+// tinha um contra-ataque pendente. Fora isso (jogador realmente sem
+// nenhum ocasional cadastrado, o caso mais comum), nada muda: resolve
+// instantâneo, sem essa tela a mais no meio.
+// ---------------------------------------------------------------------
+function abrirModalDeltaOcasionaisDificuldade(nomeAlvo, ocasionais) {
+    if (!ocasionais.length) return Promise.resolve({ confirmado: true, delta: 0 });
+    return new Promise((resolve) => {
+        let modal = document.getElementById("modal-ocasionais-dificuldade");
+        if (!modal) {
+            modal = document.createElement("div");
+            modal.id = "modal-ocasionais-dificuldade";
+            modal.className = "panel combate-painel-jogador";
+            document.body.appendChild(modal);
+        }
+        modal.innerHTML = `
+            <div class="combate-painel-topo">
+                <span class="eyebrow">${escapeHtml(nomeAlvo)}</span>
+                <button type="button" class="combate-fechar" aria-label="Fechar">×</button>
+            </div>
+            <p class="hint">Marque as Ocasiões Especiais de dificuldade de acerto que se aplicam a este golpe antes de confirmar.</p>
+            <div id="ocasionais-dificuldade-lista">${htmlCheckboxesOcasionaisDificuldade(ocasionais)}</div>
+            <div class="modal-btns">
+                <button type="button" class="btn-lime" id="btn-confirmar-ocasionais-dificuldade">Confirmar ataque</button>
+            </div>
+        `;
+        const fechar = () => { modal.remove(); resolve({ confirmado: false, delta: 0 }); };
+        modal.querySelector(".combate-fechar").addEventListener("click", fechar);
+        modal.querySelector("#btn-confirmar-ocasionais-dificuldade").addEventListener("click", () => {
+            const delta = lerDeltaOcasionaisDificuldade(modal.querySelector("#ocasionais-dificuldade-lista"), ocasionais);
             modal.remove();
             resolve({ confirmado: true, delta });
         });
@@ -3222,8 +3325,16 @@ export async function iniciarUsoItem(it, modificadoresPlanos) {
         if (contraAtaque) {
             const participanteAlvo = (estado.combateAtivoCache.participantes || {})[contraAtaque.contraAlvoPid];
             if (participanteAlvo) {
+                // Dificuldade: Acertar em Ocasião Especial (ver
+                // abrirModalDeltaOcasionaisDificuldade acima) — mesmo
+                // checkbox oferecido em abrirModalSelecionarAlvo pro
+                // ataque normal, só que este golpe pula aquele modal
+                // (contra-ataque mira automaticamente em quem atacou).
+                const ocasionaisDificuldadeContra = ocasionaisDificuldadeAcertarDoGolpe(it.periciaUso);
+                const { confirmado, delta } = await abrirModalDeltaOcasionaisDificuldade(`Contra-ataque: ${it.nome}`, ocasionaisDificuldadeContra);
+                if (!confirmado) return;
                 toast(`Contra-ataque do Aparar: atacando ${contraAtaque.contraAlvoNome} com modificador ${contraAtaque.modificador}.`);
-                await resolverAtaque(it, modificadoresPlanos, { ...participanteAlvo, _pid: contraAtaque.contraAlvoPid }, { modificadorExtra: contraAtaque.modificador, ehContraAtaque: true });
+                await resolverAtaque(it, modificadoresPlanos, { ...participanteAlvo, _pid: contraAtaque.contraAlvoPid }, { modificadorExtra: contraAtaque.modificador, ehContraAtaque: true, reducaoDificuldadeOcasional: delta });
                 return;
             }
         }
@@ -3856,7 +3967,16 @@ export function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
     // contra NPC). Mantém a ordem original dentro de cada grupo.
     opcoes.sort(([, a], [, b]) => (a.tipo === "ficha" ? 1 : 0) - (b.tipo === "ficha" ? 1 : 0));
 
-    contextoAlvo.ataque = { item: it, modificadoresPlanos, ocasionaisPericia: modificadoresOcasionaisDaPericia(estado.fichaAtual, it.periciaUso) };
+    // Dificuldade: Acertar (ver regras.js/listaAlvosModificador) —
+    // junta os dois alvos possíveis (geral "dificuldade:acertar" +
+    // específico da perícia deste golpe, ex.: Especialização em Lâminas
+    // Curtas cobrindo faca/adaga) numa lista só, igual ocasionaisPericia
+    // acima, mas mirando a DIFICULDADE do ataque em vez da rolagem.
+    const ocasionaisDificuldadeAcertar = [
+        ...modificadoresOcasionaisDoAlvo(estado.fichaAtual, "dificuldade:acertar"),
+        ...modificadoresOcasionaisDoAlvo(estado.fichaAtual, `dificuldade:acertar:pericia:${it.periciaUso}`)
+    ];
+    contextoAlvo.ataque = { item: it, modificadoresPlanos, ocasionaisPericia: modificadoresOcasionaisDaPericia(estado.fichaAtual, it.periciaUso), ocasionaisDificuldadeAcertar };
     el.alvoTitulo.innerText = `Atacar com ${it.nome}`;
     el.alvoSelect.innerHTML = "";
     opcoes.forEach(([pid, p]) => {
@@ -3902,6 +4022,21 @@ export function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
             `).join("")}
         </div>
     ` : "";
+    // Dificuldade: Acertar em Ocasião Especial (ver comentário acima, na
+    // montagem de ocasionaisDificuldadeAcertar) — mesmo padrão visual de
+    // ocasionaisHtml, mas o rótulo mostra "dificuldade -X" (convenção já
+    // usada em pericias.js) em vez de "+X na rolagem", já que este alvo
+    // não soma na rolagem, desconta da dificuldade do golpe.
+    const ocasionaisDificuldadeHtml = ocasionaisDificuldadeAcertar.length ? `
+        <div class="pericia-ocasionais" style="margin-top:10px;">
+            ${ocasionaisDificuldadeAcertar.map((o, idx) => `
+                <label class="checkbox-inline" style="margin-top:4px;">
+                    <input type="checkbox" class="alvo-ocasional-dificuldade-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                    ${escapeHtml(o.origem)} (dificuldade ${o.valor >= 0 ? "-" : "+"}${Math.abs(o.valor)})
+                </label>
+            `).join("")}
+        </div>
+    ` : "";
     el.alvoCampoExtra.style.display = "block";
     el.alvoCampoExtra.innerHTML = `
         ${seletorTipoDanoHtml}
@@ -3930,6 +4065,7 @@ export function abrirModalSelecionarAlvo(it, modificadoresPlanos) {
         <input type="number" id="alvo-combatentes-input" min="0" step="1" value="0">
         ` : ""}
         ${ocasionaisHtml}
+        ${ocasionaisDificuldadeHtml}
     `;
     el.modalSelecionarAlvo.classList.add("active");
 }
@@ -4211,6 +4347,15 @@ export function abrirModalDispararAvancar() {
         document.body.appendChild(modal);
     }
     const opts = opcoes.map(([pid, p]) => `<option value="${pid}">${escapeHtml(p.nome)} (${p.tipo === "ficha" ? "jogador" : "NPC"})</option>`).join("");
+    // Dificuldade: Acertar em Ocasião Especial (ver
+    // ocasionaisDificuldadeAcertarDoGolpe/htmlCheckboxesOcasionaisDificuldade
+    // acima) — mesmo checkbox de abrirModalSelecionarAlvo, embutido
+    // direto neste modal (que já tem seleção de alvo própria, não passa
+    // por abrirModalSelecionarAlvo) — os 2 disparos usam o mesmo delta.
+    const ocasionaisDificuldadeDisparo = ocasionaisDificuldadeAcertarDoGolpe(itemPistola.periciaUso);
+    const ocasionaisDificuldadeDisparoHtml = ocasionaisDificuldadeDisparo.length
+        ? `<div id="disparar-avancar-ocasionais-lista">${htmlCheckboxesOcasionaisDificuldade(ocasionaisDificuldadeDisparo)}</div>`
+        : "";
     modal.innerHTML = `
         <div class="combate-painel-topo">
             <span class="eyebrow">Disparar e Avançar — CQC nível 4</span>
@@ -4220,17 +4365,19 @@ export function abrirModalDispararAvancar() {
         <p class="hint">2 disparos com "${escapeHtml(itemPistola.nome)}", fora da ordem de turno, usando a ação já reservada do seu 1º turno.</p>
         <label for="disparar-avancar-alvo-select">Alvo</label>
         <select id="disparar-avancar-alvo-select">${opts}</select>
+        ${ocasionaisDificuldadeDisparoHtml}
         <button type="button" class="btn-lime" id="btn-confirmar-disparar-avancar" style="margin-top:10px;width:100%;">Disparar (2x)</button>
     `;
     modal.querySelector(".combate-fechar").addEventListener("click", () => modal.remove());
     modal.querySelector("#btn-confirmar-disparar-avancar").addEventListener("click", async () => {
         const alvoId = document.getElementById("disparar-avancar-alvo-select").value;
+        const reducaoDificuldadeOcasional = lerDeltaOcasionaisDificuldade(modal.querySelector("#disparar-avancar-ocasionais-lista"), ocasionaisDificuldadeDisparo);
         modal.remove();
-        await resolverDispararAvancar(alvoId, itemPistola);
+        await resolverDispararAvancar(alvoId, itemPistola, reducaoDificuldadeOcasional);
     });
 }
 
-async function resolverDispararAvancar(alvoId, itemPistola) {
+async function resolverDispararAvancar(alvoId, itemPistola, reducaoDificuldadeOcasional = 0) {
     const meuPid = estado.modoNpc ? npcParticipanteIdCombate() : meuParticipanteIdCombate();
     const meuParticipante = meuPid && estado.combateAtivoCache.participantes && estado.combateAtivoCache.participantes[meuPid];
     if (!meuParticipante || !meuParticipante.dispararAvancarDisponivel || meuParticipante.dispararAvancarUsado) {
@@ -4245,8 +4392,8 @@ async function resolverDispararAvancar(alvoId, itemPistola) {
 
     const modificadoresPlanos = modificadoresAtuais();
     toast(`CQC nível 4 — Disparar e Avançar: 2 disparos em ${alvo.nome}, fora da ordem de turno.`);
-    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
-    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true });
+    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true, reducaoDificuldadeOcasional });
+    await resolverAtaque(itemPistola, modificadoresPlanos, { ...alvo, _pid: alvoId }, { ehDisparoAvancarCQC: true, reducaoDificuldadeOcasional });
     await marcarDispararAvancarUsado(meuPid);
     toast(`Disparar e Avançar concluído — pode avançar com sua movimentação livre (igual à Velocidade) em direção aos inimigos restantes.`);
 }

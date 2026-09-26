@@ -39,7 +39,7 @@ import {
     decrementarItemMedico, implantesContagemELimite, resumoModificadores,
     testarAdaptacaoImplante, mestreInstalarImplanteSemTeste, aplicarDanoUsoImplanteGodmode,
     avaliarAvisoCustoVida,
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import {
     TRATAMENTOS_FERIDA, DIFICULDADE_INFECCAO_MINIMA, DIFICULDADE_INFECCAO_MAXIMA,
     somaModificadoresPara, modificadoresOcasionaisDoAlvo, rotuloAlvo,
@@ -53,7 +53,7 @@ import {
     agruparFeridasPorLocal, tratarFerida, testarInfeccaoFerida, isentarInfeccaoFerida, ouvirFeridas,
 } from "../saude.js";
 import {
-    reverterComaGodmode, acordarDesmaioGodmode, pagarCustoSemanal,
+    reverterComaGodmode, acordarDesmaioGodmode, pagarCustoSemanal, curarInfeccaoPersistente,
 } from "../mestre.js?v=20260830-npcnivelpv";
 import { registrarRolagem, ouvirAvisoCustoVida } from "../calendario.js";
 import { renderizarRecuperacaoPV, atualizarStatusTopoCarrossel } from "./atributos.js";
@@ -408,6 +408,41 @@ export function renderizarSaude() {
         } else {
             el.mestreDesmaioPainel.style.display = "none";
             el.mestreDesmaioPainel.innerHTML = "";
+        }
+    }
+
+    // Painel do Mestre pra curar uma infecção "solta": aplicada
+    // manualmente (Painel do Mestre → Aplicar condição, ou durante
+    // combate) sem estar ligada a nenhuma ferida específica — ou cuja
+    // ferida já foi tratada/excluída, mas por algum motivo o espelho
+    // agregado (dados.infeccao) não foi limpo junto (curarInfeccao só
+    // funciona durante um combate ativo, porque busca o caminho
+    // persistente a partir do registro do participante — depois que o
+    // combate acaba, não tem mais como chegar nele por ali). Sem este
+    // botão, essa infecção ficava travada pra sempre sem nenhuma forma
+    // de remover pela interface.
+    if (el.mestreInfeccaoPainel) {
+        const infeccaoAtiva = estado.isMestre && !estado.modoNpc && estado.fichaAtual?.dados?.infeccao?.ativo;
+        if (infeccaoAtiva) {
+            const info = estado.fichaAtual.dados.infeccao;
+            el.mestreInfeccaoPainel.style.display = "";
+            el.mestreInfeccaoPainel.innerHTML = `<p class="hint">🦠 Esta ficha está com Infecção ativa${info.garantida ? " (garantida)" : ""}${info.origem ? ` — ${info.origem}` : ""}. Tempo de repouso +50% até curar.</p>
+                <button type="button" class="btn-lime" id="btn-curar-infeccao-persistente">Curar infecção</button>`;
+            const btnCurarInfeccao = document.getElementById("btn-curar-infeccao-persistente");
+            if (btnCurarInfeccao) {
+                btnCurarInfeccao.addEventListener("click", async () => {
+                    try {
+                        await curarInfeccaoPersistente("ficha", estado.fichaAtualId);
+                        toast("Infecção curada.");
+                    } catch (err) {
+                        console.error(err);
+                        toast("Falha ao curar a infecção.", "erro");
+                    }
+                });
+            }
+        } else {
+            el.mestreInfeccaoPainel.style.display = "none";
+            el.mestreInfeccaoPainel.innerHTML = "";
         }
     }
 

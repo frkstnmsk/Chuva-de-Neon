@@ -21,7 +21,7 @@
 import { db } from "../firebase-config.js?v=20260916-bfcachefix";
 import { ref, update } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 import { estado } from "../estado.js";
-import { el, toast, caminhoBase, escapeHtml } from "../ficha.js?v=20260830-npcnivelpv";
+import { el, toast, caminhoBase, escapeHtml } from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { limiteTreinoAtributo } from "../regras.js";
 import { atendeRequisitoPericia } from "../dados-manual.js";
 import {

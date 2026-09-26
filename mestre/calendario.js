@@ -16,7 +16,7 @@
 // ============================================================
 
 import { estado } from "../estado.js";
-import { el, escapeHtml, toast } from "../ficha.js?v=20260830-npcnivelpv";
+import { el, escapeHtml, toast } from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { rolarD20 } from "../regras.js";
 import { passarODia, passarVariosDias } from "../mestre.js?v=20260830-npcnivelpv";
 import {

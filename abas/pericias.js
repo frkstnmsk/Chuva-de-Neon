@@ -34,9 +34,9 @@ import {
     resolverAgarrar, resolverDesarmar, resolverDerrubar,
     resolverDelimitarAlcance, resolverRetomarAlcance, resolverImobilizar,
     resolverImobilizarJiuJitsu, resolverQuebrarOssosJiuJitsu
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { resolverAtaque } from "./inventario.js";
-import { calcularTotalPericia, modificadoresOcasionaisDaPericia } from "../regras.js";
+import { calcularTotalPericia, modificadoresOcasionaisDaPericia, modificadoresOcasionaisDoAlvo, somaModificadoresPara } from "../regras.js";
 import { listaPericiasPorCategoria, buscarPericiaPorNome } from "../dados-manual.js";
 
 export function renderizarPericias(modificadoresPlanos) {
@@ -77,19 +77,41 @@ export function renderizarPericias(modificadoresPlanos) {
                 `).join("")}
             </div>
         ` : "";
+        // Dificuldade do teste (alvo "dificuldade:pericia:<nome>" — ver
+        // listaAlvosModificador em regras.js): não muda a rolagem em si,
+        // é só pra dar ao jogador/Mestre o valor pra descontar da
+        // dificuldade que o Mestre definir pra esse teste. Mesmo padrão
+        // de checkbox de Ocasião Especial acima, só que mirando esse
+        // outro alvo.
+        const somaDificuldadePericia = somaModificadoresPara(`dificuldade:pericia:${p.nome}`, modificadoresPlanos);
+        const ocasionaisDificuldade = modificadoresOcasionaisDoAlvo(estado.fichaAtual, `dificuldade:pericia:${p.nome}`);
+        const textoDificuldadePericia = somaDificuldadePericia
+            ? ` · dificuldade ${somaDificuldadePericia > 0 ? "-" : "+"}${Math.abs(somaDificuldadePericia)}`
+            : "";
+        const ocasionaisDificuldadeHtml = ocasionaisDificuldade.length ? `
+            <div class="pericia-ocasionais">
+                ${ocasionaisDificuldade.map((o, idx) => `
+                    <label class="checkbox-inline pericia-ocasional-item" title="${escapeHtml(o.origem)} — só conta enquanto marcado">
+                        <input type="checkbox" class="pericia-ocasional-dificuldade-check" data-idx="${idx}" ${o.ativo ? "checked" : ""}>
+                        ${escapeHtml(o.origem)} (dificuldade ${o.valor >= 0 ? "-" : "+"}${Math.abs(o.valor)})
+                    </label>
+                `).join("")}
+            </div>
+        ` : "";
         const especializacoesCompradas = Array.isArray(p.especializacoes) && p.especializacoes.length
             ? ` · especialização nível ${p.especializacoes.slice().sort().join(", ")}`
             : "";
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
-                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}${especializacoesCompradas}</span>
+                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}${especializacoesCompradas}${textoDificuldadePericia}</span>
             </div>
             <div class="entity-badges">
                 <button type="button" class="btn-rolar btn-blue" title="Rolar d20 + ${calc.total}">🎲 ${calc.total >= 0 ? "+" : ""}${calc.total}</button>
                 <span class="total-rolagem">${calc.total}</span>
             </div>
             ${ocasionaisHtml}
+            ${ocasionaisDificuldadeHtml}
         `;
         li.querySelector(".btn-rolar").addEventListener("click", async (e) => {
             e.stopPropagation();
@@ -110,6 +132,14 @@ export function renderizarPericias(modificadoresPlanos) {
             chk.addEventListener("change", (e) => {
                 e.stopPropagation();
                 const o = ocasionais[Number(chk.dataset.idx)];
+                alternarModificadorOcasional(o, chk.checked);
+            });
+        });
+        li.querySelectorAll(".pericia-ocasional-dificuldade-check").forEach(chk => {
+            chk.addEventListener("click", (e) => e.stopPropagation());
+            chk.addEventListener("change", (e) => {
+                e.stopPropagation();
+                const o = ocasionaisDificuldade[Number(chk.dataset.idx)];
                 alternarModificadorOcasional(o, chk.checked);
             });
         });
@@ -268,7 +298,7 @@ export function configurarModalSelecionarAlvo() {
         }
         el.modalSelecionarAlvo.classList.remove("active");
         if (contextoAlvo.ataque) {
-            const { item, modificadoresPlanos, ocasionaisPericia } = contextoAlvo.ataque;
+            const { item, modificadoresPlanos, ocasionaisPericia, ocasionaisDificuldadeAcertar } = contextoAlvo.ataque;
             const tipoDanoSelect = document.getElementById("alvo-tipo-dano-select");
             const tipoDanoEscolhido = tipoDanoSelect ? tipoDanoSelect.value : "padrao";
             const localMiraSelect = document.getElementById("alvo-local-mira-select");
@@ -304,13 +334,29 @@ export function configurarModalSelecionarAlvo() {
                     togglesOcasionais.push({ o, novoValor: chk.checked });
                 }
             });
+            // Dificuldade: Acertar em Ocasião Especial (ver
+            // abrirModalSelecionarAlvo, ficha.js) — mesmo mecanismo do
+            // bloco acima, só que o delta aqui NÃO entra no
+            // modificadorExtra (que soma na ROLAGEM); ele desconta da
+            // DIFICULDADE do golpe, então vai num campo à parte que
+            // resolverAtaque soma em cima de reducaoAcertarAtacante.
+            let reducaoDificuldadeOcasionalDelta = 0;
+            document.querySelectorAll(".alvo-ocasional-dificuldade-check").forEach(chk => {
+                const o = (ocasionaisDificuldadeAcertar || [])[Number(chk.dataset.idx)];
+                if (!o) return;
+                if (chk.checked !== o.ativo) {
+                    reducaoDificuldadeOcasionalDelta += (chk.checked ? o.valor : -o.valor);
+                    togglesOcasionais.push({ o, novoValor: chk.checked });
+                }
+            });
             for (const { o, novoValor } of togglesOcasionais) {
                 alternarModificadorOcasional(o, novoValor);
             }
             limparContextos();
             await resolverAtaque(item, modificadoresPlanos, { ...participante, _pid: pid }, {
                 localMira, situacional, tipoDanoEscolhido,
-                modificadorExtra: modificadorOcasionalDelta
+                modificadorExtra: modificadorOcasionalDelta,
+                reducaoDificuldadeOcasional: reducaoDificuldadeOcasionalDelta
             });
         } else if (contextoAlvo.agarrar) {
             const { nomePericia, modificador, ocasionais } = contextoAlvo.agarrar;

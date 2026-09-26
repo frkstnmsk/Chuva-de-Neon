@@ -37,7 +37,7 @@ import {
     abrirModalInstalarAcessorioVeiculo, removerAcessorioVeiculo, testarAcessorioVeiculo,
     usarAcessorioVeiculo, abrirModalInstalarArmaVeiculo, removerArmaDoVeiculo,
     motivoMecanicoVeiculoIndisponivel
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import {
     calcularModificadoresVeiculo, custoReparoVeiculo, custoUpgradeVeiculo,
     itensArmaInstaladosEmVeiculo, modificadoresQueAfetam, slotsAcessoriosUsados,

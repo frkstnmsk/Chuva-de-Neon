@@ -2749,6 +2749,12 @@ export async function aplicarInfeccao(participanteId, origem, garantida = false)
     if (caminhoPersistente) await set(ref(db, caminhoMesa(caminhoPersistente)), dadosInfeccao);
 }
 
+export async function curarInfeccaoPersistente(tipo, refId) {
+    if (!refId) return;
+    const caminho = tipo === "npc" ? `npcs/${refId}/infeccao` : `fichas/${refId}/dados/infeccao`;
+    await remove(ref(db, caminhoMesa(caminho)));
+}
+
 export async function curarInfeccao(participanteId) {
     const caminhoPersistente = await caminhoPersistenteDoParticipante(participanteId);
     await remove(ref(db, caminhoMesa(`combateAtivo/participantes/${participanteId}/infeccao`)));
@@ -3134,6 +3140,27 @@ async function processarRecuperacoesPV(fichasAtivas, quantidadeDias, diaIndiceAt
                 ativa: !avanco.completo
             }
         });
+
+        // Repouso completo: as feridas já tratadas (que é a única forma
+        // de o repouso ter começado — ver bloqueio em
+        // renderizarRecuperacaoPV, atributos.js) somem da ficha, e
+        // qualquer infecção pendente é curada junto — inclusive a
+        // "solta" (aplicada via condição/combate, sem ferida vinculada;
+        // ver aplicarInfeccao/curarInfeccaoPersistente em mestre.js),
+        // que sincronizarFlagInfeccaoAgregada sozinha não alcançaria por
+        // não haver ferida nenhuma pra olhar.
+        if (avanco.completo) {
+            const snapFeridas = await get(ref(db, caminhoMesa(`fichas/${fichaId}/feridas`)));
+            if (snapFeridas.exists()) {
+                const feridas = snapFeridas.val();
+                for (const [feridaId, ferida] of Object.entries(feridas)) {
+                    if (ferida && ferida.estado === "tratada") {
+                        await remove(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)));
+                    }
+                }
+            }
+            await remove(ref(db, caminhoMesa(`fichas/${fichaId}/dados/infeccao`)));
+        }
 
         recuperacoesPV.push({
             fichaId,

@@ -48,7 +48,7 @@
 import { db } from "../firebase-config.js?v=20260916-bfcachefix";
 import { ref, update } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 import { estado } from "../estado.js";
-import { escapeHtml, toast, abrirModalNovo, caminhoBase, gerarIdLocal } from "../ficha.js?v=20260830-npcnivelpv";
+import { escapeHtml, toast, abrirModalNovo, caminhoBase, gerarIdLocal } from "../ficha.js?v=20260926b-difacertarcontraataque";
 import {
     ouvirLojas, criarLoja, editarLoja, excluirLoja,
     adicionarItemNaLoja, editarItemDaLoja, removerItemDaLoja,

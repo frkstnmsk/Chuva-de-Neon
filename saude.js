@@ -343,6 +343,16 @@ export async function tratarFerida(fichaId, feridaId, {
         const atualizacoesGodmode = ehCirurgiaDeCampo ? {}
             : ehRemoverProjetil ? { estado: "aberta", tipo: "corte" }
             : { estado: config.efeitoSucesso };
+        // A infecção é ligada à FERIDA, não ao estado dela — tratar com
+        // sucesso não limpava infeccaoAtiva/infeccaoGarantida, então uma
+        // ferida infeccionada continuava marcada "infeccionada" pra
+        // sempre mesmo depois de "tratada" (só sumia se a ferida fosse
+        // excluída — ver removerFerida). Como "tratada" fecha o
+        // ferimento de vez, a infecção some junto.
+        if (ferida.infeccaoAtiva && atualizacoesGodmode.estado === "tratada") {
+            atualizacoesGodmode.infeccaoAtiva = false;
+            atualizacoesGodmode.infeccaoGarantida = false;
+        }
         const origemAutomatica = sucessoAutomaticoItem
             ? `sucesso automático — item usado${nomeItemUsado ? ` (${nomeItemUsado})` : ""}`
             : "pelo Mestre (Godmode), sem teste nem item";
@@ -353,6 +363,9 @@ export async function tratarFerida(fichaId, feridaId, {
                 : `${config.label}: tratado automaticamente ${origemAutomatica}.`;
         if (Object.keys(atualizacoesGodmode).length) {
             await update(ref(db, caminhoMesa(`fichas/${fichaId}/feridas/${feridaId}`)), atualizacoesGodmode);
+        }
+        if (atualizacoesGodmode.infeccaoAtiva === false) {
+            await sincronizarFlagInfeccaoAgregada(fichaId);
         }
         await registrarHistorico(fichaId, feridaId, { acao: config.label, quem: tratadorNome, resultado: detalheGodmode });
         // Ferida "sangramento" tratada com sucesso (Estancar Sangramento
@@ -416,6 +429,14 @@ export async function tratarFerida(fichaId, feridaId, {
         } else if (acao !== "cirurgia_de_campo") {
             atualizacoesFerida.estado = config.efeitoSucesso;
         }
+        // Ver comentário equivalente no caminho godmode/sucesso automático
+        // acima: tratar com sucesso e fechar a ferida ("tratada") também
+        // limpa a infecção dela, senão ela ficava marcada infeccionada
+        // pra sempre mesmo depois de tratada.
+        if (ferida.infeccaoAtiva && atualizacoesFerida.estado === "tratada") {
+            atualizacoesFerida.infeccaoAtiva = false;
+            atualizacoesFerida.infeccaoGarantida = false;
+        }
     } else {
         // Dano por margem de falha (manual, "Regras gerais de
         // tratamento"): 5 PVs por ponto abaixo da dificuldade, em
@@ -473,7 +494,7 @@ export async function tratarFerida(fichaId, feridaId, {
             payload: { fichaId, origem: "cirurgia_de_campo" }
         });
     }
-    if (atualizacoesFerida.infeccaoAtiva) {
+    if (atualizacoesFerida.infeccaoAtiva !== undefined) {
         await sincronizarFlagInfeccaoAgregada(fichaId);
     }
     // Mesmo cancelamento do caminho Godmode acima: ferida "sangramento"

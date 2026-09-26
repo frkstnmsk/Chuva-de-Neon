@@ -100,7 +100,23 @@ export function listaAlvosModificador(pericias = []) {
         // pode ficar sempre ativo (ex: uma Vantagem permanente) ou marcado
         // "Ocasião especial" (ex: um item consumível, só quando usado
         // naquele teste específico).
-        { value: "dificuldade:infeccao", label: "Dificuldade: Resistir a Infecção (valor reduz a dificuldade)" }
+        { value: "dificuldade:infeccao", label: "Dificuldade: Resistir a Infecção (valor reduz a dificuldade)" },
+        // Modificadores de dificuldade de combate — mesma convenção de
+        // "dificuldade:infeccao" acima (valor positivo REDUZ a
+        // dificuldade, negativo aumenta), só que aplicados no ataque
+        // (ver resolverAtaque em abas/inventario.js) em vez de um teste
+        // isolado:
+        // - "acertar" geral: soma no ATACANTE, reduz a dificuldade de
+        //   TODO golpe que ele desfira (ex.: uma Vantagem de pontaria).
+        // - "acertar" por perícia de ataque: mesma ideia, mas só conta
+        //   quando o golpe usa aquela perícia específica (ex.:
+        //   Especialização que facilita golpear com Lâminas Curtas —
+        //   cobre faca, adaga etc.).
+        // - "defesa" geral: soma no ALVO (quem está sendo atacado),
+        //   aumenta a dificuldade de QUALQUER UM acertá-lo (ex.: uma
+        //   Vantagem de reflexos/blindagem).
+        { value: "dificuldade:acertar", label: "Dificuldade: Acertar (geral — reduz a dificuldade de QUALQUER golpe seu)" },
+        { value: "dificuldade:defesa", label: "Dificuldade: Ser acertado (geral — some no seu golpe recebido; positivo dificulta acertar você)" },
     ];
     const nomesCatalogo = new Set(PERICIAS_MANUAL.map(p => p.nome));
     const nomesExtras = pericias
@@ -108,7 +124,11 @@ export function listaAlvosModificador(pericias = []) {
         .filter(nome => nome && !nomesCatalogo.has(nome));
     const alvosPericias = [
         ...PERICIAS_MANUAL.map(p => ({ value: `pericia:${p.nome}`, label: `Perícia: ${p.nome}` })),
-        ...nomesExtras.map(nome => ({ value: `pericia:${nome}`, label: `Perícia: ${nome}` }))
+        ...nomesExtras.map(nome => ({ value: `pericia:${nome}`, label: `Perícia: ${nome}` })),
+        ...PERICIAS_MANUAL.map(p => ({ value: `dificuldade:acertar:pericia:${p.nome}`, label: `Dificuldade: Acertar com ${p.nome} (reduz a dificuldade de golpes com essa perícia)` })),
+        ...nomesExtras.map(nome => ({ value: `dificuldade:acertar:pericia:${nome}`, label: `Dificuldade: Acertar com ${nome} (reduz a dificuldade de golpes com essa perícia)` })),
+        ...PERICIAS_MANUAL.map(p => ({ value: `dificuldade:pericia:${p.nome}`, label: `Dificuldade: Teste de ${p.nome} (reduz a dificuldade desse teste)` })),
+        ...nomesExtras.map(nome => ({ value: `dificuldade:pericia:${nome}`, label: `Dificuldade: Teste de ${nome} (reduz a dificuldade desse teste)` }))
     ];
     return [...alvosFixos, ...alvosPericias];
 }

@@ -49,7 +49,7 @@ import {
     lerReducaoDanoDoModal, lerSaldoDoItemDoModal, montarListaCompartimentos, montarListaEfeitosMedicos,
     montarModificacoesArma, montarReducaoDanoChecklist, popularSelectSubtipoPorte,
     recalcularQuimicoAutoPreenchido, renderizarLinhasMateriaisQuimico, modificadoresAtuais
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { ref, get, update, remove } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
 import { db } from "../firebase-config.js?v=20260916-bfcachefix";
 import {
@@ -1307,6 +1307,13 @@ async function proximoNumeroDisparo(itemId) {
 // registrado numa única linha explícita de ACERTO/ERRO no Log de Dados.
 export async function resolverAtaque(it, modificadoresPlanosAtacante, participante, opcoes = {}) {
     const modificadorExtra = opcoes.modificadorExtra || 0;
+    // Dificuldade: Acertar em Ocasião Especial (checkbox montado em
+    // abrirModalSelecionarAlvo/ficha.js, lido em configurarModalSelecionarAlvo/
+    // abas/pericias.js): diferente de modificadorExtra acima (que soma na
+    // ROLAGEM), este valor desconta da DIFICULDADE do golpe — junta-se a
+    // reducaoAcertarAtacante mais abaixo, junto dos modificadores
+    // permanentes de "dificuldade:acertar"/"dificuldade:acertar:pericia:X".
+    const reducaoDificuldadeOcasional = opcoes.reducaoDificuldadeOcasional || 0;
     const ehContraAtaque = !!opcoes.ehContraAtaque;
     const ehDisparoAvancarCQC = !!opcoes.ehDisparoAvancarCQC;
     const nomePericia = it.periciaUso;
@@ -1523,7 +1530,7 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
     // o sangramento acontece — golpes mirados perfurantes sangram tanto
     // no tiro quanto no corpo a corpo/arma branca, ver comentário lá
     // embaixo).
-    let dificuldade, nomeAlvo, constituicaoAlvo = 0;
+    let dificuldade, nomeAlvo, constituicaoAlvo = 0, bonusDefesaAlvo = 0;
     try {
         if (participante.tipo === "ficha") {
             const snap = await get(ref(db, caminhoMesa(`fichas/${participante.refId}`)));
@@ -1531,6 +1538,7 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
             const fichaAlvo = normalizarFicha(snap.val());
             nomeAlvo = (fichaAlvo.config && fichaAlvo.config.nomeExibicao) || participante.nome;
             const modsAlvo = coletarModificadores(fichaAlvo);
+            bonusDefesaAlvo = somaModificadoresPara("dificuldade:defesa", modsAlvo);
             // Constituição SEMPRE crua aqui — este valor só alimenta o
             // teste de Sangramento logo abaixo (testarSangramento/
             // testarSangramentoProfundo), uma das duas exceções onde
@@ -1575,6 +1583,7 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
             let agilidadeAlvoNpc, constituicaoAlvoNpc, constituicaoAlvoNpcEfetiva;
             if (npc.modoDetalhado && npc.atributosPrimarios) {
                 const modsNpcAlvo = coletarModificadores({ vantagens: npc.vantagens });
+                bonusDefesaAlvo = somaModificadoresPara("dificuldade:defesa", modsNpcAlvo);
                 const secundariosNpcAlvo = calcularSecundariosNpc(npc.atributosPrimarios, npc.secundariosOverride, modsNpcAlvo);
                 agilidadeAlvoNpc = secundariosNpcAlvo.secundarios.agilidade.valor;
                 // Mesma exceção acima: Constituição crua pro teste de Sangramento.
@@ -1645,6 +1654,24 @@ export async function resolverAtaque(it, modificadoresPlanosAtacante, participan
     if (statusDerrubadoAlvo && statusDerrubadoAlvo.ativo) {
         dificuldade -= 3;
         notasSituacionaisLista.push(`${nomeAlvo} está DERRUBADO (-3 na dificuldade)`);
+    }
+
+    // Modificadores de dificuldade (ver regras.js, listaAlvosModificador):
+    // reduz a dificuldade pelo lado do ATACANTE (geral "dificuldade:acertar"
+    // + o específico da perícia usada nesse golpe, ex.: uma
+    // Especialização em Lâminas Curtas cobre ataques de faca) e aumenta
+    // pelo lado do ALVO ("dificuldade:defesa" — o quanto ele é difícil
+    // de acertar em geral, ex.: uma Vantagem de reflexos).
+    const reducaoAcertarAtacante = somaModificadoresPara("dificuldade:acertar", modificadoresPlanosAtacante)
+        + somaModificadoresPara(`dificuldade:acertar:pericia:${nomePericia}`, modificadoresPlanosAtacante)
+        + reducaoDificuldadeOcasional;
+    if (reducaoAcertarAtacante) {
+        dificuldade -= reducaoAcertarAtacante;
+        notasSituacionaisLista.push(`${reducaoAcertarAtacante > 0 ? "-" : "+"}${Math.abs(reducaoAcertarAtacante)} na dificuldade (modificador de acerto de ${nomeAtacante})`);
+    }
+    if (bonusDefesaAlvo) {
+        dificuldade += bonusDefesaAlvo;
+        notasSituacionaisLista.push(`${bonusDefesaAlvo > 0 ? "+" : ""}${bonusDefesaAlvo} na dificuldade (modificador de defesa de ${nomeAlvo})`);
     }
 
     const notaSituacional = notasSituacionaisLista.length ? ` Situacional: ${notasSituacionaisLista.join("; ")}.` : "";

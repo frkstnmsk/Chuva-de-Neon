@@ -52,7 +52,7 @@ import {
     nomeDeFicha,
     npcParticipanteIdCombate, resetarDisparosTurno, tentarLevantarDerrubado,
     tentarLibertarImobilizado
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { montarPainelAcoesPendentes } from "../mestre/acoes-pendentes.js";
 import { montarFormularioNpcDetalhado } from "../mestre/npcs.js";
 import { atributoPrimarioEfetivo, calcularDanoDesarmado, calcularTotalPericia, somaModificadoresPara } from "../regras.js";

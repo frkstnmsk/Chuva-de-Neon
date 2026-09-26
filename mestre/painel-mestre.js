@@ -20,7 +20,7 @@ import { estado, definirLimpezaPainelMestre } from "../estado.js";
 import {
     el, escapeHtml, toast, renderizarTudo,
     nomeDeFicha, participanteIdPorAlvo, combateComIniciativaAtivo,
-} from "../ficha.js?v=20260830-npcnivelpv";
+} from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { LOCAIS_MIRA } from "../dados-manual.js";
 import { registrarRolagem } from "../calendario.js";
 import {
