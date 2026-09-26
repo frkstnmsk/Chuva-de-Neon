@@ -97,6 +97,16 @@ import { salvarItemNoBanco, buscarItensGlobaisPorNome } from "../itens-globais.j
 
 // ---------------------------------------------------------------------
 export function renderizarInventario(modificadoresPlanos) {
+    // A lista é reconstruída do zero mais abaixo (el.inventarioListas.innerHTML
+    // = ""), o que colapsa a altura da página por um instante — o navegador
+    // aproveita esse instante pra "travar" o scroll no topo, e o conteúdo
+    // não volta a rolar pra posição de antes sozinho depois de reconstruído.
+    // Isso é o que causava a página inteira pular pra cima só de clicar num
+    // item pra abrir o popup de detalhes. Guarda a posição aqui e restaura
+    // no fim da função pra não deixar isso acontecer.
+    const scrollXAntes = window.scrollX;
+    const scrollYAntes = window.scrollY;
+
     // Popup flutuante de item (ver abrirItemPopup/criarLiItem): reseta a
     // marca de "foi recriado neste ciclo" — se o item que estava com o
     // popup aberto não passar de novo por criarLiItem (foi excluído,
@@ -298,6 +308,11 @@ export function renderizarInventario(modificadoresPlanos) {
     if (itemPopupAbertoId !== null && !itemPopupFoiRenderizadoNesteCiclo) {
         fecharItemPopup();
     }
+
+    // Restaura a posição de scroll salva no topo da função (ver
+    // comentário lá em cima) — sem isso, reconstruir a lista some com o
+    // scroll do usuário e a página pula pro topo.
+    window.scrollTo(scrollXAntes, scrollYAntes);
 }
 
 // Exclui uma categoria customizada de inventário (as fixas "Levando
