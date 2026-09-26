@@ -3493,3 +3493,55 @@ select.select-guardar-dentro {
     text-shadow: 0 0 18px rgba(239, 68, 68, 0.65), 0 0 40px rgba(239, 68, 68, 0.35);
     letter-spacing: 4px;
 }
+
+/* Popup flutuante de detalhes do item de inventário (ver criarLiItem/
+   abrirItemPopup em abas/inventario.js): ao clicar num item, abre esta
+   caixinha perto do ponto do clique com tudo que antes só aparecia no
+   hover (chips de tag/peso/volume/etc., descrição, Editar) — os botões
+   de ação continuam sempre visíveis no card, isso aqui é só a parte
+   informativa. Reaproveita .entity-detalhes-chips/.chip-detalhe/
+   .entity-descricao-texto/.btn-ghost, que já existem pro card normal. */
+.item-popup-flutuante {
+    position: fixed;
+    z-index: 6000;
+    max-width: min(320px, calc(100vw - 16px));
+    max-height: min(360px, calc(100vh - 16px));
+    overflow-y: auto;
+    background: #111318;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+    padding: 10px 12px 12px;
+}
+.item-popup-cabecalho {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.item-popup-titulo {
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    color: #fff;
+}
+.item-popup-fechar {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+.item-popup-fechar:hover {
+    color: #fff;
+}
+.item-popup-flutuante .entity-descricao-texto {
+    white-space: normal;
+}
+.item-popup-flutuante .btn-editar-item-expandido {
+    display: block;
+    margin-top: 10px;
+}

@@ -97,6 +97,13 @@ import { salvarItemNoBanco, buscarItensGlobaisPorNome } from "../itens-globais.j
 
 // ---------------------------------------------------------------------
 export function renderizarInventario(modificadoresPlanos) {
+    // Popup flutuante de item (ver abrirItemPopup/criarLiItem): reseta a
+    // marca de "foi recriado neste ciclo" — se o item que estava com o
+    // popup aberto não passar de novo por criarLiItem (foi excluído,
+    // movido pra outra ficha etc.), o popup fecha sozinho no fim desta
+    // função em vez de ficar preso na tela com dado velho.
+    itemPopupFoiRenderizadoNesteCiclo = false;
+
     // "Solicitar item" (ver configurarSolicitarItem abaixo) é só pro
     // jogador — o Mestre já usa "+ Adicionar item" direto, sem precisar
     // de aprovação de ninguém.
@@ -284,6 +291,13 @@ export function renderizarInventario(modificadoresPlanos) {
             : nomeCategoria(estado.fichaAtual, estado.categoriaInventarioAtiva);
         el.inventarioListas.appendChild(montarBloco(tituloTexto, pesoCategoria, itensCategoria, "Nenhum item aqui ainda."));
     }
+
+    // Item que estava com o popup aberto sumiu desta renderização —
+    // fecha a caixinha em vez de deixá-la flutuando com informação de
+    // um item que não existe mais (ou não está mais visível aqui).
+    if (itemPopupAbertoId !== null && !itemPopupFoiRenderizadoNesteCiclo) {
+        fecharItemPopup();
+    }
 }
 
 // Exclui uma categoria customizada de inventário (as fixas "Levando
@@ -357,6 +371,86 @@ let itemDinheiroCaixaAbertaId = null;
 // mora só aqui.
 export function fecharCaixaDepositarDinheiroItem() {
     itemDinheiroCaixaAbertaId = null;
+}
+
+// ---------------------------------------------------------------------
+// Popup flutuante de detalhes do item — ao clicar num item da lista,
+// abre uma caixinha com tudo que antes ficava escondido no hover (tag,
+// peso, volume, calibre etc., descrição, Editar), posicionada perto de
+// onde o mouse clicou. Só um item por vez (mesmo padrão de
+// itemDinheiroCaixaAbertaId acima); é recriada do zero a cada
+// renderizarInventario (nunca fica com dado velho se o Firebase
+// atualizar o inventário com o popup aberto — ver o remove() no topo de
+// renderizarInventario e o reset no fim dela, ambos mais abaixo).
+let itemPopupAbertoId = null;
+let itemPopupPosicao = null; // { x, y } do clique que abriu o popup
+let itemPopupFoiRenderizadoNesteCiclo = false;
+let listenerFecharItemPopupRegistrado = false;
+
+function fecharItemPopup() {
+    itemPopupAbertoId = null;
+    itemPopupPosicao = null;
+    document.getElementById("item-popup-flutuante")?.remove();
+}
+
+// Registrado uma única vez (guardado pela flag acima) — fecha o popup
+// em qualquer clique que sobre até o document. O clique que ABRE o
+// popup (li) e cliques DENTRO do próprio popup chamam e.stopPropagation()
+// antes disso, então só clique de fato "fora" chega aqui.
+function registrarFechamentoItemPopupPorCliqueFora() {
+    if (listenerFecharItemPopupRegistrado) return;
+    listenerFecharItemPopupRegistrado = true;
+    document.addEventListener("click", () => {
+        if (itemPopupAbertoId !== null) fecharItemPopup();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && itemPopupAbertoId !== null) fecharItemPopup();
+    });
+}
+
+// Cria (ou recria) a caixinha flutuante pro item `id`, com o conteúdo já
+// pronto (mesmos chips/descrição/botão Editar que antes iam dentro do
+// card). Posiciona ACIMA do ponto de clique guardado em itemPopupPosicao,
+// e reajusta pra caber na tela (vira embaixo se não tiver espaço em cima,
+// e não deixa vazar pelas laterais).
+function abrirItemPopup(id, it, { chipsDetalhesHtml, descricaoHtml, btnEditarHtml }) {
+    document.getElementById("item-popup-flutuante")?.remove();
+    const popup = document.createElement("div");
+    popup.id = "item-popup-flutuante";
+    popup.className = "item-popup-flutuante";
+    popup.innerHTML = `
+        <div class="item-popup-cabecalho">
+            <span class="item-popup-titulo">${escapeHtml(it.nome)}</span>
+            <button type="button" class="item-popup-fechar" title="Fechar">×</button>
+        </div>
+        <div class="entity-detalhes-chips">${chipsDetalhesHtml}</div>
+        ${descricaoHtml}
+        ${btnEditarHtml}
+    `;
+    popup.addEventListener("click", (e) => e.stopPropagation());
+    document.body.appendChild(popup);
+
+    const btnFechar = popup.querySelector(".item-popup-fechar");
+    if (btnFechar) btnFechar.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fecharItemPopup();
+    });
+    const btnEditarPopup = popup.querySelector(".btn-editar-item-expandido");
+    if (btnEditarPopup) btnEditarPopup.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fecharItemPopup();
+        abrirModalEdicao("inventario", id);
+    });
+
+    const margem = 8;
+    const pos = itemPopupPosicao || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const rect = popup.getBoundingClientRect();
+    let left = pos.x - rect.width / 2;
+    left = Math.max(margem, Math.min(left, window.innerWidth - rect.width - margem));
+    let top = pos.y - rect.height - 12; // acima do clique, por padrão
+    if (top < margem) top = Math.min(pos.y + 12, window.innerHeight - rect.height - margem); // sem espaço em cima -> abre embaixo
+    popup.style.left = `${left}px`;
+    popup.style.top = `${top}px`;
 }
 
 export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) {
@@ -576,15 +670,22 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
         ? `<button type="button" class="btn-editar-item-expandido btn-ghost">✏️ Editar item</button>`
         : "";
 
+    // Chips/descrição/Editar não ficam mais dentro do card (era a
+    // `.entity-sub` que só aparecia no hover) — agora só existem dentro
+    // da caixinha flutuante (ver abrirItemPopup acima), aberta ao
+    // clicar no item (ver o addEventListener("click") no fim desta
+    // função). Se ESTE item é o que está com o popup aberto agora,
+    // recria a caixinha com o conteúdo atual (mesmo que tenha acabado
+    // de mudar por causa de uma sincronização do Firebase).
+    if (itemPopupAbertoId === id) {
+        itemPopupFoiRenderizadoNesteCiclo = true;
+        abrirItemPopup(id, it, { chipsDetalhesHtml, descricaoHtml, btnEditarHtml });
+    }
+
     li.innerHTML = `
         ${it.imagem ? `<img class="entity-thumb" src="${escapeHtml(it.imagem)}" alt="">` : ""}
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
-            <div class="entity-sub">
-                <div class="entity-detalhes-chips">${chipsDetalhesHtml}</div>
-                ${descricaoHtml}
-                ${btnEditarHtml}
-            </div>
         </div>
         <div class="entity-badges">
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="${semCarregador ? "Tem munição carregada no tambor/câmara" : "Tem um carregador anexado"}">🔵 Carregada</span>` : ""}
@@ -930,16 +1031,16 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
 
     li.addEventListener("click", (e) => {
         e.stopPropagation();
-        li.classList.toggle("entity-item-expandido");
+        registrarFechamentoItemPopupPorCliqueFora();
+        if (itemPopupAbertoId === id) {
+            // Clicou de novo no item que já está com o popup aberto — fecha.
+            fecharItemPopup();
+        } else {
+            itemPopupAbertoId = id;
+            itemPopupPosicao = { x: e.clientX, y: e.clientY };
+        }
+        renderizarInventario(modificadoresPlanos);
     });
-
-    const btnEditarExpandido = li.querySelector(".btn-editar-item-expandido");
-    if (btnEditarExpandido) {
-        btnEditarExpandido.addEventListener("click", (e) => {
-            e.stopPropagation();
-            abrirModalEdicao("inventario", id);
-        });
-    }
 
     // Prévia flutuante da imagem em tamanho maior, seguindo o mouse
     // (ver ativarPreviewFlutuanteImagem) — só faz sentido com mouse de

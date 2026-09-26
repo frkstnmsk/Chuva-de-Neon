@@ -74,10 +74,24 @@ export function renderizarAtributos(modificadoresPlanos) {
         const totalAttr = baseAttr + ajustesAttr.reduce((acc, m) => acc + m.valor, 0);
         const cardAttr = input.closest(".attr-card");
         cardAttr.title = textoDetalhamento(attr.label, baseAttr, "Base (valor cadastrado)", ajustesAttr, totalAttr);
+        // "Rolagem de X" é uma família DIFERENTE de modificador (ver
+        // regras.js): não muda o valor do atributo (escala, secundários,
+        // carga, defesa continuam só com `ajustesAttr` acima) — soma só
+        // na hora de rolar o d20 do próprio atributo e nas perícias
+        // baseadas nele (ver atributoParaRolagemPropria/calcularTotalPericia).
+        // Por isso entra à parte no tooltip e no badge, sem mexer no
+        // "efetivo" calculado acima.
+        const ajustesRolagem = modificadoresQueAfetam(`rolagem:${attr.key}`, modificadoresPlanos);
+        const somaRolagem = ajustesRolagem.reduce((acc, m) => acc + m.valor, 0);
+        if (ajustesRolagem.length) {
+            const linhasRolagem = ajustesRolagem.map(m => `${m.valor >= 0 ? "+" : ""}${m.valor} (${m.origem})`).join(", ");
+            cardAttr.title += `\n\nSó na rolagem de ${attr.label} e perícias baseadas nela: ${linhasRolagem} (total ${somaRolagem >= 0 ? "+" : ""}${somaRolagem})`;
+        }
         // Valor efetivo (base + modificadores) visível no próprio card:
         // é ele que entra na rolagem, na escala de dano, na dificuldade
         // de defesa e nas fórmulas dos secundários/PV/Energia. Só
-        // aparece quando há algum modificador ativo no atributo.
+        // aparece quando há algum modificador ativo no atributo (ou
+        // bônus só-de-rolagem, mostrado à parte).
         let efetivoEl = cardAttr.querySelector(".attr-efetivo");
         if (!efetivoEl) {
             efetivoEl = document.createElement("span");
@@ -87,9 +101,12 @@ export function renderizarAtributos(modificadoresPlanos) {
             else cardAttr.appendChild(efetivoEl);
         }
         const somaAjustesAttr = totalAttr - baseAttr;
-        efetivoEl.style.display = somaAjustesAttr ? "" : "none";
-        efetivoEl.classList.toggle("negativo", somaAjustesAttr < 0);
-        efetivoEl.innerText = somaAjustesAttr ? `efetivo ${totalAttr} (${somaAjustesAttr > 0 ? "+" : ""}${somaAjustesAttr})` : "";
+        const pedacosBadge = [];
+        if (somaAjustesAttr) pedacosBadge.push(`efetivo ${totalAttr} (${somaAjustesAttr > 0 ? "+" : ""}${somaAjustesAttr})`);
+        if (somaRolagem) pedacosBadge.push(`rolagem ${somaRolagem > 0 ? "+" : ""}${somaRolagem}`);
+        efetivoEl.style.display = pedacosBadge.length ? "" : "none";
+        efetivoEl.classList.toggle("negativo", !pedacosBadge.length ? false : (somaAjustesAttr || somaRolagem) < 0);
+        efetivoEl.innerText = pedacosBadge.join(" · ");
     });
 
     // Recursos (PV, Energia) — máximo calculado, atual editável por qualquer um.

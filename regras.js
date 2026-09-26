@@ -55,7 +55,21 @@ export function limiteCargaTeorico(constituicao) {
 // mas mantém a rede de segurança sem quebrar nada.
 export function listaAlvosModificador(pericias = []) {
     const alvosFixos = [
+        // Duas famílias BEM diferentes de modificador de atributo
+        // primário (ver atributoPrimarioEfetivo e calcularTotalPericia
+        // logo abaixo pra como cada uma é lida):
+        // - "Força" etc. (atributo:X): sobe o valor do atributo em si —
+        //   afeta a rolagem do PRÓPRIO atributo, a escala de dano, a
+        //   dificuldade de defesa, a carga e os secundários calculados a
+        //   partir dele (Velocidade, Agilidade, Massa Corpórea...). NÃO
+        //   entra na rolagem de perícia nenhuma.
+        // - "Rolagem de Força" etc. (rolagem:X): NÃO muda o valor do
+        //   atributo — é um bônus à parte que soma só na rolagem do
+        //   próprio atributo E na rolagem de toda perícia baseada nele
+        //   (ex.: Rolagem de Destreza soma em Armas de Fogo, Furtividade
+        //   etc.). Não muda escala, secundários, carga nem defesa.
         ...ATRIBUTOS_PRIMARIOS.map(a => ({ value: `atributo:${a.key}`, label: a.label })),
+        ...ATRIBUTOS_PRIMARIOS.map(a => ({ value: `rolagem:${a.key}`, label: `Rolagem de ${a.label} (+ perícias baseadas nela)` })),
         ...ATRIBUTOS_SECUNDARIOS.map(a => ({ value: `secundario:${a.key}`, label: a.label })),
         { value: "recurso:pv", label: "PV (máximo)" },
         { value: "recurso:energia", label: "Energia (máxima)" },
@@ -530,6 +544,17 @@ export function atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificad
     return base + somaModificadoresPara(`atributo:${atributoChave}`, modificadoresPlanos || []);
 }
 
+// Valor usado SÓ na hora de rolar o d20 do próprio atributo primário
+// (botão de rolagem na aba Atributos): soma o atributo efetivo
+// (atributo:X — o mesmo valor usado em escala/carga/defesa/secundários)
+// COM o bônus de "Rolagem de X" (rolagem:X — que não entra em nenhum
+// desses outros cálculos, só na rolagem em si e nas perícias baseadas
+// nesse atributo, ver calcularTotalPericia acima).
+export function atributoParaRolagemPropria(dadosPrimarios, atributoChave, modificadoresPlanos) {
+    return atributoPrimarioEfetivo(dadosPrimarios, atributoChave, modificadoresPlanos)
+        + somaModificadoresPara(`rolagem:${atributoChave}`, modificadoresPlanos || []);
+}
+
 // ---------------------------------------------------------------------
 // Calcula o pacote completo de derivados (secundários + recursos),
 // já considerando todos os modificadores. Retorna também o "breakdown"
@@ -620,7 +645,14 @@ export function calcularTotalPericia(pericia, dadosPrimarios, modificadoresPlano
     const infoPericia = buscarPericiaPorNome(pericia.nome);
     const alvoCategoria = infoPericia ? ALVO_TESTES_POR_CATEGORIA[infoPericia.categoria] : null;
     const ajustesCategoria = alvoCategoria ? modificadoresQueAfetam(alvoCategoria, modificadoresPlanos) : [];
-    const ajustes = [...ajustesPericia, ...ajustesCategoria];
+    // "Rolagem de X" (X = atributo dessa perícia, ver PERICIAS_MANUAL em
+    // dados-manual.js) — família DIFERENTE de "X" (atributo:X), que só
+    // mexe no valor do atributo (ver atributoPrimarioEfetivo). Perícia
+    // legado sem infoPericia não recebe (não tem atributo cadastrado).
+    const ajustesRolagemAtributo = infoPericia && infoPericia.atributo
+        ? modificadoresQueAfetam(`rolagem:${infoPericia.atributo}`, modificadoresPlanos)
+        : [];
+    const ajustes = [...ajustesPericia, ...ajustesCategoria, ...ajustesRolagemAtributo];
     const somaAjustes = ajustes.reduce((acc, m) => acc + m.valor, 0);
     const penalidade = Number(penalidadeSaude) || 0;
     return {
