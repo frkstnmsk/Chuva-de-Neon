@@ -583,6 +583,35 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
     const containerLabel = ehContainerItem
         ? ` · ${filhosContainer.length ? `${filhosContainer.length} item(ns) guardado(s)` : "Vazio"}`
         : "";
+    // Barrinha(s) de ocupação por compartimento (passo 13, seção 5.2 do
+    // projeto-slots-porte.txt): antes só entrava depois de expandir o
+    // container (▸), num bloco cheio de largura embaixo do card — em
+    // container com vários compartimentos isso inflava demais a lista.
+    // Agora entra AQUI, no meio da linha principal (entre o nome e os
+    // botões — mesma faixa do .entity-badges), sempre visível, pra
+    // qualquer container (mochila, cinto, bolsa, roupa...) — e some de
+    // vez o antigo painel de baixo (ver mais abaixo, onde só a lista de
+    // filhos continua atrás do clique em expandir).
+    const painelCompartimentosHtml = ehContainerItem
+        ? `<div class="compartimentos-inline">${(() => {
+            const compartimentosContainer = listaCompartimentos(it);
+            if (!compartimentosContainer.length) {
+                return `<span class="volume-bar-texto volume-bar-texto-estourado">⚠️ Sem compartimento cadastrado.</span>`;
+            }
+            return compartimentosContainer.map(comp => {
+                const usado = volumeTotalDentroDe(estado.fichaAtual, id, comp.id);
+                const capacidade = Number(comp.capacidadeVolume) || 0;
+                const estourado = capacidade > 0 && usado > capacidade;
+                const pct = capacidade > 0 ? Math.min(100, Math.round((usado / capacidade) * 100)) : 0;
+                return `
+                    <div class="compartimento-badge compartimento-badge-inline" title="${escapeHtml(comp.nome || "Compartimento")}: ${usado}${capacidade > 0 ? `/${capacidade}` : " (sem limite definido)"}">
+                        <span class="volume-bar-texto${estourado ? " volume-bar-texto-estourado" : ""}">🎒 ${escapeHtml(comp.nome || "Compartimento")}: ${usado}${capacidade > 0 ? `/${capacidade}` : ""}</span>
+                        ${capacidade > 0 ? `<div class="volume-bar-track"><div class="volume-bar-fill${estourado ? " volume-bar-estourado" : ""}" style="width:${pct}%;"></div></div>` : ""}
+                    </div>
+                `;
+            }).join("");
+        })()}</div>`
+        : "";
     // Botão "equipada" do container (passo 14, seção 5.2 do
     // projeto-slots-porte.txt): reaproveita o mesmo campo `equipada` das
     // armas/itens comuns, mas com rótulo de AÇÃO específico por
@@ -742,6 +771,7 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
         <div class="entity-main" ${tooltipCarregador ? `title="${escapeHtml(tooltipCarregador)}"` : ""}>
             <span class="entity-nome">${ehContainerItem ? `<button type="button" class="btn-toggle-container" title="${containerAberto ? "Recolher" : "Expandir e ver o que tem guardado dentro"}">${containerAberto ? "▾" : "▸"}</button> 🎒 ` : ""}${escapeHtml(it.nome)}</span>
         </div>
+        ${painelCompartimentosHtml}
         <div class="entity-badges">
             ${armaEstaCarregadaItem ? `<span class="mod-pill positivo" title="${semCarregador ? "Tem munição carregada no tambor/câmara" : "Tem um carregador anexado"}">🔵 Carregada</span>` : ""}
             ${camaraCarregadaItem ? `<span class="mod-pill positivo" title="Tem 1 bala na agulha, além do carregador">🔵 +1 na agulha</span>` : ""}
@@ -1145,47 +1175,6 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
     // verdade, então em touch (celular/tablet) o hover nem dispara.
     const thumbHover = li.querySelector(".entity-thumb");
     if (thumbHover) ativarPreviewFlutuanteImagem(thumbHover, it.imagem);
-
-    // Badge de ocupação POR COMPARTIMENTO (passo 13, seção 5.2 do
-    // projeto-slots-porte.txt) — cada compartimento tem sua própria
-    // capacidade e ocupação (ex: "Bolso frente esq. 1/1 · Bolso de
-    // trás 0/1"), não mais um volume total agregado do container
-    // inteiro. Compartimento sem capacidadeVolume definida (0) não
-    // mostra barra de progresso, só o total guardado — não tem
-    // limite pra comparar. Fica vermelho/pisca se, por alguma
-    // inconsistência de dados antigos, passar do limite (a
-    // validação normal — modal e select-guardar-dentro — já impede
-    // isso de acontecer em uso normal).
-    // Sempre visível pra QUALQUER container (mochila, cinto, bolsa,
-    // roupa...), mesmo recolhido — antes só aparecia depois de clicar
-    // no ▸ pra expandir, e por acaso a mochila costumava já estar
-    // expandida (estado.containersInventarioAbertos guarda isso entre
-    // renderizações), dando a falsa impressão de que só ela mostrava a
-    // barrinha "de graça".
-    if (ehContainerItem) {
-        const compartimentosContainer = listaCompartimentos(it);
-        const painelCompartimentos = document.createElement("div");
-        painelCompartimentos.className = "volume-bar-wrap";
-        painelCompartimentos.innerHTML = compartimentosContainer.length
-            ? compartimentosContainer.map(comp => {
-                const usado = volumeTotalDentroDe(estado.fichaAtual, id, comp.id);
-                const capacidade = Number(comp.capacidadeVolume) || 0;
-                const estourado = capacidade > 0 && usado > capacidade;
-                const pct = capacidade > 0 ? Math.min(100, Math.round((usado / capacidade) * 100)) : 0;
-                return `
-                    <div class="compartimento-badge">
-                        <span class="volume-bar-texto${estourado ? " volume-bar-texto-estourado" : ""}">🎒 ${escapeHtml(comp.nome || "Compartimento")}: ${usado}${capacidade > 0 ? `/${capacidade}` : " (sem limite definido)"}</span>
-                        ${capacidade > 0 ? `<div class="volume-bar-track"><div class="volume-bar-fill${estourado ? " volume-bar-estourado" : ""}" style="width:${pct}%;"></div></div>` : ""}
-                    </div>
-                `;
-            }).join("")
-            // Defesa extra: container sem nenhum compartimento cadastrado
-            // não devia acontecer em uso normal (o modal exige pelo menos
-            // 1 — ver lerCompartimentosDoModal), mas evita tela quebrada
-            // se algum dado antigo escapou da migração.
-            : `<span class="volume-bar-texto volume-bar-texto-estourado">⚠️ Este recipiente não tem nenhum compartimento cadastrado.</span>`;
-        li.appendChild(painelCompartimentos);
-    }
 
     // Se é um recipiente aberto (expandido), a lista de filhos entra
     // dentro do próprio <li> (nested <ul> — válido em HTML e garante que

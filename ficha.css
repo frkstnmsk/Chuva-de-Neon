@@ -2507,6 +2507,47 @@ select.select-guardar-dentro {
     margin-top: 2px;
     border-top: 1px dashed rgba(255, 255, 255, 0.08);
 }
+/* Versão compacta do painel de compartimentos (abas/inventario.js,
+   painelCompartimentosHtml) — fica DENTRO da própria linha do item,
+   entre o nome (.entity-main) e os botões (.entity-badges), sempre
+   visível (mesmo recolhido). Antes era um .volume-bar-wrap de largura
+   total anexado embaixo do card só quando expandido — virava um bloco
+   gigante empilhado; agora cada compartimento é um chip curto lado a
+   lado, com a barra reduzida, e só quebra linha se não couber mesmo
+   (efeito colateral normal do flex-wrap do .entity-list li). */
+.entity-list .compartimentos-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    flex-shrink: 1;
+    min-width: 0;
+}
+.entity-list .compartimento-badge-inline {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+}
+.entity-list .compartimentos-inline .volume-bar-texto {
+    white-space: nowrap;
+}
+.entity-list .compartimento-badge-inline .volume-bar-track {
+    width: 32px;
+    flex-shrink: 0;
+}
+.entity-list .compartimento-badge-inline + .compartimento-badge-inline {
+    padding-left: 8px;
+    border-left: 1px dashed rgba(255, 255, 255, 0.1);
+}
+/* Em tela estreita não sobra espaço pro chip ficar do lado do nome —
+   melhor ele quebrar pra sua própria linha (ainda compacto) do que
+   espremer nome/botões até sumir. */
+@media (max-width: 600px) {
+    .entity-list .compartimentos-inline {
+        flex-basis: 100%;
+    }
+}
 
 /* ---------- Indicador fixo de mãos livres (passo 19 — Fase 8.5 do
    projeto-slots-porte.txt) ---------- */
