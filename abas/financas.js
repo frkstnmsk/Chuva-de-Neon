@@ -54,7 +54,7 @@ export function renderizarSaldos() {
             <label for="saldo-${domId}">${escapeHtml(s.nome)}</label>
             <div class="saldo-campo-linha">
                 <input type="number" id="saldo-${domId}" data-saldo-id="${s.id}">
-                ${podeExcluir ? `<button type="button" class="btn-saldo-excluir" data-saldo-excluir-id="${s.id}" data-saldo-excluir-nome="${escapeHtml(s.nome)}" title="Excluir saldo \\"${escapeHtml(s.nome)}\\"">×</button>` : ""}
+                ${podeExcluir ? `<button type="button" class="btn-saldo-excluir" data-saldo-excluir-id="${s.id}" data-saldo-excluir-nome="${escapeHtml(s.nome)}" title="Excluir saldo ${escapeHtml(s.nome)}">×</button>` : ""}
             </div>
         `;
         const input = campo.querySelector("input");

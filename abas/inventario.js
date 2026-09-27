@@ -773,7 +773,7 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
                     <button type="button" class="btn-ghost btn-desanexar-acessorio" data-acessorio-id="${a.id}" title="Desanexar '${escapeHtml(a.item.nome)}' e devolver solto ao inventário" style="padding:0 6px; line-height:1;">×</button>
                 </span>
             `).join("")}
-            <select class="select-anexar-acessorio" ${(!acessoriosDisponiveisItem.length || acessoriosAnexadosItem.length >= limiteAcessoriosItem) ? "disabled" : ""} title="${acessoriosAnexadosItem.length >= limiteAcessoriosItem ? `Limite de modificações/acessórios atingido (${limiteAcessoriosItem} = nível da arma +1)` : "Anexar um acessório (item com tag \\"Acessório de arma\\") que esteja solto em \\"Levando consigo\\""}">
+            <select class="select-anexar-acessorio" ${(!acessoriosDisponiveisItem.length || acessoriosAnexadosItem.length >= limiteAcessoriosItem) ? "disabled" : ""} title="${acessoriosAnexadosItem.length >= limiteAcessoriosItem ? `Limite de modificações/acessórios atingido (${limiteAcessoriosItem} = nível da arma +1)` : "Anexar um acessório (tag Acessório de arma) que esteja solto em Levando consigo"}">
                 <option value="" selected disabled>+ Anexar acessório...</option>
                 ${acessoriosDisponiveisItem.map(a => `<option value="${a.id}">${escapeHtml(a.nome)}</option>`).join("")}
             </select>
