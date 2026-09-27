@@ -204,7 +204,10 @@ export function acessorioEstaAnexado(fichaAtual, acessorioId) {
 // acessório" de cada arma (ver criarLiItem em abas/inventario.js).
 export function listaAcessoriosInventario(fichaAtual) {
     return Object.entries(fichaAtual.inventario || {})
-        .filter(([id, it]) => ehAcessorioArma(it.tag) && !acessorioEstaAnexado(fichaAtual, id))
+        // !it.dentroDe: mesma regra do carregador (ver comentário em
+        // listaCarregadoresInventario) — um acessório guardado dentro de
+        // uma mochila precisa ser tirado de lá antes de ser anexado.
+        .filter(([id, it]) => ehAcessorioArma(it.tag) && !it.dentroDe && !acessorioEstaAnexado(fichaAtual, id))
         .map(([id, it]) => ({ id, ...it }));
 }
 
@@ -242,14 +245,22 @@ export function listaArmasInventario(fichaAtual) {
 export function listaCarregadoresInventario(fichaAtual, calibre) {
     const compat = calibre ? calibresCompativeis(calibre) : null;
     return Object.entries(fichaAtual.inventario || {})
-        .filter(([, it]) => ehCarregador(it.tag) && (!compat || compat.includes(it.calibre)))
+        // !it.dentroDe: um carregador guardado DENTRO de outro item (ex:
+        // uma mochila) não pode ser pego direto pra recarregar a arma —
+        // precisa ser tirado do container primeiro. Sem isso, Recarregar
+        // anexava o carregador na arma sem tirá-lo de dentro da mochila,
+        // deixando o item em dois lugares ao mesmo tempo (anexado E
+        // "dentro" do container) — bug relatado.
+        .filter(([, it]) => ehCarregador(it.tag) && !it.dentroDe && (!compat || compat.includes(it.calibre)))
         .map(([id, it]) => ({ id, ...it }));
 }
 
 export function listaProjeteisInventario(fichaAtual, calibre) {
     const compat = calibre ? calibresCompativeis(calibre) : null;
     return Object.entries(fichaAtual.inventario || {})
-        .filter(([, it]) => ehProjetil(it.tag) && (!compat || compat.includes(it.calibre)))
+        // Ver comentário em listaCarregadoresInventario acima — mesma
+        // regra pra munição solta guardada dentro de um container.
+        .filter(([, it]) => ehProjetil(it.tag) && !it.dentroDe && (!compat || compat.includes(it.calibre)))
         .map(([id, it]) => ({ id, ...it }));
 }
 
