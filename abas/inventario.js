@@ -1146,20 +1146,23 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
     const thumbHover = li.querySelector(".entity-thumb");
     if (thumbHover) ativarPreviewFlutuanteImagem(thumbHover, it.imagem);
 
-    // Se é um recipiente aberto (expandido), a lista de filhos entra
-    // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
-    // o conteúdo "viaja" junto se o item pai for movido/filtrado).
-    if (ehContainerItem && containerAberto) {
-        // Badge de ocupação POR COMPARTIMENTO (passo 13, seção 5.2 do
-        // projeto-slots-porte.txt) — cada compartimento tem sua própria
-        // capacidade e ocupação (ex: "Bolso frente esq. 1/1 · Bolso de
-        // trás 0/1"), não mais um volume total agregado do container
-        // inteiro. Compartimento sem capacidadeVolume definida (0) não
-        // mostra barra de progresso, só o total guardado — não tem
-        // limite pra comparar. Fica vermelho/pisca se, por alguma
-        // inconsistência de dados antigos, passar do limite (a
-        // validação normal — modal e select-guardar-dentro — já impede
-        // isso de acontecer em uso normal).
+    // Badge de ocupação POR COMPARTIMENTO (passo 13, seção 5.2 do
+    // projeto-slots-porte.txt) — cada compartimento tem sua própria
+    // capacidade e ocupação (ex: "Bolso frente esq. 1/1 · Bolso de
+    // trás 0/1"), não mais um volume total agregado do container
+    // inteiro. Compartimento sem capacidadeVolume definida (0) não
+    // mostra barra de progresso, só o total guardado — não tem
+    // limite pra comparar. Fica vermelho/pisca se, por alguma
+    // inconsistência de dados antigos, passar do limite (a
+    // validação normal — modal e select-guardar-dentro — já impede
+    // isso de acontecer em uso normal).
+    // Sempre visível pra QUALQUER container (mochila, cinto, bolsa,
+    // roupa...), mesmo recolhido — antes só aparecia depois de clicar
+    // no ▸ pra expandir, e por acaso a mochila costumava já estar
+    // expandida (estado.containersInventarioAbertos guarda isso entre
+    // renderizações), dando a falsa impressão de que só ela mostrava a
+    // barrinha "de graça".
+    if (ehContainerItem) {
         const compartimentosContainer = listaCompartimentos(it);
         const painelCompartimentos = document.createElement("div");
         painelCompartimentos.className = "volume-bar-wrap";
@@ -1182,7 +1185,14 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
             // se algum dado antigo escapou da migração.
             : `<span class="volume-bar-texto volume-bar-texto-estourado">⚠️ Este recipiente não tem nenhum compartimento cadastrado.</span>`;
         li.appendChild(painelCompartimentos);
+    }
 
+    // Se é um recipiente aberto (expandido), a lista de filhos entra
+    // dentro do próprio <li> (nested <ul> — válido em HTML e garante que
+    // o conteúdo "viaja" junto se o item pai for movido/filtrado). A
+    // barrinha de compartimentos acima já aparece sempre; só a lista de
+    // itens guardados dentro continua atrás do clique no ▸.
+    if (ehContainerItem && containerAberto) {
         const ulFilhos = document.createElement("ul");
         ulFilhos.className = "entity-list entity-list-nested";
         if (!filhosContainer.length) {

@@ -1291,6 +1291,20 @@ input[type="number"].darknet-item-venda-valor {
     color: var(--text-dim);
     white-space: nowrap;
 }
+/* Chip de acessório de arma anexado (abas/inventario.js,
+   .item-acessorios-arma): reaproveita .chip-detalhe, mas o conteúdo
+   (nome do acessório + resumo dos modificadores, ex.: "🔧 Mira
+   Holográfica — Perícia: Armas de Fogo de Médio Porte +2") costuma ser
+   bem mais longo que os chips curtos de detalhe do item (peso, volume
+   etc.) — sem esta sobrescrita, o nowrap acima virava uma única linha
+   gigante estourando o card em vez de quebrar. Aqui tem quebra de
+   linha normal + um teto de largura, pra caber dentro do card mesmo
+   com vários acessórios anexados. */
+.entity-list .item-acessorios-arma .chip-detalhe {
+    white-space: normal;
+    max-width: 100%;
+    line-height: 1.4;
+}
 /* Descrição do item (antes só visível dentro do modal de editar):
    texto corrido normal, com quebra de linha de verdade, separado
    visualmente dos chips por uma linha tracejada — fica claro que é
