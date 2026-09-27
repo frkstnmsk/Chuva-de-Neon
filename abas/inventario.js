@@ -917,7 +917,14 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
             opt.innerText = `🎒 ${comp.containerNome} → ${comp.compartimentoNome} (${nomeCategoria(estado.fichaAtual, containerItem?.categoria)})`;
             selectGuardarDentro.appendChild(opt);
         });
-        selectGuardarDentro.value = "__guardar__";
+        // Se o item já está guardado em algum lugar, o select precisa
+        // MOSTRAR isso (selecionar a opção correspondente) em vez de
+        // sempre voltar pro placeholder "Guardar dentro de..." — do
+        // jeito que estava, dava pra olhar o item e não ter nenhuma
+        // pista de onde ele tinha sido guardado.
+        const valorAtual = it.dentroDe ? `${it.dentroDe}::${it.compartimentoId || ""}` : "__guardar__";
+        const existeOpcaoAtual = Array.from(selectGuardarDentro.options).some(o => o.value === valorAtual);
+        selectGuardarDentro.value = existeOpcaoAtual ? valorAtual : "__guardar__";
     } else {
         selectGuardarDentro.style.display = "none";
     }
