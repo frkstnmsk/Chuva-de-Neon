@@ -4,7 +4,7 @@
 
 import {
     TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS,
-    ehArma, ehArmaOuExplosivo, ehCarregador, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
+    ehArma, ehArmaOuExplosivo, ehCarregador, ehAcessorioArma, ehProjetil, ehContainer, tagTemNivel, rotuloTag, calibresCompativeis,
     TAMANHOS_ITEM, rotuloTamanho, tamanhoCabe, tagTemQuantidadeGeral,
     SUBTIPOS_PORTE, rotuloSubtipoPorte, subtipoPorteOcupaMao, subtipoPorteExclusivo, itemOcupaMao
 } from "./dados-manual.js";
@@ -186,6 +186,44 @@ export function carregadorEstaAnexado(fichaAtual, carregadorId) {
     if (!carregadorId) return false;
     return Object.values(fichaAtual.inventario || {})
         .some(it => ehArma(it.tag) && it.arma && it.arma.carregadorId === carregadorId);
+}
+
+// Acessório de arma "anexado" some da lista principal — mesma lógica
+// do carregador acima (carregadorEstaAnexado), só que uma arma pode ter
+// VÁRIOS acessórios ao mesmo tempo (arma.acessoriosIds, array de ids —
+// manual pg. 64: "o limite de modificações e acessórios em uma arma é
+// igual ao nível da arma +1"; ver limiteAcessoriosArma mais abaixo).
+export function acessorioEstaAnexado(fichaAtual, acessorioId) {
+    if (!acessorioId) return false;
+    return Object.values(fichaAtual.inventario || {})
+        .some(it => ehArma(it.tag) && it.arma && Array.isArray(it.arma.acessoriosIds) && it.arma.acessoriosIds.includes(acessorioId));
+}
+
+// Acessórios de arma soltos no inventário (tag "acessorio_arma", ainda
+// não anexados em nenhuma arma) — usado pra popular o select "Anexar
+// acessório" de cada arma (ver criarLiItem em abas/inventario.js).
+export function listaAcessoriosInventario(fichaAtual) {
+    return Object.entries(fichaAtual.inventario || {})
+        .filter(([id, it]) => ehAcessorioArma(it.tag) && !acessorioEstaAnexado(fichaAtual, id))
+        .map(([id, it]) => ({ id, ...it }));
+}
+
+// Acessórios já anexados numa arma específica, na ordem em que foram
+// anexados (mesma ordem de arma.acessoriosIds). Ignora ids órfãos (item
+// apagado do inventário depois de anexado) em vez de quebrar.
+export function listaAcessoriosAnexados(fichaAtual, armaItem) {
+    const ids = (armaItem.arma && armaItem.arma.acessoriosIds) || [];
+    return ids
+        .map(id => ({ id, item: fichaAtual.inventario?.[id] }))
+        .filter(x => !!x.item);
+}
+
+// Limite de modificações + acessórios de uma arma (manual pg. 64). Só
+// conta acessórios aqui — não há sistema de "modificações" de arma
+// implementado ainda, então na prática o limite hoje é só sobre
+// acessórios.
+export function limiteAcessoriosArma(armaItem) {
+    return (Number(armaItem.nivelTag) || 0) + 1;
 }
 
 export function listaArmasInventario(fichaAtual) {
@@ -379,6 +417,8 @@ export function maosDisponiveis(fichaAtual) {
         // tenha ficado marcado como "levando"/equipado por engano (dado
         // legado); a mão gasta é só a da própria arma.
         if (ehCarregador(it.tag) && carregadorEstaAnexado(fichaAtual, id)) return acc;
+        // Mesma ideia acima, pra acessório de arma anexado.
+        if (ehAcessorioArma(it.tag) && acessorioEstaAnexado(fichaAtual, id)) return acc;
         const ocupaMao = itemOcupaMao(it.tag, it.subtipoPorte);
         if (!ocupaMao) return acc;
         return acc + (Number(it.maosNecessarias) || 1);

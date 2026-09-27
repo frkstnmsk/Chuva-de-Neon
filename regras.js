@@ -4,7 +4,7 @@
 // Tudo que é fórmula do manual mora aqui. Se uma regra mudar numa
 // próxima edição do manual, é só ajustar este arquivo.
 
-import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL, custoUpgradeVeiculoTabela, ehFerramentaCriacaoGeral, TABELA_PONTUACAO_FUGA, ehArma, slotsTomada, efeitoChip } from "./dados-manual.js";
+import { buscarPericiaPorNome, ATRIBUTOS_VEICULO, nivelVeiculo, precoNivelVeiculo, periodicidadeManutencaoVeiculo, PERICIAS_MANUAL, custoUpgradeVeiculoTabela, ehFerramentaCriacaoGeral, TABELA_PONTUACAO_FUGA, ehArma, ehAcessorioArma, slotsTomada, efeitoChip } from "./dados-manual.js";
 
 // Atributos primários (definidos livremente na criação/evolução)
 export const ATRIBUTOS_PRIMARIOS = [
@@ -256,6 +256,19 @@ export function coletarModificadores(ficha, diaIndiceAtual, horaAtualTexto) {
             // `ativo` ausente (fichas antigas, antes desse campo existir)
             // conta como ativo, pra não desligar tudo retroativamente.
             if (entidade.ativo === false) continue;
+            // Acessório de arma (manual pg. 75) só conta enquanto de fato
+            // ANEXADO numa arma que o personagem está carregando E com
+            // ela equipada em mãos — solto na mochila, ou anexado numa
+            // arma deixada "Em casa", não faz nada. Acha O HOSPEDEIRO
+            // (a arma que lista este id em arma.acessoriosIds) — ver
+            // acessorioEstaAnexado em inventario.js pro lado inverso
+            // (usado só pra sumir da lista/contagem de mãos).
+            if (ehAcessorioArma(entidade.tag)) {
+                const hospedeira = Object.values(inventarioSemDrogas).find(
+                    w => w && ehArma(w.tag) && w.arma && Array.isArray(w.arma.acessoriosIds) && w.arma.acessoriosIds.includes(id)
+                );
+                if (!hospedeira || hospedeira.categoria !== "levando" || !hospedeira.equipada) continue;
+            }
             // Implante de Biomecânica (ver dados-manual.js, SUBTIPOS_IMPLANTE):
             // só conta bônus passivo enquanto DE FATO instalado no corpo —
             // um implante ainda não operado (comprado/criado, esperando

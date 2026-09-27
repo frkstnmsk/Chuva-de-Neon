@@ -287,6 +287,17 @@ export const NIVEIS_ARMA = [1, 2, 3, 4, 5];
 export const TAGS_ITEM = [
     { key: "arma", label: "Arma", temNivel: true },
     { key: "carregador", label: "Carregador", temNivel: false },
+    // Acessório de arma (manual pg. 75: coldre, silenciador, empunhadura,
+    // miras/lunetas etc.) — de propósito SEM item hardcoded nenhum: é um
+    // item comum com esta tag, cujo efeito mecânico é só o editor
+    // genérico de "Modificadores automáticos" que TODO item já tem (ver
+    // listaAlvosModificador em regras.js) — pra criar "Mira Holográfica",
+    // "Silenciador" etc. o Mestre monta os modificadores que quiser, sem
+    // precisar de código novo por acessório. Só conta efeito de verdade
+    // enquanto ANEXADO numa arma equipada (ver arma.acessoriosIds,
+    // ehAcessorioArma/acessorioEstaAnexado/limiteAcessoriosArma em
+    // inventario.js, e o filtro em coletarModificadores, regras.js).
+    { key: "acessorio_arma", label: "Acessório de arma", temNivel: true },
     { key: "projetil", label: "Projétil / munição", temNivel: false },
     { key: "colete", label: "Proteção", temNivel: true },
     { key: "destrave", label: "Destrave", temNivel: true },
@@ -509,6 +520,11 @@ export const MODULOS_DETONACAO = [
 
 export function ehCarregador(tagKey) {
     return tagKey === "carregador";
+}
+
+// Ver comentário na entrada "acessorio_arma" de TAGS_ITEM acima.
+export function ehAcessorioArma(tagKey) {
+    return tagKey === "acessorio_arma";
 }
 
 export function ehProjetil(tagKey) {

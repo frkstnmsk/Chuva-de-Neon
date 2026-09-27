@@ -39,11 +39,11 @@ import {
     ATRIBUTOS_PRIMARIOS, ATRIBUTOS_SECUNDARIOS, RECURSOS, atributoPrimarioEfetivo, atributoParaRolagemPropria, listaAlvosModificador, rotuloAlvo, somaModificadoresPara, ALVO_TESTES_POR_CATEGORIA, coletarModificadores, calcularDerivados, calcularTotalPericia, modificadoresOcasionaisDaPericia, modificadoresOcasionaisDoAlvo, rolarD20, calcularDificuldadeDefesaJogador, calcularDanoTotalArma, MAX_ATRIBUTO_JOGO, calcularEstadoSaude, aplicarEstadoSaudeVelocidade, temPericiaTreinada, calcularEstadoEnergia, rolarTesteReanimacao, DIFICULDADE_REANIMACAO, calcularAbstinenciaVicio, extrairDuracaoHorasDaDescricao, horasTotaisCalendario, calcularModificadoresVeiculo, valorManutencaoVeiculo, veiculoTemChaveDisponivel, TRATAMENTOS_FERIDA, feridaAceitaSutura, dificuldadeUpgradeVeiculo, custoUpgradeVeiculo, custoReparoVeiculo, precoVeiculoComFator, veiculoTemKitFerramentasSuficiente, zerarDeterioracoesDoAtributoVeiculo, atributoEfetivoVeiculo, aplicarDanoVeiculo, pvMaxVeiculo, veiculoAtendeRequisitosManobra, resolverEfeitoManobra, pontosPorResultadoTesteFuga, slotsAcessoriosLivres, podeInstalarAcessorio, efeitoOleoVeiculo, efeitoCospePregoVeiculo, itensArmaInstaladosEmVeiculo, instalarArmaNoVeiculo, dificuldadeItemDarknet, tomadaSlotsOcupados, TIPOS_FERIDA
 } from "./regras.js";
 import {
-    PERICIAS_MANUAL, CATEGORIAS_PERICIA, buscarPericiaPorNome, TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehExplosivo, ehArmaOuExplosivo, ehDroga, ehProdutoQuimico, MODULOS_DETONACAO, ehProjetil, tagTemNivel, tagPermiteLimiteRolagemPorNivel, rotuloTag, tagExigePericiaUso, tagTemPericiaUso, ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral, ehTagQuePodeSerSaldo, todosOsSaldos, CLASSES_PROTECAO, ehArmaDeFogo, tagExigeClasseProtecao, calibresPorClasse, rotuloCalibre, calibreSugereDilacera, tagUsaCalibreEspecifico, ehCalibreEscopeta, tagExigeCapacidadeCarregador, tagExigeQuantidadeProjetil, tagPodeReduzirDano, LOCAIS_PROTECAO, tagExigeLocalProtegido, ALCANCES_ARMA_FOGO, PADROES_RECUO, bonusEsquivaBoxe, atendeRequisitoPericia, atendeRequisitoCriarReceita, PERICIAS_APARAR, LOCAIS_MIRA, difModLocalMira, labelLocalFerida, MANOBRA_ARREMESSAR_CQC, MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC, danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU, danoQuebrarOssosJiuJitsu, MATERIAIS_CRIACAO, qualidadesDoMaterial, ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO, CATALOGO_DROGAS, rotuloAtributoVeiculo, ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo, PERICIAS_MECANICO_VEICULO, MANOBRAS_VEICULO, buscarManobraVeiculo, bairroPerseguicao, tabelaPontuacaoFugaCadastrada, bairroTemDificuldadeRotaFuga, CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo, calcularDificuldadeQuimico, EFEITOS_MATERIAL_QUIMICO, resolverNivelMaterial, NOME_MATERIAL_VEICULO_TRANSPORTE, resolverTipoEntregaQuimico, rotuloSubtipoImplante, subtipoContaComoImplante, PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA, TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip, ZONAS_SILHUETA, CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO
+    PERICIAS_MANUAL, CATEGORIAS_PERICIA, buscarPericiaPorNome, TAGS_ITEM, NIVEIS_ARMA, TIPOS_DANO, ESCALAS_ARMA, MODIFICACOES_ARMA_SUGERIDAS, ehArma, ehAcessorioArma, ehExplosivo, ehArmaOuExplosivo, ehDroga, ehProdutoQuimico, MODULOS_DETONACAO, ehProjetil, tagTemNivel, tagPermiteLimiteRolagemPorNivel, rotuloTag, tagExigePericiaUso, tagTemPericiaUso, ehTagMultiPericia, periciaUsoComoArray, tagTemQuantidadeGeral, ehTagQuePodeSerSaldo, todosOsSaldos, CLASSES_PROTECAO, ehArmaDeFogo, tagExigeClasseProtecao, calibresPorClasse, rotuloCalibre, calibreSugereDilacera, tagUsaCalibreEspecifico, ehCalibreEscopeta, tagExigeCapacidadeCarregador, tagExigeQuantidadeProjetil, tagPodeReduzirDano, LOCAIS_PROTECAO, tagExigeLocalProtegido, ALCANCES_ARMA_FOGO, PADROES_RECUO, bonusEsquivaBoxe, atendeRequisitoPericia, atendeRequisitoCriarReceita, PERICIAS_APARAR, LOCAIS_MIRA, difModLocalMira, labelLocalFerida, MANOBRA_ARREMESSAR_CQC, MANOBRA_IMOBILIZAR_CQC, PERICIAS_IMOBILIZAR_CQC, danoQuedaJiuJitsu, MANOBRA_IMOBILIZAR_JIUJITSU, MANOBRA_QUEBRAR_OSSOS_JIUJITSU, danoQuebrarOssosJiuJitsu, MATERIAIS_CRIACAO, qualidadesDoMaterial, ehFerramentaCriacaoGeral, PERICIAS_FERRAMENTA_CRIACAO, CATALOGO_DROGAS, rotuloAtributoVeiculo, ATRIBUTOS_VEICULO, TIPOS_VEICULO, escalaVeiculo, ehChaveVeiculo, PERICIAS_MECANICO_VEICULO, MANOBRAS_VEICULO, buscarManobraVeiculo, bairroPerseguicao, tabelaPontuacaoFugaCadastrada, bairroTemDificuldadeRotaFuga, CATALOGO_ACESSORIOS_VEICULO, buscarAcessorioVeiculo, calcularDificuldadeQuimico, EFEITOS_MATERIAL_QUIMICO, resolverNivelMaterial, NOME_MATERIAL_VEICULO_TRANSPORTE, resolverTipoEntregaQuimico, rotuloSubtipoImplante, subtipoContaComoImplante, PERICIAS_FERRAMENTA_CRIACAO_BIOMECANICA, TOMADA_NIVEIS, CHIP_NIVEIS, slotsTomada, efeitoChip, ZONAS_SILHUETA, CATALOGO_EFEITOS_MEDICOS, efeitoMedicoPorKey, TRATAMENTOS_FERIDA_MEDICO, TIPOS_FERIDA_MEDICO
 } from "./dados-manual.js";
 import { normalizarFicha, normalizarNpcComoFicha } from "./normalizacao.js?v=20260822-fixhistorico";
 import {
-    listaCategorias, nomeCategoria, criarCategoriaCustom, listaSubcategorias, criarSubcategoriaCustom, pesoTotalPorCategoria, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario, listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado, ehContainer, itensDentroDe, listaContainersDisponiveis, TAMANHOS_ITEM, volumeTotalDentroDe, SUBTIPOS_PORTE, itemPodeSerLevadoSolto
+    listaCategorias, nomeCategoria, criarCategoriaCustom, listaSubcategorias, criarSubcategoriaCustom, pesoTotalPorCategoria, itemPodeUsar, itemPodeUsarEmCasa, itemPodeEquipar, itemEhEquipavel, listaArmasInventario, listaCarregadoresInventario, listaProjeteisInventario, carregadorEstaAnexado, limiteAcessoriosArma, ehContainer, itensDentroDe, listaContainersDisponiveis, TAMANHOS_ITEM, volumeTotalDentroDe, SUBTIPOS_PORTE, itemPodeSerLevadoSolto
 } from "./inventario.js";
 import {
     funcaoDe, calcularPontosAtributoTotais, aplicarAtributosFixosFuncao, aplicarItemPericiaInicialFuncao, opcoesPericiaFuncao, pontosFuncaoDe, LIMITES_CRIACAO, pontosBonusPorDesvantagens, podeAdicionarDesvantagem, MAX_DESVANTAGENS, listaFuncoes
@@ -2777,6 +2777,52 @@ export async function retirarCarregadorArma(armaId, armaItem) {
     const municao = carregador.carregador?.municaoAtual ?? 0;
     const capacidade = carregador.carregador?.capacidadeMax ?? 0;
     toast(`${carregador.nome} retirado de ${armaItem.nome} e devolvido ao inventário (${municao}/${capacidade}).`);
+}
+
+// ---------------------------------------------------------------------
+// Acessórios de arma (manual pg. 75) — anexar/desanexar um item com tag
+// "acessorio_arma" numa arma (arma.arma.acessoriosIds, array de ids —
+// suporta vários acessórios ao mesmo tempo, ao contrário do carregador
+// que é um só). De propósito SEM nenhum acessório hardcoded: o efeito
+// mecânico de cada um é só o editor genérico de "Modificadores
+// automáticos" que todo item já tem (montarListaModificadores/
+// lerModificadoresDoModal, mais abaixo) — criar "Mira Holográfica",
+// "Silenciador", "Empunhadura Vertical" etc. é só criar um item comum
+// com essa tag e montar os modificadores que fizerem sentido pra ele,
+// sem precisar de código novo por acessório (ver listaAlvosModificador
+// em regras.js pra quais alvos já existem). O efeito só entra na conta
+// de verdade enquanto o acessório estiver anexado E a arma equipada em
+// mãos (ver o filtro em coletarModificadores, regras.js).
+//
+// Igual recarregarArma/retirarCarregadorArma acima, anexar/desanexar
+// não passa por aprovação do Mestre (ação de baixo risco, sem gasto de
+// recurso — mesmo padrão do carregador).
+// ---------------------------------------------------------------------
+export async function anexarAcessorioArma(armaId, armaItem, acessorioId) {
+    if (!itemPodeUsar(armaItem)) { toast("A arma precisa estar em \"Levando consigo\".", "erro"); return; }
+    const acessorio = estado.fichaAtual.inventario?.[acessorioId];
+    if (!acessorio || !ehAcessorioArma(acessorio.tag)) { toast("Item inválido pra anexar como acessório.", "erro"); return; }
+    const idsAtuais = (armaItem.arma && armaItem.arma.acessoriosIds) || [];
+    if (idsAtuais.includes(acessorioId)) return;
+    const limite = limiteAcessoriosArma(armaItem);
+    if (idsAtuais.length >= limite) {
+        toast(`"${armaItem.nome}" já está no limite de modificações/acessórios (${limite} = nível da arma +1).`, "erro");
+        return;
+    }
+    const armaAtualizada = { ...armaItem, arma: { ...armaItem.arma, acessoriosIds: [...idsAtuais, acessorioId] } };
+    estado.fichaAtual.inventario[armaId] = armaAtualizada;
+    await update(ref(db, `${caminhoBase()}/inventario/${armaId}/arma`), armaAtualizada.arma);
+    toast(`${acessorio.nome} anexado em ${armaItem.nome}.`);
+}
+
+export async function desanexarAcessorioArma(armaId, armaItem, acessorioId) {
+    const idsAtuais = (armaItem.arma && armaItem.arma.acessoriosIds) || [];
+    if (!idsAtuais.includes(acessorioId)) return;
+    const armaAtualizada = { ...armaItem, arma: { ...armaItem.arma, acessoriosIds: idsAtuais.filter(x => x !== acessorioId) } };
+    estado.fichaAtual.inventario[armaId] = armaAtualizada;
+    await update(ref(db, `${caminhoBase()}/inventario/${armaId}/arma`), armaAtualizada.arma);
+    const acessorio = estado.fichaAtual.inventario?.[acessorioId];
+    toast(`${acessorio ? acessorio.nome : "Acessório"} desanexado de ${armaItem.nome}.`);
 }
 
 // ---------------------------------------------------------------------

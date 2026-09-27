@@ -33,8 +33,9 @@
 import { estado } from "../estado.js";
 import {
     el, toast, escapeHtml, textoDetalhamento, abrirModalEdicao, abrirModalNovo, caminhoBase,
-    alternarAtivoEntidade, alternarEquipadaItem, armaUsaCarregador,
+    alternarAtivoEntidade, alternarEquipadaItem, armaUsaCarregador, resumoModificadores,
     carregarCarregador, recarregarArma, retirarCarregadorArma, carregarCamaraArma,
+    anexarAcessorioArma, desanexarAcessorioArma,
     iniciarUsoItem, abrirModalDarItem, cenarioAtualDoPersonagem,
     depositarDinheiroItem, consumirDroga, usarEquipamentoMedico,
     ativarPreviewFlutuanteImagem, contextoDarItem, checarConsumoDeAcao,
@@ -60,13 +61,14 @@ import {
     listaCategorias, nomeCategoria, pesoTotalPorCategoria, calcularCargaAtual,
     listaSubcategorias, nomeSubcategoria, pesoComFilhos,
     itemPodeUsar, itemPodeEquipar, itemEhEquipavel, carregadorEstaAnexado,
+    acessorioEstaAnexado, listaAcessoriosInventario, listaAcessoriosAnexados, limiteAcessoriosArma,
     ehContainer, itensDentroDe, itemDescendeDe, listaContainersDisponiveis, itemCabeNoContainer,
     volumeTotalDentroDe, rotuloSubtipoPorte, itemPodeSerLevadoSolto,
     listaCompartimentos, maosDisponiveis, itemPodeEquiparContainer,
     subtipoPorteExclusivo, resolverEntradaLevandoConsigo
 } from "../inventario.js";
 import {
-    ehCarregador, ehArma, ehArmaDeFogo, ehArmaOuExplosivo, ehExplosivo, ehProjetil,
+    ehCarregador, ehAcessorioArma, ehArma, ehArmaDeFogo, ehArmaOuExplosivo, ehExplosivo, ehProjetil,
     ehProdutoQuimico, ehDanoContundente, ehDanoCortante, ehDanoPerfurante, ehFacaOuAdaga,
     ehTagMultiPericia, ehTagQuePodeSerSaldo, periciaUsoComoArray, periciasVinculaveisPorTag,
     ehFerramentaCriacaoGeral, rotuloTag, rotuloClasseProtecao, rotuloCalibre, rotuloLocalProtecao,
@@ -149,6 +151,7 @@ export function renderizarInventario(modificadoresPlanos) {
     const itensOcupandoMao = Object.entries(estado.fichaAtual.inventario || {}).filter(([id2, it2]) => {
         if (it2.categoria !== "levando" || !it2.equipada || it2.dentroDe) return false;
         if (ehCarregador(it2.tag) && carregadorEstaAnexado(estado.fichaAtual, id2)) return false;
+        if (ehAcessorioArma(it2.tag) && acessorioEstaAnexado(estado.fichaAtual, id2)) return false;
         return itemOcupaMao(it2.tag, it2.subtipoPorte);
     }).map(([, it2]) => it2);
     el.resumoMaos.innerText = `🖐️ Mãos livres: ${maosLivres}/${maosBase}`;
@@ -263,6 +266,7 @@ export function renderizarInventario(modificadoresPlanos) {
         it.categoria === estado.categoriaInventarioAtiva &&
         (!mostraSubcategorias || !estado.subcategoriaInventarioAtiva || it.subcategoriaId === estado.subcategoriaInventarioAtiva) &&
         !(ehCarregador(it.tag) && carregadorEstaAnexado(estado.fichaAtual, id)) &&
+        !(ehAcessorioArma(it.tag) && acessorioEstaAnexado(estado.fichaAtual, id)) &&
         !estaDentroDeAlgo(it)
     );
 
@@ -530,6 +534,23 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
         ? ` · Munição: ${it.carregador.municaoAtual || 0}/${it.carregador.capacidadeMax || 0}`
         : "";
     const projetilLabel = it.projetil ? ` · Quantidade: ${it.projetil.quantidade || 0}` : "";
+    // Acessórios de arma (manual pg. 75) — ver anexarAcessorioArma/
+    // desanexarAcessorioArma em ficha.js e comentário em TAGS_ITEM
+    // (dados-manual.js) pra como o efeito funciona sem hardcode.
+    const acessoriosAnexadosItem = ehArmaItem ? listaAcessoriosAnexados(estado.fichaAtual, it) : [];
+    const limiteAcessoriosItem = ehArmaItem ? limiteAcessoriosArma(it) : 0;
+    const acessoriosDisponiveisItem = ehArmaItem
+        ? listaAcessoriosInventario(estado.fichaAtual).filter(a => a.categoria === "levando")
+        : [];
+    const acessoriosLabel = ehArmaItem
+        ? ` · Acessórios: ${acessoriosAnexadosItem.length}/${limiteAcessoriosItem}`
+        : "";
+    // Resumo do que o PRÓPRIO acessório faz (ex: "Dificuldade: Acertar
+    // +1"), visível direto na lista — sem isso, um item novo com essa
+    // tag não mostraria nada além de peso/volume/nível até alguém abrir
+    // "Editar item".
+    const resumoAcessorioItem = ehAcessorioArma(it.tag) ? resumoModificadores(it) : "";
+    const acessorioResumoLabel = resumoAcessorioItem ? ` · Efeito: ${resumoAcessorioItem}` : "";
     const carregadorAnexadoIdItem = (it.arma && it.arma.carregadorId) || null;
     const carregadorAnexadoObjItem = carregadorAnexadoIdItem ? estado.fichaAtual.inventario?.[carregadorAnexadoIdItem] : null;
     const carregadorInternoItem = (it.arma && it.arma.carregadorInterno) || null;
@@ -595,7 +616,7 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
     // qualquer — pra poder ir pra mão; container segue seu próprio
     // fluxo de vestir/carregar (podeEquiparContainerItem).
     const podeEquiparCategoria = ehContainerItem ? podeEquiparContainerItem : podeEquipar;
-    const ocupaMaoEsteItem = (ehCarregador(it.tag) && carregadorEstaAnexado(estado.fichaAtual, id)) ? false : itemOcupaMao(it.tag, it.subtipoPorte);
+    const ocupaMaoEsteItem = (ehCarregador(it.tag) && carregadorEstaAnexado(estado.fichaAtual, id)) || (ehAcessorioArma(it.tag) && acessorioEstaAnexado(estado.fichaAtual, id)) ? false : itemOcupaMao(it.tag, it.subtipoPorte);
     const maosNecessariasItem = Number(it.maosNecessarias) || 1;
     const maosLivresAtuais = maosDisponiveis(estado.fichaAtual);
     const semMaosLivres = !equipadaItem && ocupaMaoEsteItem && maosLivresAtuais < maosNecessariasItem;
@@ -686,7 +707,7 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
     // fácil de ler individualmente — e a descrição do item (antes só
     // visível dentro do modal de editar) ganha seu próprio bloco,
     // destacado da lista de chips.
-    const detalhesTexto = `${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel} · ${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${implanteInfoLabel}${avisoArmarSemCenarioLabel}`;
+    const detalhesTexto = `${tagLabel} · ${it.peso || 0} kg · Volume: ${it.volume || 0}${quantidadeLabel} · ${periciaLabel}${saldoLabel}${classeLabel}${calibreLabel}${localProtegidoLabel}${reducaoLabel}${carregadorLabel}${projetilLabel}${carregadorAnexadoLabel}${camaraLabel}${containerLabel}${chaveLabel}${implanteInfoLabel}${avisoArmarSemCenarioLabel}${acessoriosLabel}${acessorioResumoLabel}`;
     const chipsDetalhesHtml = detalhesTexto
         .split(" · ")
         .map(t => t.trim())
@@ -744,12 +765,44 @@ export function criarLiItem(id, it, { categorias, modificadoresPlanos, nivel }) 
             <button type="button" class="btn-lime btn-item-confirmar-depositar">Confirmar</button>
             <button type="button" class="btn-ghost btn-item-cancelar-depositar">Cancelar</button>
         </div>` : ""}
+        ${ehArmaItem ? `
+        <div class="item-acessorios-arma" style="display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; padding:0 10px 8px;">
+            ${acessoriosAnexadosItem.map(a => `
+                <span class="chip-detalhe" style="display:inline-flex; align-items:center; gap:4px;" title="${escapeHtml(resumoModificadores(a.item) || "Sem modificadores cadastrados neste acessório")}">
+                    🔧 ${escapeHtml(a.item.nome)}${resumoModificadores(a.item) ? ` — ${escapeHtml(resumoModificadores(a.item))}` : ""}
+                    <button type="button" class="btn-ghost btn-desanexar-acessorio" data-acessorio-id="${a.id}" title="Desanexar '${escapeHtml(a.item.nome)}' e devolver solto ao inventário" style="padding:0 6px; line-height:1;">×</button>
+                </span>
+            `).join("")}
+            <select class="select-anexar-acessorio" ${(!acessoriosDisponiveisItem.length || acessoriosAnexadosItem.length >= limiteAcessoriosItem) ? "disabled" : ""} title="${acessoriosAnexadosItem.length >= limiteAcessoriosItem ? `Limite de modificações/acessórios atingido (${limiteAcessoriosItem} = nível da arma +1)` : "Anexar um acessório (item com tag \\"Acessório de arma\\") que esteja solto em \\"Levando consigo\\""}">
+                <option value="" selected disabled>+ Anexar acessório...</option>
+                ${acessoriosDisponiveisItem.map(a => `<option value="${a.id}">${escapeHtml(a.nome)}</option>`).join("")}
+            </select>
+        </div>` : ""}
     `;
     if (temEfeitoItem) {
         li.querySelector(".btn-toggle-ativo").addEventListener("click", (e) => {
             e.stopPropagation();
             alternarAtivoEntidade("inventario", id, !ativoItem);
         });
+    }
+    if (ehArmaItem) {
+        li.querySelectorAll(".btn-desanexar-acessorio").forEach(btn => {
+            btn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                await desanexarAcessorioArma(id, it, btn.dataset.acessorioId);
+            });
+        });
+        const selectAnexarAcessorio = li.querySelector(".select-anexar-acessorio");
+        if (selectAnexarAcessorio) {
+            selectAnexarAcessorio.addEventListener("click", (e) => e.stopPropagation());
+            selectAnexarAcessorio.addEventListener("change", async (e) => {
+                e.stopPropagation();
+                const acessorioId = e.target.value;
+                if (!acessorioId) return;
+                await anexarAcessorioArma(id, it, acessorioId);
+                selectAnexarAcessorio.value = "";
+            });
+        }
     }
     const btnConsumirDroga = li.querySelector(".btn-consumir-droga");
     if (btnConsumirDroga) {
@@ -2853,7 +2906,7 @@ export async function salvarItemDoModal(id) {
             toast(`Já tem outra peça de "${rotuloSubtipoPorte(subtipoPorte)}" equipada — desequipe-a primeiro.`, "erro");
             return;
         }
-        const ocupaMaoEsteItem = (ehCarregador(tag) && carregadorEstaAnexado(estado.fichaAtual, id)) ? false : itemOcupaMao(tag, subtipoPorte);
+        const ocupaMaoEsteItem = (ehCarregador(tag) && carregadorEstaAnexado(estado.fichaAtual, id)) || (ehAcessorioArma(tag) && acessorioEstaAnexado(estado.fichaAtual, id)) ? false : itemOcupaMao(tag, subtipoPorte);
         if (ocupaMaoEsteItem) {
             // Se o item já estava equipado (edição) e já contava como mão
             // ocupada, devolve essa mão antes de checar — senão ele
