@@ -16,7 +16,7 @@
 // ============================================================
 
 import { estado } from "../estado.js";
-import { el, escapeHtml, toast } from "../ficha.js?v=20260926b-difacertarcontraataque";
+import { el, escapeHtml, toast, renderizarTudo } from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { rolarD20 } from "../regras.js";
 import { passarODia, passarVariosDias } from "../mestre.js?v=20260830-npcnivelpv";
 import {
@@ -43,6 +43,13 @@ export function configurarCalendario() {
         });
     }
 
+    // Efeitos de droga (ex.: Álcool) expiram comparando o relógio do
+    // calendário (diaIndice + hora) com `horasExpira`, mas esse cálculo
+    // só roda dentro de renderizarTudo(). Antes, mudar o dia/hora NÃO
+    // disparava nenhum re-render (só o listener da própria ficha
+    // dispara), então o debuff continuava aparecendo na tela do
+    // jogador até ele recarregar a página ou algo na ficha mudar.
+    let ultimaChaveDiaHora = null;
     ouvirCalendario((cal) => {
         if (!cal) return;
         estado.calendarioAtual = cal;
@@ -51,6 +58,12 @@ export function configurarCalendario() {
         el.calHora.innerText = cal.hora || "—";
         el.calTemperatura.innerText = (cal.temperatura ?? "—") + "°C";
         el.calClima.innerText = cal.clima || "—";
+
+        const chaveDiaHora = `${cal.diaIndice}|${cal.hora}`;
+        if (chaveDiaHora !== ultimaChaveDiaHora) {
+            ultimaChaveDiaHora = chaveDiaHora;
+            if (estado.fichaAtual) renderizarTudo();
+        }
 
         if (estado.isMestre) {
             if (document.activeElement !== el.calEditData) el.calEditData.value = cal.dataLabel || "";
