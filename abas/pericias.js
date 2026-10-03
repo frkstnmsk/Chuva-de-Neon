@@ -101,6 +101,19 @@ export function renderizarPericias(modificadoresPlanos) {
         const especializacoesCompradas = Array.isArray(p.especializacoes) && p.especializacoes.length
             ? ` · especialização nível ${p.especializacoes.slice().sort().join(", ")}`
             : "";
+        // Toda especialização cadastrada na aba "Especializações" com esta
+        // perícia vinculada aparece aqui embaixo — inclusive as que não vieram
+        // de ponto de Level Up (ex.: ponto extra dado pelo Mestre).
+        const especializacoesVinculadas = Object.values(estado.fichaAtual.especializacoes || {})
+            .filter(e => e && e.categoria !== "atributo" && e.periciaVinculada === p.nome);
+        const especializacoesVinculadasHtml = especializacoesVinculadas.length ? `
+            <div class="pericia-especializacoes">
+                ${especializacoesVinculadas.map(e => {
+                    const inativa = !!(e.modificadores && e.modificadores.length) && e.ativo === false;
+                    return `<span class="mod-pill" title="${escapeHtml(e.descricao || "")}"${inativa ? ' style="opacity:.5;"' : ""}>${escapeHtml(e.nome || "(sem nome)")}</span>`;
+                }).join(" ")}
+            </div>
+        ` : "";
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
@@ -110,6 +123,7 @@ export function renderizarPericias(modificadoresPlanos) {
                 <button type="button" class="btn-rolar btn-blue" title="Rolar d20 + ${calc.total}">🎲 ${calc.total >= 0 ? "+" : ""}${calc.total}</button>
                 <span class="total-rolagem">${calc.total}</span>
             </div>
+            ${especializacoesVinculadasHtml}
             ${ocasionaisHtml}
             ${ocasionaisDificuldadeHtml}
         `;

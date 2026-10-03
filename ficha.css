@@ -3653,3 +3653,15 @@ select.select-guardar-dentro {
     display: block;
     margin-top: 10px;
 }
+
+/* Especializações vinculadas à perícia (aba Especializações) — linha à
+   parte embaixo da perícia, na aba Perícias. */
+.pericia-especializacoes {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(255,255,255,0.12);
+}

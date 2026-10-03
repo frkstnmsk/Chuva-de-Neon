@@ -10,13 +10,27 @@
 import { estado } from "../estado.js";
 import { el, renderizarListaSimples, resumoModificadores, escapeHtml } from "../ficha.js?v=20260926b-difacertarcontraataque";
 import { CATALOGO_DROGAS } from "../dados-manual.js";
+import { ATRIBUTOS_PRIMARIOS } from "../regras.js";
+import { categoriaEspecializacao, resumoSlotsEspecializacaoAtributo } from "../levelup.js";
 
 export function renderizarEspecializacoes() {
-    renderizarListaSimples(el.listaEspecializacoes, estado.fichaAtual.especializacoes || {}, (id, v) => ({
-        nome: v.nome || "(sem nome)",
-        sub: [v.periciaVinculada ? `Perícia: ${v.periciaVinculada}` : null, v.descricao || null].filter(Boolean).join(" — "),
-        direita: resumoModificadores(v)
-    }), "especializacoes");
+    const resumo = document.getElementById("resumo-slots-especializacao-atributo");
+    if (resumo) {
+        const r = resumoSlotsEspecializacaoAtributo(estado.fichaAtual);
+        resumo.textContent = `Slots de especialização de atributo: ${r.usados}/${r.total} em uso (nível ${r.nivel}) — liberam nos níveis 3, 6 e 9.`;
+    }
+    renderizarListaSimples(el.listaEspecializacoes, estado.fichaAtual.especializacoes || {}, (id, v) => {
+        const ehAtributo = categoriaEspecializacao(v) === "atributo";
+        const attr = ehAtributo ? ATRIBUTOS_PRIMARIOS.find(a => a.key === v.atributoVinculado) : null;
+        const vinculo = ehAtributo
+            ? `Atributo: ${attr ? attr.label : "(não definido)"}`
+            : (v.periciaVinculada ? `Perícia: ${v.periciaVinculada}` : null);
+        return {
+            nome: v.nome || "(sem nome)",
+            sub: [vinculo, v.descricao || null].filter(Boolean).join(" — "),
+            direita: resumoModificadores(v)
+        };
+    }, "especializacoes");
 }
 
 // Mostra/esconde o campo "Substância" no modal de Desvantagem, conforme

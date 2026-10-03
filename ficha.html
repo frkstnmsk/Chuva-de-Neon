@@ -667,6 +667,7 @@
                 <!-- ===================== ESPECIALIZAÇÕES ===================== -->
                 <section class="tab-panel panel" data-tab="especializacoes">
                     <div class="section-header">Especializações <span class="hint-inline">de perícia (a cada 3) ou de atributo (níveis 3, 6 e 9)</span></div>
+                    <div class="hint" id="resumo-slots-especializacao-atributo"></div>
                     <ul class="entity-list" id="lista-especializacoes"></ul>
                     <button id="btn-add-especializacao" class="btn-lime" type="button">+ Adicionar especialização</button>
                 </section>
@@ -867,6 +868,21 @@
         <!-- Especializações: vincula o registro a uma perícia específica
              da ficha (nível 3+, regra do manual) — puramente informativo/
              organizacional, não interfere em nenhum cálculo. -->
+        <div class="modal-field" id="modal-campo-especializacao-categoria" style="display:none;">
+            <label for="modal-especializacao-categoria">Categoria da especialização</label>
+            <select id="modal-especializacao-categoria">
+                <option value="pericia">Especialização de perícia</option>
+                <option value="atributo">Especialização de atributo</option>
+            </select>
+            <p class="hint" id="hint-slots-especializacao-atributo" style="display:none;"></p>
+        </div>
+
+        <div class="modal-field" id="modal-campo-especializacao-atributo" style="display:none;">
+            <label for="modal-especializacao-atributo">Atributo vinculado</label>
+            <select id="modal-especializacao-atributo"></select>
+            <p class="hint">Slots de especialização de atributo: 1 no nível 3, +1 no nível 6 e +1 no nível 9 (máximo de 3).</p>
+        </div>
+
         <div class="modal-field" id="modal-campo-especializacao-pericia" style="display:none;">
             <label for="modal-especializacao-pericia">Perícia vinculada</label>
             <select id="modal-especializacao-pericia">

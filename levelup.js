@@ -156,3 +156,38 @@ export function gastarPontoEspecializacaoLevelUp(fichaAtual, nome) {
     lvl.pontosPericia -= 1;
     return true;
 }
+
+// =====================================================================
+// Especializações de ATRIBUTO (slots por nível do personagem)
+// =====================================================================
+// Regra da mesa: 1 slot no nível 3, +1 no nível 6 e +1 no nível 9
+// (total de 3). Cada especialização cadastrada com categoria "atributo"
+// ocupa 1 slot. As especializações de perícia seguem a regra própria
+// (comprada no Level Up) e NÃO consomem esses slots.
+export const MAX_SLOTS_ESPECIALIZACAO_ATRIBUTO = 3;
+export const NIVEIS_SLOT_ESPECIALIZACAO_ATRIBUTO = [3, 6, 9];
+
+export function slotsEspecializacaoAtributoTotal(nivelPersonagem) {
+    const nivel = Number(nivelPersonagem) || 1;
+    return NIVEIS_SLOT_ESPECIALIZACAO_ATRIBUTO.filter(n => nivel >= n).length;
+}
+
+// Registros antigos não têm `categoria` — contam como "pericia".
+export function categoriaEspecializacao(registro) {
+    return registro && registro.categoria === "atributo" ? "atributo" : "pericia";
+}
+
+// `ignorarId`: usado na edição, pra o próprio registro não contar duas vezes.
+export function slotsEspecializacaoAtributoUsados(fichaAtual, ignorarId = null) {
+    const lista = (fichaAtual && fichaAtual.especializacoes) || {};
+    return Object.entries(lista)
+        .filter(([id, v]) => id !== ignorarId && categoriaEspecializacao(v) === "atributo")
+        .length;
+}
+
+export function resumoSlotsEspecializacaoAtributo(fichaAtual, ignorarId = null) {
+    const nivel = Number(fichaAtual && fichaAtual.dados && fichaAtual.dados.nivel) || 1;
+    const total = slotsEspecializacaoAtributoTotal(nivel);
+    const usados = slotsEspecializacaoAtributoUsados(fichaAtual, ignorarId);
+    return { nivel, total, usados, livres: Math.max(0, total - usados) };
+}

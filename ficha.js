@@ -49,7 +49,7 @@ import {
     funcaoDe, calcularPontosAtributoTotais, aplicarAtributosFixosFuncao, aplicarItemPericiaInicialFuncao, opcoesPericiaFuncao, pontosFuncaoDe, LIMITES_CRIACAO, pontosBonusPorDesvantagens, podeAdicionarDesvantagem, MAX_DESVANTAGENS, listaFuncoes
 } from "./criacao.js";
 import {
-    iniciarLevelUpSeNecessario, confirmarPassoAtributo, executarPassoDadoVida, gastarPontoPericiaLevelUp, finalizarLevelUp, podeComprarEspecializacao, gastarPontoEspecializacaoLevelUp
+    iniciarLevelUpSeNecessario, confirmarPassoAtributo, executarPassoDadoVida, gastarPontoPericiaLevelUp, finalizarLevelUp, podeComprarEspecializacao, gastarPontoEspecializacaoLevelUp, resumoSlotsEspecializacaoAtributo, categoriaEspecializacao
 } from "./levelup.js";
 import {
     garantirCalendarioInicial, diasSemana, climas, registrarRolagem
@@ -455,6 +455,11 @@ export const el = {
     modalCampoInstalarVeiculo: document.getElementById("modal-campo-instalar-veiculo"),
     modalInstalarVeiculo: document.getElementById("modal-instalar-veiculo"),
     modalCampoPericiaUso: document.getElementById("modal-campo-pericia-uso"),
+    modalCampoEspecializacaoCategoria: document.getElementById("modal-campo-especializacao-categoria"),
+    modalEspecializacaoCategoria: document.getElementById("modal-especializacao-categoria"),
+    hintSlotsEspecializacaoAtributo: document.getElementById("hint-slots-especializacao-atributo"),
+    modalCampoEspecializacaoAtributo: document.getElementById("modal-campo-especializacao-atributo"),
+    modalEspecializacaoAtributo: document.getElementById("modal-especializacao-atributo"),
     modalCampoEspecializacaoPericia: document.getElementById("modal-campo-especializacao-pericia"),
     modalEspecializacaoPericia: document.getElementById("modal-especializacao-pericia"),
     hintFerramentaCriacaoGeral: document.getElementById("hint-ferramenta-criacao-geral"),
@@ -7513,6 +7518,8 @@ function esconderTodosCamposEspeciais() {
     el.modalCampoInstalarVeiculo.style.display = "none";
     el.modalCampoPericiaUso.style.display = "none";
     el.modalCampoEspecializacaoPericia.style.display = "none";
+    el.modalCampoEspecializacaoCategoria.style.display = "none";
+    el.modalCampoEspecializacaoAtributo.style.display = "none";
     const hintEspecializacoesPericiaExistente = document.getElementById("hint-especializacoes-pericia");
     if (hintEspecializacoesPericiaExistente) hintEspecializacoesPericiaExistente.style.display = "none";
     el.hintFerramentaCriacaoGeral.style.display = "none";
@@ -7580,7 +7587,21 @@ function prepararModalParaLista(lista, objetoExistente) {
             el.modalSubstanciaVicio.value = "";
         }
         if (lista === "especializacoes") {
-            el.modalCampoEspecializacaoPericia.style.display = "flex";
+            el.modalCampoEspecializacaoCategoria.style.display = "flex";
+            el.modalEspecializacaoCategoria.value = categoriaEspecializacao(objetoExistente);
+            el.modalEspecializacaoAtributo.innerHTML = ATRIBUTOS_PRIMARIOS.map(a => `<option value="${a.key}">${escapeHtml(a.label)}</option>`).join("");
+            el.modalEspecializacaoAtributo.value = (objetoExistente && objetoExistente.atributoVinculado) || ATRIBUTOS_PRIMARIOS[0].key;
+            const idEditando = estado.modalContexto ? estado.modalContexto.id : null;
+            const atualizarCategoriaEspecializacao = () => {
+                const ehAtributo = el.modalEspecializacaoCategoria.value === "atributo";
+                el.modalCampoEspecializacaoAtributo.style.display = ehAtributo ? "flex" : "none";
+                el.modalCampoEspecializacaoPericia.style.display = ehAtributo ? "none" : "flex";
+                const r = resumoSlotsEspecializacaoAtributo(estado.fichaAtual, idEditando);
+                el.hintSlotsEspecializacaoAtributo.style.display = ehAtributo ? "block" : "none";
+                el.hintSlotsEspecializacaoAtributo.textContent = `Nível ${r.nivel}: ${r.usados}/${r.total} slot(s) de atributo em uso${r.livres === 0 ? " — nenhum slot livre." : "."}`;
+            };
+            el.modalEspecializacaoCategoria.onchange = atualizarCategoriaEspecializacao;
+            atualizarCategoriaEspecializacao();
             const periciaVinculadaAtual = (objetoExistente && objetoExistente.periciaVinculada) || "";
             const idsPericias = Object.keys(estado.fichaAtual.pericias || {})
                 .filter(id => (Number(estado.fichaAtual.pericias[id].nivel) || 0) >= 3 || estado.fichaAtual.pericias[id].nome === periciaVinculadaAtual)
@@ -8946,6 +8967,17 @@ async function salvarEntidadeAtual() {
     }
     const nome = el.modalNome.value.trim();
     if (!nome) { toast("Dê um nome antes de salvar.", "erro"); return; }
+    // Especialização de atributo: valida o slot no momento de salvar
+    // (nível 3 = 1 slot, nível 6 = 2, nível 9 = 3).
+    if (lista === "especializacoes" && el.modalEspecializacaoCategoria.value === "atributo") {
+        const r = resumoSlotsEspecializacaoAtributo(estado.fichaAtual, id);
+        if (r.usados >= r.total) {
+            toast(r.total === 0
+                ? "Especialização de atributo só a partir do nível 3."
+                : `Sem slot livre de especialização de atributo (${r.usados}/${r.total} em uso, nível ${r.nivel}).`, "erro");
+            return;
+        }
+    }
     // Preserva o estado do botão ativo/desativado ao editar um registro
     // já existente (senão salvar a descrição, por exemplo, reativaria
     // sem querer um efeito que o jogador tinha desligado).
@@ -8978,7 +9010,10 @@ async function salvarEntidadeAtual() {
     // Especializações: vínculo opcional com uma perícia da ficha (só
     // organizacional/exibição — ver modal-campo-especializacao-pericia).
     if (lista === "especializacoes") {
-        registro.periciaVinculada = el.modalEspecializacaoPericia.value || null;
+        const ehAtributo = el.modalEspecializacaoCategoria.value === "atributo";
+        registro.categoria = ehAtributo ? "atributo" : "pericia";
+        registro.atributoVinculado = ehAtributo ? (el.modalEspecializacaoAtributo.value || null) : null;
+        registro.periciaVinculada = ehAtributo ? null : (el.modalEspecializacaoPericia.value || null);
     }
     const idFinal = id || gerarIdLocal();
     if (!estado.fichaAtual[lista]) estado.fichaAtual[lista] = {};
