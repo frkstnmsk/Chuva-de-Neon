@@ -98,9 +98,6 @@ export function renderizarPericias(modificadoresPlanos) {
                 `).join("")}
             </div>
         ` : "";
-        const especializacoesCompradas = Array.isArray(p.especializacoes) && p.especializacoes.length
-            ? ` · especialização nível ${p.especializacoes.slice().sort().join(", ")}`
-            : "";
         // Toda especialização cadastrada na aba "Especializações" com esta
         // perícia vinculada aparece aqui embaixo — inclusive as que não vieram
         // de ponto de Level Up (ex.: ponto extra dado pelo Mestre).
@@ -117,7 +114,7 @@ export function renderizarPericias(modificadoresPlanos) {
         li.innerHTML = `
             <div class="entity-main">
                 <span class="entity-nome">${escapeHtml(p.nome)}${p.legado ? ' <span class="mod-pill">legado</span>' : ""}</span>
-                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}${especializacoesCompradas}${textoDificuldadePericia}</span>
+                <span class="entity-sub">nível ${p.nivel}${calc.ajustes.length ? ` + ${calc.ajustes.reduce((a, m) => a + m.valor, 0)} de modificadores` : ""}${textoSaude}${textoDificuldadePericia}</span>
             </div>
             <div class="entity-badges">
                 <button type="button" class="btn-rolar btn-blue" title="Rolar d20 + ${calc.total}">🎲 ${calc.total >= 0 ? "+" : ""}${calc.total}</button>
